@@ -113,13 +113,16 @@ public class MafOutputRendererUnitTest extends GATKBaseTest {
                         Collections.singletonList(FuncotatorTestConstants.FUNCOTATOR_DATA_SOURCES_MAIN_FOLDER)
                 );
 
+        final FuncotatorArgumentCollection funcotatorArguments = new FuncotatorArgumentCollection();
+        funcotatorArguments.transcriptSelectionMode = TranscriptSelectionMode.BEST_EFFECT;
+        funcotatorArguments.lookaheadFeatureCachingInBp = FuncotatorArgumentDefinitions.LOOKAHEAD_CACHE_IN_BP_DEFAULT_VALUE;
+
         final List<DataSourceFuncotationFactory> dataSourceFuncotationFactories = DataSourceUtils.createDataSourceFuncotationFactoriesForDataSources(
                 configData,
                 new LinkedHashMap<>(),
-                TranscriptSelectionMode.BEST_EFFECT,
                 new HashSet<>(),
                 new DummyPlaceholderGatkTool(),
-                FuncotatorArgumentDefinitions.LOOKAHEAD_CACHE_IN_BP_DEFAULT_VALUE
+                funcotatorArguments
         );
 
         // Sort the datasources to ensure the same order every time:

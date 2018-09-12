@@ -262,10 +262,9 @@ public class Funcotator extends VariantWalker {
         final List<DataSourceFuncotationFactory> dataSourceFuncotationFactories = DataSourceUtils.createDataSourceFuncotationFactoriesForDataSources(
                 configData,
                 annotationOverridesMap,
-                funcotatorArgs.transcriptSelectionMode,
                 finalUserTranscriptIdSet,
                 this,
-                funcotatorArgs.lookaheadFeatureCachingInBp
+                funcotatorArgs
         );
 
         // Create our engine to do our work and drive this Funcotation train!

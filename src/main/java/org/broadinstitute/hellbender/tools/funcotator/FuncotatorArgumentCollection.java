@@ -86,6 +86,20 @@ public class FuncotatorArgumentCollection implements Serializable {
     public List<String> annotationOverrides = new ArrayList<>();
 
     @Argument(
+            fullName = FuncotatorArgumentDefinitions.FIVE_PRIME_FLANK_SIZE_NAME,
+            optional = true,
+            doc = "Variants within this many bases of the 5' end of a gene will be considered to be upstream/downstream of that gene"
+    )
+    public int fivePrimeFlankSize = FuncotatorArgumentDefinitions.FIVE_PRIME_FLANK_SIZE_DEFAULT_VALUE;
+
+    @Argument(
+            fullName = FuncotatorArgumentDefinitions.THREE_PRIME_FLANK_SIZE_NAME,
+            optional = true,
+            doc = "Variants within this many bases of the 3' end of a gene will be considered to be upstream/downstream of that gene"
+    )
+    public int threePrimeFlankSize = FuncotatorArgumentDefinitions.THREE_PRIME_FLANK_SIZE_DEFAULT_VALUE;
+
+    @Argument(
             fullName = FuncotatorArgumentDefinitions.LOOKAHEAD_CACHE_IN_BP_NAME,
             optional = true,
             minValue = 0,

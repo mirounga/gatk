@@ -8,10 +8,7 @@ import org.apache.log4j.Logger;
 import org.broadinstitute.hellbender.engine.*;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
-import org.broadinstitute.hellbender.tools.funcotator.DataSourceFuncotationFactory;
-import org.broadinstitute.hellbender.tools.funcotator.Funcotator;
-import org.broadinstitute.hellbender.tools.funcotator.FuncotatorArgumentDefinitions;
-import org.broadinstitute.hellbender.tools.funcotator.TranscriptSelectionMode;
+import org.broadinstitute.hellbender.tools.funcotator.*;
 import org.broadinstitute.hellbender.tools.funcotator.dataSources.cosmic.CosmicFuncotationFactory;
 import org.broadinstitute.hellbender.tools.funcotator.dataSources.gencode.GencodeFuncotationFactory;
 import org.broadinstitute.hellbender.tools.funcotator.dataSources.vcf.VcfFuncotationFactory;
@@ -227,23 +224,21 @@ final public class DataSourceUtils {
      * Create a {@link List} of {@link DataSourceFuncotationFactory} based on meta data on the data sources, overrides, and transcript reporting priority information.
      * @param dataSourceMetaData {@link Map} of {@link Path}->{@link Properties} containing metadata about each data source.  Must not be {@code null}.
      * @param annotationOverridesMap {@link LinkedHashMap} of {@link String}->{@link String} containing any annotation overrides to include in data sources.  Must not be {@code null}.
-     * @param transcriptSelectionMode {@link TranscriptSelectionMode} to use when choosing the transcript for detailed reporting.  Must not be {@code null}.
      * @param userTranscriptIdSet {@link Set} of {@link String}s containing transcript IDs of interest to be selected for first.  Must not be {@code null}.
      * @param gatkToolInstance Instance of the {@link GATKTool} into which to add {@link FeatureInput}s.  Must not be {@code null}.
-     * @param lookaheadFeatureCachingInBp Number of base-pairs to cache when querying variants.
+     * @param funcotatorArgs ArgumentCollection containing various funcotation settings
      * @return A {@link List} of {@link DataSourceFuncotationFactory} given the data source metadata, overrides, and transcript reporting priority information.
      */
-    public static List<DataSourceFuncotationFactory> createDataSourceFuncotationFactoriesForDataSources(final Map<Path, Properties> dataSourceMetaData,
-                                                                                                        final LinkedHashMap<String, String> annotationOverridesMap,
-                                                                                                        final TranscriptSelectionMode transcriptSelectionMode,
-                                                                                                        final Set<String> userTranscriptIdSet,
-                                                                                                        final GATKTool gatkToolInstance,
-                                                                                                        final int lookaheadFeatureCachingInBp) {
+    public static List<DataSourceFuncotationFactory> createDataSourceFuncotationFactoriesForDataSources( final Map<Path, Properties> dataSourceMetaData,
+                                                                                                         final LinkedHashMap<String, String> annotationOverridesMap,
+                                                                                                         final Set<String> userTranscriptIdSet,
+                                                                                                         final GATKTool gatkToolInstance,
+                                                                                                         final FuncotatorArgumentCollection funcotatorArgs) {
         Utils.nonNull(dataSourceMetaData);
         Utils.nonNull(annotationOverridesMap);
-        Utils.nonNull(transcriptSelectionMode);
         Utils.nonNull(userTranscriptIdSet);
         Utils.nonNull(gatkToolInstance);
+        Utils.nonNull(funcotatorArgs);
 
         final List<DataSourceFuncotationFactory> dataSourceFactories = new ArrayList<>(dataSourceMetaData.size());
 
@@ -264,7 +259,7 @@ final public class DataSourceUtils {
             final FeatureInput<? extends Feature> featureInput;
             switch ( FuncotatorArgumentDefinitions.DataSourceType.getEnum(stringType) ) {
                 case LOCATABLE_XSV:
-                    featureInput = createAndRegisterFeatureInputs(path, properties, gatkToolInstance, lookaheadFeatureCachingInBp, XsvTableFeature.class);
+                    featureInput = createAndRegisterFeatureInputs(path, properties, gatkToolInstance, funcotatorArgs.lookaheadFeatureCachingInBp, XsvTableFeature.class);
                     funcotationFactory = DataSourceUtils.createLocatableXsvDataSource(path, properties, annotationOverridesMap, featureInput);
                     break;
                 case SIMPLE_XSV:
@@ -274,83 +269,16 @@ final public class DataSourceUtils {
                     funcotationFactory = DataSourceUtils.createCosmicDataSource(path, properties, annotationOverridesMap);
                     break;
                 case GENCODE:
-                    featureInput = createAndRegisterFeatureInputs(path, properties, gatkToolInstance, lookaheadFeatureCachingInBp, GencodeGtfFeature.class);
-                    funcotationFactory = DataSourceUtils.createGencodeDataSource(path, properties, annotationOverridesMap, transcriptSelectionMode, userTranscriptIdSet, featureInput);
+                    featureInput = createAndRegisterFeatureInputs(path, properties, gatkToolInstance, funcotatorArgs.lookaheadFeatureCachingInBp, GencodeGtfFeature.class);
+                    funcotationFactory = DataSourceUtils.createGencodeDataSource(path, properties, annotationOverridesMap, funcotatorArgs.transcriptSelectionMode,
+                            userTranscriptIdSet, featureInput, funcotatorArgs.fivePrimeFlankSize, funcotatorArgs.threePrimeFlankSize);
                     break;
                 case VCF:
-                    featureInput = createAndRegisterFeatureInputs(path, properties, gatkToolInstance, lookaheadFeatureCachingInBp, VariantContext.class);
+                    featureInput = createAndRegisterFeatureInputs(path, properties, gatkToolInstance, funcotatorArgs.lookaheadFeatureCachingInBp, VariantContext.class);
                     funcotationFactory = DataSourceUtils.createVcfDataSource(path, properties, annotationOverridesMap, featureInput);
                     break;
                 default:
-                    throw new GATKException("Unknown type of DataSourceFuncotationFactory encountered: " + stringType );
-            }
-
-            // Add in our factory:
-            dataSourceFactories.add(funcotationFactory);
-        }
-
-        logger.debug("All Data Sources have been created.");
-        return dataSourceFactories;
-    }
-
-    /**
-     * Create a {@link List} of {@link DataSourceFuncotationFactory} based on meta data on the data sources, overrides, and transcript reporting priority information.
-     * THIS METHOD IS FOR TESTING ONLY!
-     * @param dataSourceMetaData {@link Map} of {@link Path}->{@link Properties} containing metadata about each data source.  Must not be {@code null}.
-     * @param annotationOverridesMap {@link LinkedHashMap} of {@link String}->{@link String} containing any annotation overrides to include in data sources.  Must not be {@code null}.
-     * @param transcriptSelectionMode {@link TranscriptSelectionMode} to use when choosing the transcript for detailed reporting.  Must not be {@code null}.
-     * @param userTranscriptIdSet {@link Set} of {@link String}s containing transcript IDs of interest to be selected for first.  Must not be {@code null}.
-     * @return A {@link List} of {@link DataSourceFuncotationFactory} given the data source metadata, overrides, and transcript reporting priority information.
-     */
-    @VisibleForTesting
-    public static List<DataSourceFuncotationFactory> createDataSourceFuncotationFactoriesForDataSourcesForTesting(
-                                                                                final Map<Path, Properties> dataSourceMetaData,
-                                                                                final LinkedHashMap<String, String> annotationOverridesMap,
-                                                                                final TranscriptSelectionMode transcriptSelectionMode,
-                                                                                final Set<String> userTranscriptIdSet) {
-        Utils.nonNull(dataSourceMetaData);
-        Utils.nonNull(annotationOverridesMap);
-        Utils.nonNull(transcriptSelectionMode);
-        Utils.nonNull(userTranscriptIdSet);
-
-        final List<DataSourceFuncotationFactory> dataSourceFactories = new ArrayList<>(dataSourceMetaData.size());
-
-        // Now we know we have unique and valid data.
-        // Now we must instantiate our data sources:
-        for ( final Map.Entry<Path, Properties> entry : dataSourceMetaData.entrySet() ) {
-
-            final String funcotationFactoryName = entry.getValue().getProperty(CONFIG_FILE_FIELD_NAME_NAME);
-            logger.debug("Creating Funcotation Factory for " + funcotationFactoryName + " ...");
-
-            final Path path = entry.getKey();
-            final Properties properties = entry.getValue();
-
-            final DataSourceFuncotationFactory funcotationFactory;
-
-            // Note: we need no default case since we know these are valid:
-            final String stringType = properties.getProperty("type");
-            final FeatureInput<? extends Feature> featureInput;
-            switch ( FuncotatorArgumentDefinitions.DataSourceType.getEnum(stringType) ) {
-                case LOCATABLE_XSV:
-                    featureInput = createFeatureInputsForTesting(path, properties);
-                    funcotationFactory = DataSourceUtils.createLocatableXsvDataSource(path, properties, annotationOverridesMap, featureInput);
-                    break;
-                case SIMPLE_XSV:
-                    funcotationFactory = DataSourceUtils.createSimpleXsvDataSource(path, properties, annotationOverridesMap);
-                    break;
-                case COSMIC:
-                    funcotationFactory = DataSourceUtils.createCosmicDataSource(path, properties, annotationOverridesMap);
-                    break;
-                case GENCODE:
-                    featureInput = createFeatureInputsForTesting(path, properties);
-                    funcotationFactory = DataSourceUtils.createGencodeDataSource(path, properties, annotationOverridesMap, transcriptSelectionMode, userTranscriptIdSet, featureInput);
-                    break;
-                case VCF:
-                    featureInput = createFeatureInputsForTesting(path, properties);
-                    funcotationFactory = DataSourceUtils.createVcfDataSource(path, properties, annotationOverridesMap, featureInput);
-                    break;
-                default:
-                    throw new GATKException("Unknown type of DataSourceFuncotationFactory encountered: " + stringType );
+                    throw new GATKException("Unknown type of DataSourceFuncotationFactory encountered: " + stringType);
             }
 
             // Add in our factory:
@@ -498,6 +426,8 @@ final public class DataSourceUtils {
      * @param transcriptSelectionMode {@link TranscriptSelectionMode} to use when choosing the transcript for detailed reporting.  Must not be {@code null}.
      * @param userTranscriptIdSet {@link Set} of {@link String}s containing transcript IDs of interest to be selected for first.  Must not be {@code null}.
      * @param featureInput The {@link FeatureInput<? extends Feature>} object for the Gencode data source we are creating.
+     * @param fivePrimeFlankSize Variants within this many bases of the 5' end of a gene will be considered to be upstream/downstream of that gene
+     * @param threePrimeFlankSize Variants within this many bases of the 3' end of a gene will be considered to be upstream/downstream of that gene
      * @return A new {@link GencodeFuncotationFactory} based on the given data source file information, field overrides map, and transcript information.
      */
     private static GencodeFuncotationFactory createGencodeDataSource(final Path dataSourceFile,
@@ -505,7 +435,9 @@ final public class DataSourceUtils {
                                                                      final LinkedHashMap<String, String> annotationOverridesMap,
                                                                      final TranscriptSelectionMode transcriptSelectionMode,
                                                                      final Set<String> userTranscriptIdSet,
-                                                                     final FeatureInput<? extends Feature> featureInput) {
+                                                                     final FeatureInput<? extends Feature> featureInput,
+                                                                     final int fivePrimeFlankSize,
+                                                                     final int threePrimeFlankSize) {
 
         Utils.nonNull(dataSourceFile);
         Utils.nonNull(dataSourceProperties);
@@ -526,7 +458,9 @@ final public class DataSourceUtils {
                 transcriptSelectionMode,
                 userTranscriptIdSet,
                 annotationOverridesMap,
-                featureInput
+                featureInput,
+                fivePrimeFlankSize,
+                threePrimeFlankSize
             );
     }
 

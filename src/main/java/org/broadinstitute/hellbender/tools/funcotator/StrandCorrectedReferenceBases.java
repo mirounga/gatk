@@ -51,7 +51,7 @@ public class StrandCorrectedReferenceBases {
     public byte[] getBases() {
         return strandCorrectedReferenceBases.getBytes();
     }
-
+    
     @Override
     public String toString() {
         return "StrandCorrectedReferenceBases{" +

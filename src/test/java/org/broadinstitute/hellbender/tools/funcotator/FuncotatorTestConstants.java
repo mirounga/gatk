@@ -113,4 +113,23 @@ public class FuncotatorTestConstants {
     public static final String NON_TRIVIAL_DATA_VALIDATION_TEST_EXPECTED_OUTPUT                     = FUNCOTATOR_LARGE_FILES_DIR + "regressionTestVariantSetHG38_expected.vcf";
     public static final String NON_TRIVIAL_DATA_VALIDATION_TEST_HG19_LARGE_DATA_SET                 = FUNCOTATOR_LARGE_FILES_DIR + "regressionTestHg19Large.vcf";
     public static final String NON_TRIVIAL_DATA_VALIDATION_TEST_HG19_LARGE_DATA_SET_EXPECTED_OUTPUT = FUNCOTATOR_LARGE_FILES_DIR + "regressionTestHg19Large_expected.vcf";
+
+
+
+    // The full span of the MUC16 gene on HG19:
+    public static final SimpleInterval MUC16_HG19_POSITION = new SimpleInterval("chr19", 8959520, 9092018);
+
+    // The full span of the PIK3CA gene on HG19:
+    public static final SimpleInterval PIK3CA_HG19_POSITION = new SimpleInterval("chr3", 178865902, 178957881);
+
+    // An alternate MUC16 datasource that contains all transcripts:
+    public static final String MUC16_ALL_TRANSCRIPTS_GENCODE_ANNOTATIONS_FILE_NAME = FUNCOTATOR_LARGE_FILES_DIR + "pik3ca_muc16_all_transcripts_ds" + File.separator + "gencode_muc16" + File.separator + "hg19" + File.separator + "gencode.v19.MUC16.gtf";
+    public static final String MUC16_ALL_TRANSCRIPTS_GENCODE_TRANSCRIPT_FASTA_FILE = FUNCOTATOR_LARGE_FILES_DIR + "pik3ca_muc16_all_transcripts_ds" + File.separator + "gencode_muc16" + File.separator + "hg19" + File.separator + "gencode.v19.MUC16_transcript.fasta";
+
+    // An alternate PIK3CA datasource that contains all transcripts:
+    public static final String PIK3CA_ALL_TRANSCRIPTS_GENCODE_ANNOTATIONS_FILE_NAME = FUNCOTATOR_LARGE_FILES_DIR + "pik3ca_muc16_all_transcripts_ds" + File.separator + "gencode_pik3ca" + File.separator + "hg19" + File.separator + "gencode.v19.PIK3CA.gtf";
+    public static final String PIK3CA_ALL_TRANSCRIPTS_GENCODE_TRANSCRIPT_FASTA_FILE = FUNCOTATOR_LARGE_FILES_DIR + "pik3ca_muc16_all_transcripts_ds" + File.separator + "gencode_pik3ca" + File.separator + "hg19" + File.separator + "gencode.v19.PIK3CA_transcript.fasta";
+
+    // Position on HG19 of the PIK3CA_TRANSCRIPT
+    public static final SimpleInterval PIK3CA_TRANSCRIPT_POSITION = new SimpleInterval("chr3", 178866311, 178957881);
 }
