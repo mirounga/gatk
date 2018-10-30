@@ -35,8 +35,8 @@ FUNCOTATOR_EQUIVALENT_DB="~/Development/oncotator_testing/funcotator_dbdir/"
 
 VCF_IN="/Users/jonn/Development/gatk/src/test/resources/large/funcotator/regressionTestVariantSet1.vcf"
 #VCF_IN="/Users/jonn/Development/gatk/src/test/resources/large/funcotator/regressionTestVariantSet2.vcf"
-#VCF_IN="tmp.vcf"
 VCF_IN="/Users/jonn/Development/gatk/src/test/resources/large/funcotator/regressionTestHg19Large.vcf"
+VCF_IN="tmp.vcf"
 
 source ~/Development/oncotator_venv/bin/activate
 
