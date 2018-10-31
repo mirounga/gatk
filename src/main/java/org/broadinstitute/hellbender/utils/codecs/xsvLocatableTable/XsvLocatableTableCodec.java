@@ -15,6 +15,7 @@ import org.apache.log4j.LogManager;
 import org.apache.log4j.Logger;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
+import org.broadinstitute.hellbender.tools.funcotator.dataSources.DataSourceUtils;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
 
@@ -69,11 +70,6 @@ public final class XsvLocatableTableCodec extends AsciiFeatureCodec<XsvTableFeat
     private static final String COMMENT_DELIMITER = "#";
     private static final String SAM_FILE_HEADER_LINE_START = "@";
 
-    public static final String CONFIG_FILE_CONTIG_COLUMN_KEY = "contig_column";
-    public static final String CONFIG_FILE_START_COLUMN_KEY = "start_column";
-    public static final String CONFIG_FILE_END_COLUMN_KEY = "end_column";
-    public static final String CONFIG_FILE_DELIMITER_KEY = "xsv_delimiter";
-    public static final String CONFIG_FILE_DATA_SOURCE_NAME_KEY = "name";
     public static final String SAM_FILE_HEADER_START = "@HD\tVN:";
 
 
@@ -142,10 +138,9 @@ public final class XsvLocatableTableCodec extends AsciiFeatureCodec<XsvTableFeat
         super(XsvTableFeature.class);
     }
 
-    /** Constructor for when a configuration file is specified instead of using a sibling config file.
-     *
+    /**
+     * Constructor for when a configuration file is specified.
      * This cannot be used with auto decoding.
-     *
      * @param overrideConfigFile {@link Path} to the file to use as a configuration file for the given file.
      */
     public XsvLocatableTableCodec(final Path overrideConfigFile) {
@@ -158,36 +153,52 @@ public final class XsvLocatableTableCodec extends AsciiFeatureCodec<XsvTableFeat
 
     @Override
     public boolean canDecode(final String path) {
+        Utils.nonNull(path);
 
         // seg files are handled by a different codec.  This check has to be done, since seg files will return true in
         //  this codec and the AnnotatedIntervalCodec.
-        return !path.endsWith(".seg") && canDecodeMinusExtensionChecks(path);
+        return path.endsWith(".config") && canDecodeConfigFileChecks(path);
     }
 
     /**
-     * Minus checking the file extension, can this class decode the given path.
+     * Checks the content of the given config file to see if it can be decoded.
+     * The config file can be independent of the backing data source file.
+     *
+     * NOTE: To reiterate, this takes a CONFIG file, not the actual data file to be read.
      *
      * TODO: This method should be inside an abstract superclass.  {@link XsvLocatableTableCodec} and {@link org.broadinstitute.hellbender.tools.copynumber.utils.annotatedinterval.AnnotatedIntervalCodec} should inherit.  See https://github.com/broadinstitute/gatk/issues/4580
      *
      * @param path File to check.  Never {@code null}
      * @return true if the file can be decoded.  False otherwise.
      */
-    public boolean canDecodeMinusExtensionChecks(final String path) {
+    public boolean canDecodeConfigFileChecks(final String path) {
         Utils.nonNull(path);
 
-        // Get the paths to our file and the config file:
-        final Path inputFilePath = IOUtils.getPath(path);
-        final Path configFilePath = (overrideConfigFile != null ?
-                overrideConfigFile : getConfigFilePath(inputFilePath));
+        // Get the path to our config file:
+        final Path configFilePath = (overrideConfigFile != null ? overrideConfigFile : IOUtils.getPath(path));
+
+        // Make sure we can read the config file:
+        if ( !validateInputDataFile(configFilePath) ) {
+            return false;
+        }
+
+        // Make sure our config file contains the information we need:
+        final Properties configProperties = getAndValidateConfigFileContents(configFilePath);
+
+        // Get the backing data file path:
+        final String inputFilePathString = configProperties.getProperty(DataSourceUtils.CONFIG_FILE_FIELD_NAME_SRC_FILE);
+
+        // Resolve the input file path to a real path:
+        final Path inputFilePath = DataSourceUtils.resolveFilePathStringFromKnownPath( inputFilePathString, configFilePath );
 
         // Check that our files are good for eating... I mean reading...
-        if ( validateInputDataFile(inputFilePath) && validateInputDataFile(configFilePath) ) {
+        if ( validateInputDataFile(inputFilePath) ) {
 
             // auto-determine the preamble format
             preambleLineStart = determinePreambleLineStart(inputFilePath);
 
             // Get our metadata and set up our internals so we can read from this file:
-            readMetadataFromConfigFile(configFilePath);
+            populateMetaDataFromConfigProperties(configProperties);
             return true;
         }
         else {
@@ -365,12 +376,18 @@ public final class XsvLocatableTableCodec extends AsciiFeatureCodec<XsvTableFeat
             throw new UserException.BadInput("Unable to read from XSV config file: " + configFilePath.toUri().toString(), ex);
         }
 
-        // Validate that it has the right keys:
-        assertConfigPropertiesContainsKey(configFileContents, CONFIG_FILE_CONTIG_COLUMN_KEY, configFilePath);
-        assertConfigPropertiesContainsKey(configFileContents, CONFIG_FILE_START_COLUMN_KEY, configFilePath);
-        assertConfigPropertiesContainsKey(configFileContents, CONFIG_FILE_END_COLUMN_KEY, configFilePath);
-        assertConfigPropertiesContainsKey(configFileContents, CONFIG_FILE_DELIMITER_KEY, configFilePath);
-        assertConfigPropertiesContainsKey(configFileContents, CONFIG_FILE_DATA_SOURCE_NAME_KEY, configFilePath);
+        // Validate that it has the correct keys:
+
+        // Required keys for this data source:
+        assertConfigPropertiesContainsKey(configFileContents, DataSourceUtils.CONFIG_FILE_FIELD_NAME_SRC_FILE, configFilePath);
+        assertConfigPropertiesContainsKey(configFileContents, DataSourceUtils.CONFIG_FILE_FIELD_NAME_VERSION, configFilePath);
+        assertConfigPropertiesContainsKey(configFileContents, DataSourceUtils.CONFIG_FILE_FIELD_NAME_ORIGIN_LOCATION, configFilePath);
+        assertConfigPropertiesContainsKey(configFileContents, DataSourceUtils.CONFIG_FILE_FIELD_NAME_PREPROCESSING_SCRIPT, configFilePath);
+        assertConfigPropertiesContainsKey(configFileContents, DataSourceUtils.CONFIG_FILE_FIELD_NAME_CONTIG_COLUMN, configFilePath);
+        assertConfigPropertiesContainsKey(configFileContents, DataSourceUtils.CONFIG_FILE_FIELD_NAME_START_COLUMN, configFilePath);
+        assertConfigPropertiesContainsKey(configFileContents, DataSourceUtils.CONFIG_FILE_FIELD_NAME_END_COLUMN, configFilePath);
+        assertConfigPropertiesContainsKey(configFileContents, DataSourceUtils.CONFIG_FILE_FIELD_NAME_XSV_DELIMITER, configFilePath);
+        assertConfigPropertiesContainsKey(configFileContents, DataSourceUtils.CONFIG_FILE_FIELD_NAME_NAME, configFilePath);
 
         return configFileContents;
     }
@@ -416,21 +433,19 @@ public final class XsvLocatableTableCodec extends AsciiFeatureCodec<XsvTableFeat
     }
 
     /**
-     * Reads the metadata required for parsing from the given {@code configFilePath}.
-     * @param configFilePath {@link Path} to the configuration file from which to read in and setup metadata values.
+     * Populates the metadata required for parsing from the given {@code configProperties}.
+     * @param configProperties {@link Properties} containing configuration information for this {@link XsvLocatableTableCodec}.
      */
-    private void readMetadataFromConfigFile(final Path configFilePath) {
-
-        final Properties configProperties = getAndValidateConfigFileContents(configFilePath);
+    private void populateMetaDataFromConfigProperties(final Properties configProperties) {
 
         // Get the properties and remove the leading/trailing whitespace if there is any:
-        inputContigColumn = configProperties.getProperty(CONFIG_FILE_CONTIG_COLUMN_KEY).replaceAll("^\\s+", "").replaceAll("\\s+$", "");
-        inputStartColumn  = configProperties.getProperty(CONFIG_FILE_START_COLUMN_KEY).replaceAll("^\\s+", "").replaceAll("\\s+$", "");
-        inputEndColumn    = configProperties.getProperty(CONFIG_FILE_END_COLUMN_KEY).replaceAll("^\\s+", "").replaceAll("\\s+$", "");
-        dataSourceName    = configProperties.getProperty(CONFIG_FILE_DATA_SOURCE_NAME_KEY).replaceAll("^\\s+", "").replaceAll("\\s+$", "");
+        inputContigColumn = configProperties.getProperty(DataSourceUtils.CONFIG_FILE_FIELD_NAME_CONTIG_COLUMN).replaceAll("^\\s+", "").replaceAll("\\s+$", "");
+        inputStartColumn  = configProperties.getProperty(DataSourceUtils.CONFIG_FILE_FIELD_NAME_START_COLUMN).replaceAll("^\\s+", "").replaceAll("\\s+$", "");
+        inputEndColumn    = configProperties.getProperty(DataSourceUtils.CONFIG_FILE_FIELD_NAME_END_COLUMN).replaceAll("^\\s+", "").replaceAll("\\s+$", "");
+        dataSourceName    = configProperties.getProperty(DataSourceUtils.CONFIG_FILE_FIELD_NAME_NAME).replaceAll("^\\s+", "").replaceAll("\\s+$", "");
 
         // Get the delimiter - we do NOT remove whitespace here on purpose:
-        delimiter         = configProperties.getProperty(CONFIG_FILE_DELIMITER_KEY);
+        delimiter         = configProperties.getProperty(DataSourceUtils.CONFIG_FILE_FIELD_NAME_XSV_DELIMITER);
 
         // Process delimiter just in case it is a tab escape character:
         if ( delimiter.equals("\\t") ) {

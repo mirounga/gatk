@@ -725,7 +725,14 @@ final public class DataSourceUtils {
             }
     }
 
-    private static Path resolveFilePathStringFromKnownPath(final String filePathString, final Path knownPath ) {
+    /**
+     * Resolves the path string to a full path object using the given knownPath as a sibling file.
+     * Sibling file will only be used if it is determined that the given path string is not a relative path.
+     * @param filePathString {@link String} containing a file path to resolve.
+     * @param knownPath {@link Path} of a potential sibling file system entry.
+     * @return A {@link Path} object resolved to point to the given {@code filePathString}.
+     */
+    public static Path resolveFilePathStringFromKnownPath(final String filePathString, final Path knownPath ) {
 
         final Path rawFilePath = IOUtils.getPath(filePathString);
 
