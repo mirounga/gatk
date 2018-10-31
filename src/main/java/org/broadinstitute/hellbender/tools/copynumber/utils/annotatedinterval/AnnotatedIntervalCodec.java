@@ -7,6 +7,7 @@ import htsjdk.tribble.readers.LineIterator;
 import org.apache.commons.lang3.StringUtils;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
+import org.broadinstitute.hellbender.tools.funcotator.dataSources.DataSourceUtils;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.codecs.xsvLocatableTable.XsvLocatableTableCodec;
@@ -99,9 +100,9 @@ public class AnnotatedIntervalCodec extends AsciiFeatureCodec<AnnotatedInterval>
 
         //TODO: Change this so that it outputs the first in the list.
         final Properties headerNameProperties = XsvLocatableTableCodec.getAndValidateConfigFileContents(outputConfigFile);
-        final String contigColumnName = determineOutputColumnFromList(headerNameProperties.getProperty(XsvLocatableTableCodec.CONFIG_FILE_CONTIG_COLUMN_KEY));
-        final String startColumnName = determineOutputColumnFromList(headerNameProperties.getProperty(XsvLocatableTableCodec.CONFIG_FILE_START_COLUMN_KEY));
-        final String endColumnName = determineOutputColumnFromList(headerNameProperties.getProperty(XsvLocatableTableCodec.CONFIG_FILE_END_COLUMN_KEY));
+        final String contigColumnName = determineOutputColumnFromList(headerNameProperties.getProperty(DataSourceUtils.CONFIG_FILE_FIELD_NAME_CONTIG_COLUMN));
+        final String startColumnName = determineOutputColumnFromList(headerNameProperties.getProperty(DataSourceUtils.CONFIG_FILE_FIELD_NAME_START_COLUMN));
+        final String endColumnName = determineOutputColumnFromList(headerNameProperties.getProperty(DataSourceUtils.CONFIG_FILE_FIELD_NAME_END_COLUMN));
 
         XsvLocatableTableCodec.validateLocatableColumnName(contigColumnName);
         XsvLocatableTableCodec.validateLocatableColumnName(startColumnName);

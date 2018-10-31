@@ -264,7 +264,7 @@ final public class DataSourceUtils {
             final FeatureInput<? extends Feature> featureInput;
             switch ( FuncotatorArgumentDefinitions.DataSourceType.getEnum(stringType) ) {
                 case LOCATABLE_XSV:
-                    featureInput = createAndRegisterFeatureInputs(path, properties, gatkToolInstance, lookaheadFeatureCachingInBp, XsvTableFeature.class);
+                    featureInput = createAndRegisterFeatureInputs(path, properties, gatkToolInstance, lookaheadFeatureCachingInBp, XsvTableFeature.class, true);
                     funcotationFactory = DataSourceUtils.createLocatableXsvDataSource(path, properties, annotationOverridesMap, featureInput);
                     break;
                 case SIMPLE_XSV:
@@ -274,11 +274,11 @@ final public class DataSourceUtils {
                     funcotationFactory = DataSourceUtils.createCosmicDataSource(path, properties, annotationOverridesMap);
                     break;
                 case GENCODE:
-                    featureInput = createAndRegisterFeatureInputs(path, properties, gatkToolInstance, lookaheadFeatureCachingInBp, GencodeGtfFeature.class);
+                    featureInput = createAndRegisterFeatureInputs(path, properties, gatkToolInstance, lookaheadFeatureCachingInBp, GencodeGtfFeature.class, false);
                     funcotationFactory = DataSourceUtils.createGencodeDataSource(path, properties, annotationOverridesMap, transcriptSelectionMode, userTranscriptIdSet, featureInput);
                     break;
                 case VCF:
-                    featureInput = createAndRegisterFeatureInputs(path, properties, gatkToolInstance, lookaheadFeatureCachingInBp, VariantContext.class);
+                    featureInput = createAndRegisterFeatureInputs(path, properties, gatkToolInstance, lookaheadFeatureCachingInBp, VariantContext.class, false);
                     funcotationFactory = DataSourceUtils.createVcfDataSource(path, properties, annotationOverridesMap, featureInput);
                     break;
                 default:
@@ -293,16 +293,19 @@ final public class DataSourceUtils {
         return dataSourceFactories;
     }
 
-    private static FeatureInput<? extends Feature> createAndRegisterFeatureInputs(final Path dataSourcePath,
+    private static FeatureInput<? extends Feature> createAndRegisterFeatureInputs(final Path configFilePath,
                                                                                   final Properties dataSourceProperties,
                                                                                   final GATKTool funcotatorToolInstance,
                                                                                   final int lookaheadFeatureCachingInBp,
-                                                                                  final Class<? extends Feature> featureType) {
-        Utils.nonNull(dataSourcePath);
+                                                                                  final Class<? extends Feature> featureType,
+                                                                                  final boolean useConfigFilePath) {
+        Utils.nonNull(configFilePath);
         Utils.nonNull(dataSourceProperties);
 
         final String name       = dataSourceProperties.getProperty(CONFIG_FILE_FIELD_NAME_NAME);
-        final String sourceFile = resolveFilePathStringFromKnownPath( dataSourceProperties.getProperty(CONFIG_FILE_FIELD_NAME_SRC_FILE), dataSourcePath ).toUri().toString();
+        final String sourceFile = useConfigFilePath
+                    ? configFilePath.toUri().toString()
+                    : resolveFilePathStringFromKnownPath( dataSourceProperties.getProperty(CONFIG_FILE_FIELD_NAME_SRC_FILE), configFilePath ).toUri().toString();
 
         // Get feature inputs by creating them with the tool instance itself.
         // This has the side effect of registering the FeatureInputs with the engine, so that they can be later queried.
