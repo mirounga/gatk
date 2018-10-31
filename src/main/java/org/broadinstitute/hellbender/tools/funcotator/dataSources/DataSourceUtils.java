@@ -293,39 +293,20 @@ final public class DataSourceUtils {
         return dataSourceFactories;
     }
 
-    private static FeatureInput<? extends Feature> createAndRegisterFeatureInputs(final Path dataSourceFile,
+    private static FeatureInput<? extends Feature> createAndRegisterFeatureInputs(final Path dataSourcePath,
                                                                                   final Properties dataSourceProperties,
                                                                                   final GATKTool funcotatorToolInstance,
                                                                                   final int lookaheadFeatureCachingInBp,
                                                                                   final Class<? extends Feature> featureType) {
-        Utils.nonNull(dataSourceFile);
+        Utils.nonNull(dataSourcePath);
         Utils.nonNull(dataSourceProperties);
 
-        final String name      = dataSourceProperties.getProperty(CONFIG_FILE_FIELD_NAME_NAME);
-        final String sourceFile = dataSourceFile.resolveSibling(dataSourceProperties.getProperty(CONFIG_FILE_FIELD_NAME_SRC_FILE)).toString();
+        final String name       = dataSourceProperties.getProperty(CONFIG_FILE_FIELD_NAME_NAME);
+        final String sourceFile = resolveFilePathStringFromKnownPath( dataSourceProperties.getProperty(CONFIG_FILE_FIELD_NAME_SRC_FILE), dataSourcePath ).toUri().toString();
 
         // Get feature inputs by creating them with the tool instance itself.
         // This has the side effect of registering the FeatureInputs with the engine, so that they can be later queried.
         return funcotatorToolInstance.addFeatureInputsAfterInitialization(sourceFile, name, featureType, lookaheadFeatureCachingInBp);
-    }
-
-    /**
-     * Create {@link FeatureInput<? extends Feature>} FOR TESTING ONLY.
-     * @param dataSourceFile
-     * @param dataSourceProperties
-     * @return
-     */
-    private static FeatureInput<? extends Feature> createFeatureInputsForTesting(final Path dataSourceFile,
-                                                                                 final Properties dataSourceProperties) {
-
-        Utils.nonNull(dataSourceFile);
-        Utils.nonNull(dataSourceProperties);
-
-        final String name      = dataSourceProperties.getProperty(CONFIG_FILE_FIELD_NAME_NAME);
-        final String sourceFile = dataSourceFile.resolveSibling(dataSourceProperties.getProperty(CONFIG_FILE_FIELD_NAME_SRC_FILE)).toString();
-
-        // Get feature inputs by creating them with the funcotator tool instance itself:
-        return new FeatureInput<>(sourceFile, name, Collections.emptyMap());
     }
 
     /**

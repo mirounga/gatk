@@ -32,7 +32,8 @@ public class FuncotatorTestConstants {
      * there will be a bit of manual work as well (I did not have the will or the time to automate everything - Jonn Smith):
      *     GATK_DEVELOPMENT_TOP_DIRECTORY/scripts/funcotator/testing/getGencodeGenesForVcfVariants.sh
      */
-    public static final String FUNCOTATOR_DATA_SOURCES_MAIN_FOLDER = FUNCOTATOR_LARGE_FILES_DIR + "funcotator_dataSources" + File.separator;
+    public static final String FUNCOTATOR_DATA_SOURCES_MAIN_FOLDER  = FUNCOTATOR_LARGE_FILES_DIR + "funcotator_dataSources" + File.separator;
+    public static final String FUNCOTATOR_DATA_SOURCES_CLOUD_FOLDER = FUNCOTATOR_LARGE_FILES_DIR + "funcotator_dataSources_cloud" + File.separator;
 
     public static final String DUMMY_DATA_SOURCES_TAR_GZ             = FUNCOTATOR_LARGE_FILES_DIR + "dummyDataSources.tar.gz";
     public static final String DUMMY_DATA_SOURCES_TAR_GZ_SHA256_FILE = FUNCOTATOR_LARGE_FILES_DIR + "dummyDataSources.sha256";

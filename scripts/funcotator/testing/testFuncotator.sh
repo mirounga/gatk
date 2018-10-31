@@ -265,9 +265,9 @@ if [[ $r -eq 0 ]] && ${doRunLargeTests} ; then
 
 	if [[ "${REF_VER}" == "hg19" ]] ; then
 		INPUT=/Users/jonn/Development/NON_PUBLIC/0816201804HC0_R01C01.vcf
-		#INPUT=/Users/jonn/Development/gatk/src/test/resources/large/funcotator/regressionTestVariantSet1.vcf
+		INPUT=/Users/jonn/Development/gatk/src/test/resources/large/funcotator/regressionTestVariantSet1.vcf
 		#INPUT=/Users/jonn/Development/gatk/src/test/resources/large/funcotator/regressionTestVariantSet2.vcf
-		INPUT=/Users/jonn/Development/gatk/src/test/resources/large/funcotator/regressionTestHg19Large.vcf
+		#INPUT=/Users/jonn/Development/gatk/src/test/resources/large/funcotator/regressionTestHg19Large.vcf
 		#INPUT=/Users/jonn/Development/gatk/hg38_trio_liftoverb37.vcf
 		#INPUT=/Users/jonn/Development/gatk/tmp.vcf
 		#INPUT=/Users/jonn/Development/data_to_run/problem_samples/splice_site_should_not_be_splice_site/error_case.vcf
@@ -284,6 +284,8 @@ if [[ $r -eq 0 ]] && ${doRunLargeTests} ; then
 
 	# Use the AOU data sources if we need them:
 	$useAOUDataSources && DATA_SOURCES_PATH=/Users/jonn/Development/funcotator_dataSources.vAoU3
+
+	DATA_SOURCES_PATH=/Users/jonn/Development/gatk/src/test/resources/large/funcotator/funcotator_dataSources_cloud
 
 	OUT_FORMAT_LOWER=$( echo "${OUT_FORMAT}" | tr 'A-Z' 'a-z' )
 	OUT_FILE_NAME=FUNCOTATOR_OUT.${OUT_FORMAT_LOWER}

@@ -392,52 +392,67 @@ public class FuncotatorIntegrationTest extends CommandLineProgramTest {
     public Object[][] provideForLargeDataValidationTest() {
         return new Object[][]{
                 {
-                        "tmp.hg38.vcf",
-                        hg38Reference,
-                        FuncotatorTestConstants.REFERENCE_VERSION_HG38,
-                        LARGE_DATASOURCES_FOLDER
+                        "tmp.vcf",
+                        b37Reference,
+                        FuncotatorTestConstants.REFERENCE_VERSION_HG19,
+                        FuncotatorTestConstants.FUNCOTATOR_DATA_SOURCES_CLOUD_FOLDER,
+                        false
                 },
 //                {
 //                        "0816201804HC0_R01C01.vcf",
 //                        b37Reference,
 //                        FuncotatorTestConstants.REFERENCE_VERSION_HG19,
-//                        GERMLINE_DATASOURCES_FOLDER
+//                        FuncotatorTestConstants.FUNCOTATOR_DATA_SOURCES_CLOUD_FOLDER,
+//                        false
+//                },
+//                {
+//                        "0816201804HC0_R01C01.vcf",
+//                        b37Reference,
+//                        FuncotatorTestConstants.REFERENCE_VERSION_HG19,
+//                        GERMLINE_DATASOURCES_FOLDER,
+//                        true
 //                },
 //                {
 //                        "hg38_test_variants.vcf",
 //                        hg38Reference,
 //                        FuncotatorTestConstants.REFERENCE_VERSION_HG38,
-//                        LARGE_DATASOURCES_FOLDER
+//                        LARGE_DATASOURCES_FOLDER,
+//                        true
 //                },
 //                {
 //                        "hg38_trio.vcf",
 //                        hg38Reference,
 //                        FuncotatorTestConstants.REFERENCE_VERSION_HG38,
-//                        LARGE_DATASOURCES_FOLDER
+//                        LARGE_DATASOURCES_FOLDER,
+//                        true
 //                },
 //                {
 //                        FuncotatorTestConstants.NON_TRIVIAL_DATA_VALIDATION_TEST_HG19_DATA_SET_1,
 //                        b37Reference,
 //                        FuncotatorTestConstants.REFERENCE_VERSION_HG19,
 //                        FuncotatorTestConstants.FUNCOTATOR_DATA_SOURCES_MAIN_FOLDER,
+//                        false
 //                },
 //                {
 //                        FuncotatorTestConstants.NON_TRIVIAL_DATA_VALIDATION_TEST_HG19_DATA_SET_2,
 //                        b37Reference,
 //                        FuncotatorTestConstants.REFERENCE_VERSION_HG19,
-//                        FuncotatorTestConstants.FUNCOTATOR_DATA_SOURCES_MAIN_FOLDER
+//                        FuncotatorTestConstants.FUNCOTATOR_DATA_SOURCES_MAIN_FOLDER,
+//                        false
 //                },
 //                {
 //                        FuncotatorTestConstants.NON_TRIVIAL_DATA_VALIDATION_TEST_HG38,
 //                        hg38Reference,
 //                        FuncotatorTestConstants.REFERENCE_VERSION_HG38,
-//                        FuncotatorTestConstants.FUNCOTATOR_DATA_SOURCES_MAIN_FOLDER
+//                        FuncotatorTestConstants.FUNCOTATOR_DATA_SOURCES_MAIN_FOLDER,
+//                        false
 //                },
 //                {
 //                        FuncotatorTestConstants.NON_TRIVIAL_DATA_VALIDATION_TEST_HG19_LARGE_DATA_SET,
 //                        b37Reference,
 //                        FuncotatorTestConstants.REFERENCE_VERSION_HG19,
-//                        FuncotatorTestConstants.FUNCOTATOR_DATA_SOURCES_MAIN_FOLDER
+//                        FuncotatorTestConstants.FUNCOTATOR_DATA_SOURCES_MAIN_FOLDER,
+//                        false
 //                },
         };
     }
@@ -492,7 +507,8 @@ public class FuncotatorIntegrationTest extends CommandLineProgramTest {
     public void largeDataValidationTest(final String inputVcfName,
                                         final String referencePath,
                                         final String referenceVersion,
-                                        final String dataSourcesPath) throws IOException {
+                                        final String dataSourcesPath,
+                                        final boolean isDsEnvironmentPath) throws IOException {
 
         // Get our main test folder path from our environment:
         final String testFolderInputPath = getFuncotatorLargeDataValidationTestInputPath();
@@ -501,6 +517,14 @@ public class FuncotatorIntegrationTest extends CommandLineProgramTest {
         final long overallStartTime = System.nanoTime();
 
         final String outFileBaseName = inputVcfName + ".funcotator";
+
+        final String dataSourcesPathString;
+        if (isDsEnvironmentPath) {
+            dataSourcesPathString = getFuncotatorLargeDataValidationTestInputPath() + dataSourcesPath;
+        }
+        else {
+            dataSourcesPathString = dataSourcesPath;
+        }
 
         for (final FuncotatorArgumentDefinitions.OutputFormatType outFormat : FuncotatorArgumentDefinitions.OutputFormatType.values()) {
 
@@ -517,7 +541,7 @@ public class FuncotatorIntegrationTest extends CommandLineProgramTest {
                     testFolderInputPath + inputVcfName,
                     outputFile,
                     referencePath,
-                    getFuncotatorLargeDataValidationTestInputPath() + dataSourcesPath,
+                    dataSourcesPathString,
                     referenceVersion,
                     outFormat,
                     true);
