@@ -9,6 +9,7 @@ import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.cmdline.argumentcollections.DbsnpArgumentCollection;
 import org.broadinstitute.hellbender.engine.FeatureInput;
 import org.broadinstitute.hellbender.tools.walkers.genotyper.StandardCallerArgumentCollection;
+import org.broadinstitute.hellbender.utils.read.ReadUtils;
 
 import java.io.Serializable;
 import java.util.ArrayList;
@@ -147,4 +148,12 @@ public class HaplotypeCallerArgumentCollection extends AssemblyBasedCallerArgume
 
     @Argument(fullName = CORRECT_OVERLAPPING_BASE_QUALITIES_LONG_NAME)
     public boolean doNotCorrectOverlappingBaseQualities = false;
+
+    /**
+     * The default quality score for an insertion or deletion, if
+     * none are provided for this read.
+     */
+    @Advanced
+    @Argument(fullName = "default-indel-quality", doc = "Default quality score for insertion or deletion,", optional = true)
+    public byte defaultIndelQuality = ReadUtils.DEFAULT_INSERTION_DELETION_QUAL;
 }

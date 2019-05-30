@@ -40,7 +40,7 @@ public final class ReadUtils {
      * The default quality score for an insertion or deletion, if
      * none are provided for this read.
      */
-    public static final byte DEFAULT_INSERTION_DELETION_QUAL = (byte)45;
+    public static byte DEFAULT_INSERTION_DELETION_QUAL = (byte)45;
 
     // Base Quality Score Recalibrator specific attribute tags
     public static final String BQSR_BASE_INSERTION_QUALITIES = "BI";                // base qualities for insertions

@@ -154,6 +154,9 @@ public final class HaplotypeCallerEngine implements AssemblyRegionEvaluator {
         this.referenceReader = Utils.nonNull(referenceReader);
         this.annotationEngine = Utils.nonNull(annotationEngine);
         this.aligner = SmithWatermanAligner.getAligner(hcArgs.smithWatermanImplementation);
+
+        ReadUtils.DEFAULT_INSERTION_DELETION_QUAL = hcArgs.defaultIndelQuality;
+
         initialize(createBamOutIndex, createBamOutMD5);
     }
 
