@@ -72,11 +72,19 @@ public abstract class PairHMM implements Closeable{
             logger.info("Using the FPGA-accelerated native PairHMM implementation");
             return hmm;
         }),
+        /* MS optimized AVX implementation of LOGLESS_CACHING called through JNI. Throws if AVX is not available */
+        AVX_LOGLESS_CACHING_MGL(args -> {
+            // Constructor will throw a UserException if native DLL is not available
+            final VectorLoglessPairHMM hmm = new VectorLoglessPairHMM(VectorLoglessPairHMM.Implementation.MGL, args);
+            logger.info("Using the Microsoft Genomics AVX-accelerated native PairHMM implementation");
+            return hmm;
+        }),
         /* Uses the fastest available PairHMM implementation supported on the platform.
            Order of precedence:
-            1. AVX_LOGLESS_CACHING_OMP
-            2. AVX_LOGLESS_CACHING
-            3. LOGLESS_CACHING
+            1. AVX_LOGLESS_CACHING_MGL
+            2. AVX_LOGLESS_CACHING_OMP
+            3. AVX_LOGLESS_CACHING
+            4. LOGLESS_CACHING
          */
         FASTEST_AVAILABLE(args -> {
             // This try block is temporarily commented out becuase FPGA support is experimental for the time being. Once
@@ -90,6 +98,14 @@ public abstract class PairHMM implements Closeable{
             //catch ( UserException.HardwareFeatureException e ) {
             //    logger.info("FPGA-accelerated native PairHMM implementation is not supported");
             //}
+            try {
+                final VectorLoglessPairHMM hmm = new VectorLoglessPairHMM(VectorLoglessPairHMM.Implementation.MGL, args);
+                logger.info("Using the Microsoft Genomics AVX-accelerated native PairHMM implementation");
+                return hmm;
+            }
+            catch ( UserException.HardwareFeatureException e ) {
+                logger.info("Microsoft Genomics AVX-accelerated native PairHMM implementation is not available");
+            }
             try {
                 final VectorLoglessPairHMM hmm = new VectorLoglessPairHMM(VectorLoglessPairHMM.Implementation.OMP, args);
                 logger.info("Using the OpenMP multi-threaded AVX-accelerated native PairHMM implementation");
