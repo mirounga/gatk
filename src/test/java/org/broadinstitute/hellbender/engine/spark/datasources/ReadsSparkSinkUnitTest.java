@@ -2,12 +2,14 @@ package org.broadinstitute.hellbender.engine.spark.datasources;
 
 
 import htsjdk.samtools.*;
+import htsjdk.samtools.util.FileExtensions;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
+import org.broadinstitute.hellbender.engine.GATKPathSpecifier;
 import org.broadinstitute.hellbender.engine.spark.SparkContextFactory;
 import org.broadinstitute.hellbender.utils.gcs.BucketUtils;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
@@ -47,21 +49,22 @@ public class ReadsSparkSinkUnitTest extends GATKBaseTest {
     @DataProvider(name = "loadReadsBAM")
     public Object[][] loadReadsBAM() {
         return new Object[][]{
-                {testDataDir + "tools/BQSR/HiSeq.1mb.1RG.2k_lines.bam", "ReadsSparkSinkUnitTest1", null, ".bam", true, true},
-                {testDataDir + "tools/BQSR/HiSeq.1mb.1RG.2k_lines.bam", "ReadsSparkSinkUnitTest1", null, ".bam", true, false}, // write BAI, don't write SBI
-                {testDataDir + "tools/BQSR/HiSeq.1mb.1RG.2k_lines.bam", "ReadsSparkSinkUnitTest1", null, ".bam", false, true}, // don't write BAI, write SBI
-                {testDataDir + "tools/BQSR/HiSeq.1mb.1RG.2k_lines.bam", "ReadsSparkSinkUnitTest1", null, ".bam", false, false}, // don't write BAI, don't write SBI
-                {testDataDir + "tools/BQSR/expected.HiSeq.1mb.1RG.2k_lines.alternate.recalibrated.DIQ.bam", "ReadsSparkSinkUnitTest2", null, ".bam", true, true},
+                {testDataDir + "tools/BQSR/HiSeq.1mb.1RG.2k_lines.bam", "ReadsSparkSinkUnitTest1", null, ".bam", true, true, 100L},
+                {testDataDir + "tools/BQSR/HiSeq.1mb.1RG.2k_lines.bam", "ReadsSparkSinkUnitTest1", null, ".bam", true, true, 1L}, // check SBI granularity setting
+                {testDataDir + "tools/BQSR/HiSeq.1mb.1RG.2k_lines.bam", "ReadsSparkSinkUnitTest1", null, ".bam", true, false, 100L}, // write BAI, don't write SBI
+                {testDataDir + "tools/BQSR/HiSeq.1mb.1RG.2k_lines.bam", "ReadsSparkSinkUnitTest1", null, ".bam", false, true, 100L}, // don't write BAI, write SBI
+                {testDataDir + "tools/BQSR/HiSeq.1mb.1RG.2k_lines.bam", "ReadsSparkSinkUnitTest1", null, ".bam", false, false, 100L}, // don't write BAI, don't write SBI
+                {testDataDir + "tools/BQSR/expected.HiSeq.1mb.1RG.2k_lines.alternate.recalibrated.DIQ.bam", "ReadsSparkSinkUnitTest2", null, ".bam", true, true, 100L},
 
                 // This file has unmapped reads that are set to the position of their mates -- the ordering check
                 // in the tests below will fail if our ordering of these reads relative to the mapped reads
                 // is not consistent with the definition of coordinate sorting as defined in
                 // htsjdk.samtools.SAMRecordCoordinateComparator
-                {testDataDir + "tools/BQSR/CEUTrio.HiSeq.WGS.b37.ch20.1m-1m1k.NA12878.bam", "ReadsSparkSinkUnitTest3", null, ".bam", true, true},
+                {testDataDir + "tools/BQSR/CEUTrio.HiSeq.WGS.b37.ch20.1m-1m1k.NA12878.bam", "ReadsSparkSinkUnitTest3", null, ".bam", true, true, 100L},
                 {testDataDir + "tools/BQSR/NA12878.chr17_69k_70k.dictFix.cram", "ReadsSparkSinkUnitTest5",
-                                                publicTestDir + "human_g1k_v37.chr17_1Mb.fasta", ".cram", true, true},
+                                                publicTestDir + "human_g1k_v37.chr17_1Mb.fasta", ".cram", true, true, 100L},
 
-                {testDataDir + "tools/BQSR/HiSeq.1mb.1RG.2k_lines.bam", "ReadsSparkSinkUnitTest6", null, ".sam", true, true},
+                {testDataDir + "tools/BQSR/HiSeq.1mb.1RG.2k_lines.bam", "ReadsSparkSinkUnitTest6", null, ".sam", true, true, 100L},
         };
     }
 
@@ -89,7 +92,7 @@ public class ReadsSparkSinkUnitTest extends GATKBaseTest {
     // This bam was samtools sorted queryname bam, we expect if this were sorted to match the header that this would no longer match read-for-read due to differences in queryname-sort definitions compared to htsjdk
     @Test
     public void testReadsSparkSinkNotSortingReadsToHeader() throws IOException {
-        final String inputBam = testDataDir + "engine/CEUTrio.HiSeq.WGS.b37.NA12878.20.21.10000000-10000020.with.unmapped.queryname.samtools.sam";
+        final GATKPathSpecifier inputBam = new GATKPathSpecifier(testDataDir + "engine/CEUTrio.HiSeq.WGS.b37.NA12878.20.21.10000000-10000020.with.unmapped.queryname.samtools.sam");
         final File outputFile = createTempFile("ReadsSparkSinkNotSorting", ".bam");
         JavaSparkContext ctx = SparkContextFactory.getTestSparkContext();
 
@@ -97,9 +100,9 @@ public class ReadsSparkSinkUnitTest extends GATKBaseTest {
         JavaRDD<GATKRead> rddParallelReads = readSource.getParallelReads(inputBam, null);
         SAMFileHeader header = readSource.getHeader(inputBam, null);
 
-        ReadsSparkSink.writeReads(ctx, outputFile.getPath(), null, rddParallelReads, header, ReadsWriteFormat.SINGLE, 0, null, true, true, false);
+        ReadsSparkSink.writeReads(ctx, outputFile.getPath(), null, rddParallelReads, header, ReadsWriteFormat.SINGLE, 0, null, true, true, false, SBIIndexWriter.DEFAULT_GRANULARITY);
 
-        JavaRDD<GATKRead> rddParallelReads2 = readSource.getParallelReads(outputFile.getPath(), null);
+        JavaRDD<GATKRead> rddParallelReads2 = readSource.getParallelReads(new GATKPathSpecifier(outputFile.getPath()), null);
         final List<GATKRead> writtenReads = rddParallelReads2.collect();
 
         JavaRDD<GATKRead> rddParallelReads3 = readSource.getParallelReads(inputBam, null);
@@ -112,13 +115,13 @@ public class ReadsSparkSinkUnitTest extends GATKBaseTest {
     }
 
     @Test(dataProvider = "loadReadsBAM", groups = "spark")
-    public void readsSinkTest(String inputBam, String outputFileName, String referenceFile, String outputFileExtension, boolean writeBai, boolean writeSbi) throws IOException {
+    public void readsSinkTest(String inputBam, String outputFileName, String referenceFile, String outputFileExtension, boolean writeBai, boolean writeSbi, long sbiGranularity) throws IOException {
         final File outputFile = createTempFile(outputFileName, outputFileExtension);
-        assertSingleShardedWritingWorks(inputBam, referenceFile, outputFile.getAbsolutePath(), null, writeBai, writeSbi);
+        assertSingleShardedWritingWorks(new GATKPathSpecifier(inputBam), referenceFile, outputFile.getAbsolutePath(), null, writeBai, writeSbi, sbiGranularity);
     }
 
     @Test(dataProvider = "loadReadsBAM", groups = "spark")
-    public void testSpecifyPartsDir(String inputBam, String outputFileName, String referenceFile, String outputFileExtension, boolean writeBai, boolean writeSbi) throws IOException {
+    public void testSpecifyPartsDir(String inputBam, String outputFileName, String referenceFile, String outputFileExtension, boolean writeBai, boolean writeSbi, long sbiGranularity) throws IOException {
         final File outputFile = createTempFile(outputFileName, outputFileExtension);
         final File nonDefaultShardsDir = createTempDir(outputFileName + ".someOtherPlace");
         nonDefaultShardsDir.delete();
@@ -133,7 +136,7 @@ public class ReadsSparkSinkUnitTest extends GATKBaseTest {
             Runtime.getRuntime().exec("chmod a-w -R " + defaultPartsDir + "/");
 
             //show this succeeds when specifying a different path for the parts directory
-            assertSingleShardedWritingWorks(inputBam, referenceFile, outputFile.getAbsolutePath(), nonDefaultShardsDir.getAbsolutePath(), writeBai, writeSbi);
+            assertSingleShardedWritingWorks(new GATKPathSpecifier(inputBam), referenceFile, outputFile.getAbsolutePath(), nonDefaultShardsDir.getAbsolutePath(), writeBai, writeSbi, sbiGranularity);
 
             // Test that the file wasn't deleted when spark cleared its temp directory
             Assert.assertTrue(Files.exists(defaultPartsDir));
@@ -145,47 +148,52 @@ public class ReadsSparkSinkUnitTest extends GATKBaseTest {
     }
 
     @Test(dataProvider = "loadReadsBAM", groups = "spark")
-    public void readsSinkHDFSTest(String inputBam, String outputFileName, String referenceFileName, String outputFileExtension, boolean writeBai, boolean writeSbi) throws IOException {
+    public void readsSinkHDFSTest(String inputBam, String outputFileName, String referenceFileName, String outputFileExtension, boolean writeBai, boolean writeSbi, long sbiGranularity) throws IOException {
         final String outputHDFSPath = MiniClusterUtils.getTempPath(cluster, outputFileName, outputFileExtension).toString();
         Assert.assertTrue(BucketUtils.isHadoopUrl(outputHDFSPath));
-        assertSingleShardedWritingWorks(inputBam, referenceFileName, outputHDFSPath, null, writeBai, writeSbi);
+        assertSingleShardedWritingWorks(new GATKPathSpecifier(inputBam), referenceFileName, outputHDFSPath, null, writeBai, writeSbi, sbiGranularity);
     }
 
     @Test(dataProvider = "loadReadsBAM", groups = "spark")
-    public void testWritingToAnExistingFileHDFS(String inputBam, String outputFileName, String referenceFileName, String outputFileExtension, boolean writeBai, boolean writeSbi) throws IOException {
+    public void testWritingToAnExistingFileHDFS(String inputBam, String outputFileName, String referenceFileName, String outputFileExtension, boolean writeBai, boolean writeSbi, long sbiGranularity) throws IOException {
         final Path outputPath = MiniClusterUtils.getTempPath(cluster, outputFileName, outputFileExtension);
         final FileSystem fs = outputPath.getFileSystem(new Configuration());
         Assert.assertTrue(fs.createNewFile(outputPath));
         Assert.assertTrue(fs.exists(outputPath));
-        assertSingleShardedWritingWorks(inputBam, referenceFileName, outputPath.toString(), null, writeBai, writeSbi);
+        assertSingleShardedWritingWorks(new GATKPathSpecifier(inputBam), referenceFileName, outputPath.toString(), null, writeBai, writeSbi, sbiGranularity);
     }
 
     @Test(groups = "spark")
     public void testWritingToFileURL() throws IOException {
-        String inputBam = testDataDir + "tools/BQSR/HiSeq.1mb.1RG.2k_lines.bam";
+        GATKPathSpecifier inputBam = new GATKPathSpecifier(testDataDir + "tools/BQSR/HiSeq.1mb.1RG.2k_lines.bam");
         String outputUrl = "file:///" + createTempFile("ReadsSparkSinkUnitTest1", ".bam").getAbsolutePath();
-        assertSingleShardedWritingWorks(inputBam, null, outputUrl, null, true, true);
+        assertSingleShardedWritingWorks(inputBam, null, outputUrl, null, true, true, 100L);
     }
 
-    private void assertSingleShardedWritingWorks(String inputBam, String referenceFile, String outputPath, String outputPartsPath, boolean writeBai, boolean writeSbi) throws IOException {
+    private void assertSingleShardedWritingWorks(GATKPathSpecifier inputBam, String referenceFile, String outputPath, String outputPartsPath, boolean writeBai, boolean writeSbi, long sbiGranularity) throws IOException {
         JavaSparkContext ctx = SparkContextFactory.getTestSparkContext();
 
-        ReadsSparkSource readSource = new ReadsSparkSource(ctx);
-        JavaRDD<GATKRead> rddParallelReads = readSource.getParallelReads(inputBam, referenceFile);
-        SAMFileHeader header = readSource.getHeader(inputBam, referenceFile);
+        final GATKPathSpecifier referencePath = referenceFile == null ? null : new GATKPathSpecifier(referenceFile);
 
-        ReadsSparkSink.writeReads(ctx, outputPath, referenceFile, rddParallelReads, header, ReadsWriteFormat.SINGLE, 0, outputPartsPath, writeBai, writeSbi, true);
+        ReadsSparkSource readSource = new ReadsSparkSource(ctx);
+        JavaRDD<GATKRead> rddParallelReads = readSource.getParallelReads(inputBam, referencePath);
+        SAMFileHeader header = readSource.getHeader(inputBam, referencePath);
+
+        ReadsSparkSink.writeReads(ctx, outputPath, referencePath, rddParallelReads, header, ReadsWriteFormat.SINGLE, 0, outputPartsPath, writeBai, writeSbi, true, sbiGranularity);
 
         // check that a bai file is created
-        if (IOUtils.isBamFileName(outputPath) && writeBai) {
-            Assert.assertTrue(Files.exists(IOUtils.getPath(outputPath + BAMIndex.BAI_INDEX_SUFFIX)));
+        if (new GATKPathSpecifier(outputPath).isBam() && writeBai) {
+            Assert.assertTrue(Files.exists(IOUtils.getPath(outputPath + FileExtensions.BAI_INDEX)));
         }
-        // check that a splitting bai file is created
-        if (IOUtils.isBamFileName(outputPath) && writeSbi) {
-            Assert.assertTrue(Files.exists(IOUtils.getPath(outputPath + SBIIndex.FILE_EXTENSION)));
+        // check that a splitting bai file is created with correct granularity
+        if (new GATKPathSpecifier(outputPath).isBam() && writeSbi) {
+            final java.nio.file.Path sbiPath = IOUtils.getPath(outputPath + FileExtensions.SBI);
+            Assert.assertTrue(Files.exists(sbiPath));
+            final SBIIndex sbi = SBIIndex.load(sbiPath);
+            Assert.assertEquals(sbi.getGranularity(), sbiGranularity);
         }
 
-        JavaRDD<GATKRead> rddParallelReads2 = readSource.getParallelReads(outputPath, referenceFile);
+        JavaRDD<GATKRead> rddParallelReads2 = readSource.getParallelReads(new GATKPathSpecifier(outputPath), referencePath);
         final List<GATKRead> writtenReads = rddParallelReads2.collect();
 
         assertReadsAreSorted(header, writtenReads);
@@ -205,23 +213,26 @@ public class ReadsSparkSinkUnitTest extends GATKBaseTest {
     }
 
     @Test(dataProvider = "loadReadsBAM", groups = "spark")
-    public void readsSinkShardedTest(String inputBam, String outputFileName, String referenceFile, String outputFileExtension, boolean writeBai, boolean writeSbi) throws IOException {
+    public void readsSinkShardedTest(String inputBam, String outputFileName, String referenceFile, String outputFileExtension, boolean writeBai, boolean writeSbi, long sbiGranularity) throws IOException {
+        final GATKPathSpecifier inputBamSpecifier = new GATKPathSpecifier(inputBam);
         final File outputFile = createTempFile(outputFileName, outputFileExtension);
         JavaSparkContext ctx = SparkContextFactory.getTestSparkContext();
 
-        ReadsSparkSource readSource = new ReadsSparkSource(ctx);
-        JavaRDD<GATKRead> rddParallelReads = readSource.getParallelReads(inputBam, referenceFile);
-        rddParallelReads = rddParallelReads.repartition(2); // ensure that the output is in two shards
-        SAMFileHeader header = readSource.getHeader(inputBam, referenceFile);
+        final GATKPathSpecifier referencePath = referenceFile == null ? null : new GATKPathSpecifier(referenceFile);
 
-        ReadsSparkSink.writeReads(ctx, outputFile.getAbsolutePath(), referenceFile, rddParallelReads, header, ReadsWriteFormat.SHARDED, 0, null, false);
+        ReadsSparkSource readSource = new ReadsSparkSource(ctx);
+        JavaRDD<GATKRead> rddParallelReads = readSource.getParallelReads(inputBamSpecifier, referencePath);
+        rddParallelReads = rddParallelReads.repartition(2); // ensure that the output is in two shards
+        SAMFileHeader header = readSource.getHeader(inputBamSpecifier, referencePath);
+
+        ReadsSparkSink.writeReads(ctx, outputFile.getAbsolutePath(), referencePath, rddParallelReads, header, ReadsWriteFormat.SHARDED, 0, null, false, sbiGranularity);
         int shards = outputFile.listFiles((dir, name) -> !name.startsWith(".") && !name.startsWith("_")).length;
         Assert.assertEquals(shards, 2);
         // check that no local .crc files are created
         int crcs = outputFile.listFiles((dir, name) -> name.startsWith(".") && name.endsWith(".crc")).length;
         Assert.assertEquals(crcs, 0);
 
-        JavaRDD<GATKRead> rddParallelReads2 = readSource.getParallelReads(outputFile.getAbsolutePath(), referenceFile);
+        JavaRDD<GATKRead> rddParallelReads2 = readSource.getParallelReads(new GATKPathSpecifier(outputFile.getAbsolutePath()), referencePath);
         // reads are not globally sorted, so don't test that
         Assert.assertEquals(rddParallelReads.count(), rddParallelReads2.count());
     }
@@ -233,17 +244,18 @@ public class ReadsSparkSinkUnitTest extends GATKBaseTest {
         // us from naming collisions across multiple instances of the test suite.
         final File outputParentDirectory = createTempDir(outputDirectoryName + "_parent");
         final File outputDirectory = new File(outputParentDirectory, outputDirectoryName);
+        final GATKPathSpecifier inputBamSpecifier = new GATKPathSpecifier(inputBam);
 
         JavaSparkContext ctx = SparkContextFactory.getTestSparkContext();
 
         ReadsSparkSource readSource = new ReadsSparkSource(ctx);
-        JavaRDD<GATKRead> rddParallelReads = readSource.getParallelReads(inputBam, null)
+        JavaRDD<GATKRead> rddParallelReads = readSource.getParallelReads(inputBamSpecifier, null)
                 .filter(r -> !r.isUnmapped()); // filter out unmapped reads (see comment below)
-        SAMFileHeader header = readSource.getHeader(inputBam, null);
+        SAMFileHeader header = readSource.getHeader(inputBamSpecifier, null);
 
-        ReadsSparkSink.writeReads(ctx, outputDirectory.getAbsolutePath(), null, rddParallelReads, header, ReadsWriteFormat.ADAM, 0, null, true);
+        ReadsSparkSink.writeReads(ctx, outputDirectory.getAbsolutePath(), null, rddParallelReads, header, ReadsWriteFormat.ADAM, 0, null, true, SBIIndexWriter.DEFAULT_GRANULARITY);
 
-        JavaRDD<GATKRead> rddParallelReads2 = readSource.getADAMReads(outputDirectory.getAbsolutePath(), null, header);
+        JavaRDD<GATKRead> rddParallelReads2 = readSource.getADAMReads(new GATKPathSpecifier(outputDirectory.getAbsolutePath()), null, header);
         Assert.assertEquals(rddParallelReads.count(), rddParallelReads2.count());
 
         // Test the round trip

@@ -10,9 +10,11 @@ import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.engine.FeatureDataSource;
 import org.broadinstitute.hellbender.testutils.ArgumentsBuilder;
 import org.broadinstitute.hellbender.tools.walkers.SplitIntervals;
+import org.broadinstitute.hellbender.tools.walkers.haplotypecaller.AssemblyBasedCallerArgumentCollection;
 import org.broadinstitute.hellbender.tools.walkers.mutect.filtering.FilterMutectCalls;
 import org.broadinstitute.hellbender.tools.walkers.mutect.Mutect2;
 import org.broadinstitute.hellbender.tools.walkers.mutect.filtering.M2FiltersArgumentCollection;
+import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
 import org.testng.Assert;
@@ -47,13 +49,14 @@ public class LearnReadOrientationModelIntegrationTest extends CommandLineProgram
 
         // Step 1: SplitIntervals
         final File intervalDir = createTempDir("intervals");
-        runCommandLine(
-            Arrays.asList(
-                    "-R", b37_reference_20_21,
-                    "-L", intervalList,
-                    "-O", intervalDir.getAbsolutePath(),
-                    "-" + SplitIntervals.SCATTER_COUNT_SHORT_NAME, Integer.toString(scatterCount)),
-            SplitIntervals.class.getSimpleName());
+
+        final ArgumentsBuilder splitIntervalsArgs = new ArgumentsBuilder()
+                .addReference(b37Reference)
+                .addIntervals(new File(intervalList))
+                .addOutput(intervalDir)
+                .add(SplitIntervals.SCATTER_COUNT_SHORT_NAME, scatterCount);
+
+        runCommandLine(splitIntervalsArgs, SplitIntervals.class.getSimpleName());
 
         // Step 2: CollectF1R2Counts
         final File[] intervals = intervalDir.listFiles();
@@ -61,16 +64,14 @@ public class LearnReadOrientationModelIntegrationTest extends CommandLineProgram
         final List<File> scatteredTarGzs = IntStream.range(0, intervals.length).mapToObj(i -> new File(scatteredDir, "scatter_" + i + ".tar.gz")).collect(Collectors.toList());
         for (int i = 0; i < intervals.length; i++){
 
-            runCommandLine(Arrays.asList(
-                    "-R", b37_reference_20_21,
-                    "-I", hapmapBamSnippet,
-                    "-L", intervals[i].getAbsolutePath(),
-                    "-O", scatteredTarGzs.get(i).getAbsolutePath()),
-                    CollectF1R2Counts.class.getSimpleName());
+            final ArgumentsBuilder collectF1R2CountsArgs = new ArgumentsBuilder()
+                    .addReference(b37Reference)
+                    .addInput(new File(hapmapBamSnippet))
+                    .addIntervals(intervals[i])
+                    .addOutput(scatteredTarGzs.get(i));
 
+            runCommandLine(collectF1R2CountsArgs, CollectF1R2Counts.class.getSimpleName());
             IOUtils.extractTarGz(scatteredTarGzs.get(i).toPath(), extractedDirs.get(i).toPath());
-
-            final int iFinal = i;
             final File refHist = F1R2CountsCollector.getRefHistogramsFromExtractedTar(extractedDirs.get(i)).get(0);
 
             // Ensure that we print every bin, even when the count is 0
@@ -80,9 +81,9 @@ public class LearnReadOrientationModelIntegrationTest extends CommandLineProgram
 
         // Step 3: LearnReadOrientationModel
         final File priorTarGz = createTempFile("prior", ".tar.gz");
-        final ArgumentsBuilder args = new ArgumentsBuilder();
-        args.addArgument(StandardArgumentDefinitions.OUTPUT_LONG_NAME, priorTarGz.getAbsolutePath());
-        IntStream.range(0, intervals.length).forEach(n -> args.addArgument(StandardArgumentDefinitions.INPUT_LONG_NAME, scatteredTarGzs.get(n).getAbsolutePath()));
+        final ArgumentsBuilder args = new ArgumentsBuilder()
+                .addOutput(priorTarGz);
+        IntStream.range(0, intervals.length).forEach(n -> args.addInput(scatteredTarGzs.get(n)));
 
         runCommandLine(args.getArgsList(), LearnReadOrientationModel.class.getSimpleName());
 
@@ -97,22 +98,20 @@ public class LearnReadOrientationModelIntegrationTest extends CommandLineProgram
         final File filteredVcf = GATKBaseTest.createTempFile("filtered", ".vcf");
         final File bamout = GATKBaseTest.createTempFile("SM-CEMAH", ".bam");
 
-        new Main().instanceMain(makeCommandLineArgs(
-                Arrays.asList(
-                    "-I", hapmapBamSnippet,
-                    "-R", b37_reference_20_21,
-                    "-O", unfilteredVcf.getAbsolutePath(),
-                    "-bamout", bamout.getAbsolutePath()),
-                Mutect2.class.getSimpleName()));
+        final ArgumentsBuilder mutect2Args = new ArgumentsBuilder()
+                .addReference(b37Reference)
+                .addInput(new File(hapmapBamSnippet))
+                .addOutput(unfilteredVcf)
+                .add(AssemblyBasedCallerArgumentCollection.BAM_OUTPUT_LONG_NAME, bamout);
+        runCommandLine(mutect2Args, Mutect2.class.getSimpleName());
 
-        new Main().instanceMain(makeCommandLineArgs(
-                Arrays.asList(
-                        "-V", unfilteredVcf.getAbsolutePath(),
-                        "-R", b37_reference_20_21,
-                        "--" + M2FiltersArgumentCollection.ARTIFACT_PRIOR_TABLE_NAME, priorTarGz.getAbsolutePath(),
-                        "-O", filteredVcf.getAbsolutePath()),
-                FilterMutectCalls.class.getSimpleName()));
+        final ArgumentsBuilder filterArgs = new ArgumentsBuilder()
+                .addReference(b37Reference)
+                .addVCF(unfilteredVcf)
+                .add(M2FiltersArgumentCollection.ARTIFACT_PRIOR_TABLE_NAME, priorTarGz)
+                .addOutput(filteredVcf);
 
+        runCommandLine(filterArgs, FilterMutectCalls.class.getSimpleName());
 
         // These artifacts have been verified manually
         // The pair is of type (Position, Expected Source of Prior Probability)
@@ -149,15 +148,68 @@ public class LearnReadOrientationModelIntegrationTest extends CommandLineProgram
                 CollectF1R2Counts.class.getSimpleName()));
 
         final ArgumentsBuilder args = new ArgumentsBuilder()
-                .addArgument(StandardArgumentDefinitions.INPUT_LONG_NAME, countsTarGz.getAbsolutePath())
-                .addArgument(StandardArgumentDefinitions.OUTPUT_LONG_NAME, priorsTarGz.getAbsolutePath());
+                .add(StandardArgumentDefinitions.INPUT_LONG_NAME, countsTarGz.getAbsolutePath())
+                .add(StandardArgumentDefinitions.OUTPUT_LONG_NAME, priorsTarGz.getAbsolutePath());
 
-        runCommandLine(args.getArgsList(), LearnReadOrientationModel.class.getSimpleName());
+        runCommandLine(args, LearnReadOrientationModel.class.getSimpleName());
 
         final File extractedPriorsDir = createTempDir("extracted");
         IOUtils.extractTarGz(priorsTarGz.toPath(), extractedPriorsDir.toPath());
 
         Assert.assertTrue(new File(extractedPriorsDir, sample1 + LearnReadOrientationModel.ARTIFACT_PRIOR_EXTENSION).exists());
         Assert.assertTrue(new File(extractedPriorsDir, sample2 + LearnReadOrientationModel.ARTIFACT_PRIOR_EXTENSION).exists());
+    }
+
+    // make sure that nothing goes wrong if the target territory is so small that no data exists for some contexts
+    @Test
+    public void testFewSites() throws IOException {
+        // Step 1: CollectF1R2Counts
+        final File extractedDir = createTempDir("extracted");
+        final File scatteredTarGz = createTempFile("counts", ".tar.gz");
+
+        final ArgumentsBuilder collectF1R2Args = new ArgumentsBuilder()
+                .addReference(b37Reference)
+                .addInput(new File(hapmapBamSnippet))
+                .addInterval(new SimpleInterval("20:10000-10001"))
+                .addOutput(scatteredTarGz);
+
+        runCommandLine(collectF1R2Args, CollectF1R2Counts.class.getSimpleName());
+
+        IOUtils.extractTarGz(scatteredTarGz.toPath(), extractedDir.toPath());
+
+        // Step 2: LearnReadOrientationModel
+        final File priorTarGz = createTempFile("prior", ".tar.gz");
+        final ArgumentsBuilder args = new ArgumentsBuilder()
+                .addInput(scatteredTarGz)
+                .addOutput(priorTarGz);
+
+        runCommandLine(args, LearnReadOrientationModel.class.getSimpleName());
+
+        final File extractedPriorDir = createTempDir("extracted_priors");
+        IOUtils.extractTarGz(priorTarGz.toPath(), extractedPriorDir.toPath());
+
+        final ArtifactPriorCollection artifactPriorCollection = ArtifactPriorCollection.readArtifactPriors(extractedPriorDir.listFiles()[0]);
+
+        // Step 4: Mutect 2
+        final File unfilteredVcf = GATKBaseTest.createTempFile("unfiltered", ".vcf");
+        final File filteredVcf = GATKBaseTest.createTempFile("filtered", ".vcf");
+        final File bamout = GATKBaseTest.createTempFile("SM-CEMAH", ".bam");
+
+
+        final ArgumentsBuilder mutect2Args = new ArgumentsBuilder()
+                .addReference(b37Reference)
+                .addInput(new File(hapmapBamSnippet))
+                .addInterval(new SimpleInterval("20:24000000-26000000"))
+                .add(AssemblyBasedCallerArgumentCollection.BAM_OUTPUT_LONG_NAME, bamout)
+                .addOutput(unfilteredVcf);
+        runCommandLine(mutect2Args, Mutect2.class.getSimpleName());
+
+        final ArgumentsBuilder filterArgs = new ArgumentsBuilder()
+                .addReference(b37Reference)
+                .addVCF(unfilteredVcf)
+                .add(M2FiltersArgumentCollection.ARTIFACT_PRIOR_TABLE_NAME, priorTarGz)
+                .addOutput(filteredVcf);
+
+        runCommandLine(filterArgs, FilterMutectCalls.class.getSimpleName());
     }
 }

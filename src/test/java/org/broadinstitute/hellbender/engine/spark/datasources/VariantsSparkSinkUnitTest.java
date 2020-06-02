@@ -1,14 +1,13 @@
 package org.broadinstitute.hellbender.engine.spark.datasources;
 
 import com.google.common.io.Files;
-import htsjdk.samtools.BAMIndex;
 import htsjdk.samtools.SAMSequenceDictionary;
 import htsjdk.samtools.SAMSequenceRecord;
 import htsjdk.samtools.seekablestream.SeekablePathStream;
 import htsjdk.samtools.seekablestream.SeekableStream;
 import htsjdk.samtools.util.BlockCompressedInputStream;
+import htsjdk.samtools.util.FileExtensions;
 import htsjdk.samtools.util.IOUtil;
-import htsjdk.tribble.util.TabixUtils;
 import htsjdk.variant.utils.VCFHeaderReader;
 import htsjdk.variant.variantcontext.Allele;
 import htsjdk.variant.variantcontext.GenotypeBuilder;
@@ -151,7 +150,7 @@ public final class VariantsSparkSinkUnitTest extends GATKBaseTest {
             public String getTestedToolName(){
                 return IndexFeatureFile.class.getSimpleName();
             }
-        }.runCommandLine(new String[]{"-F", output.getAbsolutePath()});
+        }.runCommandLine(new String[]{"-I", output.getAbsolutePath()});
 
         final List<VariantContext> writtenVcs = readVariants(output.toString());
         //if we are actually writing a gvcf, all the variant blocks will be merged into a single homref block with
@@ -232,7 +231,7 @@ public final class VariantsSparkSinkUnitTest extends GATKBaseTest {
             Assert.assertEquals("VCF", vcfFormat);
             Assert.assertTrue(blockCompressed);
             // check that a tabix index file is created or not
-            boolean tabixExists = java.nio.file.Files.exists(IOUtils.getPath(outputPath + TabixUtils.STANDARD_INDEX_EXTENSION));
+            boolean tabixExists = java.nio.file.Files.exists(IOUtils.getPath(outputPath + FileExtensions.TABIX_INDEX));
             Assert.assertEquals(tabixExists, writeTabixIndex);
         } else if (outputFile.endsWith(".bcf")) {
             Assert.assertEquals("BCF", vcfFormat);
@@ -270,7 +269,7 @@ public final class VariantsSparkSinkUnitTest extends GATKBaseTest {
     private static InputStream openFile(String path) throws IOException {
         Utils.nonNull(path);
         InputStream inputStream;
-        if (BucketUtils.isCloudStorageUrl(path)) {
+        if (BucketUtils.isGcsUrl(path)) {
             java.nio.file.Path p = BucketUtils.getPathOnGcs(path);
             inputStream = java.nio.file.Files.newInputStream(p);
         } else if (BucketUtils.isHadoopUrl(path)) {

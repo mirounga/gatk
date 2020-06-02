@@ -1,8 +1,8 @@
 package org.broadinstitute.hellbender.tools.walkers.vqsr;
 
+import htsjdk.samtools.util.FileExtensions;
 import htsjdk.tribble.AbstractFeatureReader;
 import htsjdk.tribble.FeatureReader;
-import htsjdk.tribble.util.TabixUtils;
 import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.vcf.VCFCodec;
 import org.broadinstitute.hellbender.CommandLineProgramTest;
@@ -95,19 +95,19 @@ public class ApplyVQSRIntegrationTest extends CommandLineProgramTest {
         ArgumentsBuilder args = new ArgumentsBuilder();
         File tempOut = createTempFile("testApplyRecalibrationSnpAndIndelTogetherExcludeFiltered", ".vcf");
 
-        args.add("--variant");
-        args.add(new File(getToolTestDataDir() + "VQSR.mixedTest.input.vcf"));
-        args.add("-L");
-        args.add("20:1000100-1000500");
-        args.add("-mode");
-        args.add("BOTH");
-        args.add("-exclude-filtered");
-        args.add("-truth-sensitivity-filter-level");
-        args.add("90.0");
-        args.add("--tranches-file ");
-        args.add(getToolTestDataDir() + "VQSR.mixedTest.tranches");
-        args.add("--recal-file");
-        args.add(getToolTestDataDir() + "VQSR.mixedTest.recal.vcf");
+        args.addRaw("--variant");
+        args.addRaw(new File(getToolTestDataDir() + "VQSR.mixedTest.input.vcf"));
+        args.addRaw("-L");
+        args.addRaw("20:1000100-1000500");
+        args.addRaw("-mode");
+        args.addRaw("BOTH");
+        args.addRaw("-exclude-filtered");
+        args.addRaw("-truth-sensitivity-filter-level");
+        args.addRaw("90.0");
+        args.addRaw("--tranches-file ");
+        args.addRaw(getToolTestDataDir() + "VQSR.mixedTest.tranches");
+        args.addRaw("--recal-file");
+        args.addRaw(getToolTestDataDir() + "VQSR.mixedTest.recal.vcf");
         args.addOutput(tempOut);
 
         runCommandLine(args);
@@ -191,7 +191,7 @@ public class ApplyVQSRIntegrationTest extends CommandLineProgramTest {
         spec.executeTest("testApplyRecalibrationAlleleSpecificINDELmodeGZIP", this);
 
         // make sure we got a tabix index
-        final File tabixIndexFile = new File(tempGZIPOut.getAbsolutePath() + TabixUtils.STANDARD_INDEX_EXTENSION);
+        final File tabixIndexFile = new File(tempGZIPOut.getAbsolutePath() + FileExtensions.TABIX_INDEX);
         Assert.assertTrue(tabixIndexFile.exists());
         Assert.assertTrue(tabixIndexFile.length() > 0);
 

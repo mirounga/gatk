@@ -127,7 +127,7 @@ public class ReadsPipelineSpark extends GATKSparkTool {
     public final AssemblyRegionReadShardArgumentCollection shardingArgs = new AssemblyRegionReadShardArgumentCollection();
 
     @ArgumentCollection
-    public final AssemblyRegionArgumentCollection assemblyRegionArgs = new HaplotypeCallerSpark.HaplotypeCallerAssemblyRegionArgumentCollection();
+    public final AssemblyRegionArgumentCollection assemblyRegionArgs = new AssemblyRegionArgumentCollection();
 
     /**
      * command-line arguments to fine tune the apply BQSR step.
@@ -164,7 +164,7 @@ public class ReadsPipelineSpark extends GATKSparkTool {
 
     @Override
     protected void runTool(final JavaSparkContext ctx) {
-        String referenceFileName = addReferenceFilesForSpark(ctx, referenceArguments.getReferenceFileName());
+        String referenceFileName = addReferenceFilesForSpark(ctx, referenceArguments.getReferencePath());
         List<String> localKnownSitesFilePaths = addVCFsForSpark(ctx, knownVariants);
 
         final JavaRDD<GATKRead> alignedReads;
@@ -205,7 +205,7 @@ public class ReadsPipelineSpark extends GATKSparkTool {
         final RecalibrationReport bqsrReport = BaseRecalibratorSparkFn.apply(readsWithVariants, getHeaderForReads(), referenceFileName, bqsrArgs);
 
         final Broadcast<RecalibrationReport> reportBroadcast = ctx.broadcast(bqsrReport);
-        final JavaRDD<GATKRead> finalReads = ApplyBQSRSparkFn.apply(sortedMarkedReads, reportBroadcast, getHeaderForReads(), applyBqsrArgs.toApplyBQSRArgumentCollection(bqsrArgs.PRESERVE_QSCORES_LESS_THAN));
+        final JavaRDD<GATKRead> finalReads = ApplyBQSRSparkFn.apply(sortedMarkedReads, reportBroadcast, getHeaderForReads(), applyBqsrArgs.toApplyBQSRArgumentCollection(bqsrArgs));
 
         if (outputBam != null) { // only write output of BQSR if output BAM is specified
             writeReads(ctx, outputBam, finalReads, header, true);
@@ -221,7 +221,7 @@ public class ReadsPipelineSpark extends GATKSparkTool {
                 .flatMap(interval -> Shard.divideIntervalIntoShards(interval, shardingArgs.readShardSize, shardingArgs.readShardPadding, sequenceDictionary).stream())
                 .collect(Collectors.toList());
 
-        HaplotypeCallerSpark.callVariantsWithHaplotypeCallerAndWriteOutput(ctx, filteredReadsForHC, readsHeader, sequenceDictionary, referenceArguments.getReferenceFileName(), intervalShards, hcArgs, shardingArgs, assemblyRegionArgs, true, output, makeVariantAnnotations(), logger, strict, createOutputVariantIndex);
+        HaplotypeCallerSpark.callVariantsWithHaplotypeCallerAndWriteOutput(ctx, filteredReadsForHC, readsHeader, sequenceDictionary, referenceArguments.getReferenceFileName(), intervalShards, hcArgs, shardingArgs, assemblyRegionArgs, output, makeVariantAnnotations(), logger, strict, createOutputVariantIndex);
 
         if (bwaEngine != null) {
             bwaEngine.close();

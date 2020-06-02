@@ -1,28 +1,41 @@
 package org.broadinstitute.hellbender.engine;
 
 import com.google.common.annotations.VisibleForTesting;
-import htsjdk.samtools.*;
+import htsjdk.samtools.MergingSamRecordIterator;
+import htsjdk.samtools.SAMException;
+import htsjdk.samtools.SAMFileHeader;
+import htsjdk.samtools.SAMRecord;
+import htsjdk.samtools.SAMSequenceDictionary;
+import htsjdk.samtools.SamFileHeaderMerger;
+import htsjdk.samtools.SamInputResource;
+import htsjdk.samtools.SamReader;
+import htsjdk.samtools.SamReaderFactory;
 import htsjdk.samtools.util.CloseableIterator;
 import htsjdk.samtools.util.IOUtil;
-import java.nio.channels.SeekableByteChannel;
-import java.util.function.Function;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.broadinstitute.hellbender.utils.IntervalUtils;
-import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
+import org.broadinstitute.hellbender.utils.IntervalUtils;
+import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.gcs.BucketUtils;
 import org.broadinstitute.hellbender.utils.iterators.SAMRecordToReadIterator;
 import org.broadinstitute.hellbender.utils.iterators.SamReaderQueryingIterator;
-import org.broadinstitute.hellbender.utils.nio.SeekableByteChannelPrefetcher;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.read.ReadConstants;
 
 import java.io.IOException;
+import java.nio.channels.SeekableByteChannel;
 import java.nio.file.Path;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
@@ -160,11 +173,10 @@ public final class ReadsDataSource implements GATKDataSource<GATKRead>, AutoClos
             SamReaderFactory customSamReaderFactory,
             int cloudPrefetchBuffer, int cloudIndexPrefetchBuffer) {
         this(samPaths, samIndices, customSamReaderFactory,
-            (cloudPrefetchBuffer > 0 ? is -> SeekableByteChannelPrefetcher.addPrefetcher(cloudPrefetchBuffer, is)
-                                     : Function.identity()),
-            (cloudIndexPrefetchBuffer > 0 ? is -> SeekableByteChannelPrefetcher.addPrefetcher(cloudIndexPrefetchBuffer, is)
-                : Function.identity()));
+                BucketUtils.getPrefetchingWrapper(cloudPrefetchBuffer),
+                BucketUtils.getPrefetchingWrapper(cloudIndexPrefetchBuffer));
     }
+
 
     /**
      * Initialize this data source with multiple SAM/BAM/CRAM files, explicit indices for those files,
@@ -210,15 +222,15 @@ public final class ReadsDataSource implements GATKDataSource<GATKRead>, AutoClos
             }
 
             Function<SeekableByteChannel, SeekableByteChannel> wrapper =
-                (BucketUtils.isCloudStorageUrl(samPath)
+                (BucketUtils.isEligibleForPrefetching(samPath)
                     ? cloudWrapper
                     : Function.identity());
             // if samIndices==null then we'll guess the index name from the file name.
             // If the file's on the cloud, then the search will only consider locations that are also
             // in the cloud.
             Function<SeekableByteChannel, SeekableByteChannel> indexWrapper =
-                ((samIndices != null && BucketUtils.isCloudStorageUrl(samIndices.get(samCount))
-                 || (samIndices == null && BucketUtils.isCloudStorageUrl(samPath)))
+                ((samIndices != null && BucketUtils.isEligibleForPrefetching(samIndices.get(samCount))
+                 || (samIndices == null && BucketUtils.isEligibleForPrefetching(samPath)))
                     ? cloudIndexWrapper
                     : Function.identity());
 
@@ -465,6 +477,15 @@ public final class ReadsDataSource implements GATKDataSource<GATKRead>, AutoClos
         return order;
     }
 
+    /**
+     * @return true if this {@code ReadsDataSource} supports serial iteration (has only non-SAM inputs). If any
+     * input has type==SAM_TYPE (is backed by a SamFileReader) this will return false, since SamFileReader
+     * doesn't support serial iterators, and can't be serially re-traversed without re-initialization of the
+     * underlying reader (and {@code ReadsDataSource}.
+     */
+    public boolean supportsSerialIteration() {
+        return !hasSAMInputs();
+    }
 
     /**
      * Shut down this data source permanently, closing all iterations and readers.
@@ -494,6 +515,13 @@ public final class ReadsDataSource implements GATKDataSource<GATKRead>, AutoClos
                 readerEntry.setValue(null);
             }
         }
+    }
+
+    // Return true if any input is has type==SAM_TYPE (is backed by a SamFileReader) since SamFileReader
+    // doesn't support serial iterators and can't be serially re-traversed without re-initialization of the
+    // reader
+    private boolean hasSAMInputs() {
+        return readers.keySet().stream().anyMatch(r -> r.type().equals(SamReader.Type.SAM_TYPE));
     }
 
     /**

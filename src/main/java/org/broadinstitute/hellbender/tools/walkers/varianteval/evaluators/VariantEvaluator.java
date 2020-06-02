@@ -11,6 +11,10 @@ public abstract class VariantEvaluator implements Comparable<VariantEvaluator> {
     private VariantEval walker;
     private final String simpleName;
 
+    protected VariantEvaluator(String simpleName) {
+        this.simpleName = simpleName;
+    }
+
     protected VariantEvaluator() {
         this.simpleName = getClass().getSimpleName();
     }
@@ -101,6 +105,14 @@ public abstract class VariantEvaluator implements Comparable<VariantEvaluator> {
      * @return
      */
     public boolean supportsCombine() {
+        return false;
+    }
+
+    /**
+     * Subclasses must overload this to return true if they require an input to include a calling territory, either
+     * an interval list or a reference.
+     */
+    public boolean requiresTerritoryToBeSpecified() {
         return false;
     }
 }

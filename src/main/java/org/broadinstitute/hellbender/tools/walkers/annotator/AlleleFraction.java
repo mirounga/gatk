@@ -1,15 +1,14 @@
 package org.broadinstitute.hellbender.tools.walkers.annotator;
 
 import htsjdk.variant.variantcontext.*;
-import htsjdk.variant.vcf.VCFConstants;
 import htsjdk.variant.vcf.VCFFormatHeaderLine;
-import htsjdk.variant.vcf.VCFStandardHeaderLines;
 import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.engine.ReferenceContext;
 import org.broadinstitute.hellbender.utils.MathUtils;
 import org.broadinstitute.hellbender.utils.Utils;
-import org.broadinstitute.hellbender.utils.genotyper.ReadLikelihoods;
+import org.broadinstitute.hellbender.utils.genotyper.AlleleLikelihoods;
 import org.broadinstitute.hellbender.utils.help.HelpConstants;
+import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFHeaderLines;
 
@@ -42,7 +41,7 @@ public final class AlleleFraction extends GenotypeAnnotation {
                          final VariantContext vc,
                          final Genotype g,
                          final GenotypeBuilder gb,
-                         final ReadLikelihoods<Allele> likelihoods) {
+                         final AlleleLikelihoods<GATKRead, Allele> likelihoods) {
         Utils.nonNull(gb, "gb is null");
         Utils.nonNull(vc, "vc is null");
 
@@ -50,20 +49,17 @@ public final class AlleleFraction extends GenotypeAnnotation {
         if ( g == null || !g.isCalled() || g.hasExtendedAttribute(getKeyNames().get(0))) {  //don't overwrite AF based on Bayesian estimate if it already exists
             return;
         }
-
-        for ( final Genotype genotype : genotypes ) {
-           if ( genotype.hasAD() ) {
-                final int[] AD = genotype.getAD();
-                final double[] allAlleleFractions = MathUtils.normalizeFromRealSpace(Arrays.stream(AD).mapToDouble(x -> x).toArray());
-                gb.attribute(getKeyNames().get(0), Arrays.copyOfRange(allAlleleFractions, 1, allAlleleFractions.length)); //omit the first entry of the array corresponding to the reference
-            }
-            // if there is no AD value calculate it now using likelihoods
-            else if (likelihoods != null) {
-                DepthPerAlleleBySample adCalc = new DepthPerAlleleBySample();
-                final int[] AD = adCalc.annotateWithLikelihoods(vc, g, new LinkedHashSet<>(vc.getAlleles()), likelihoods);
-                final double[] allAlleleFractions = MathUtils.normalizeFromRealSpace(Arrays.stream(AD).mapToDouble(x -> x*1.0).toArray());
-                gb.attribute(getKeyNames().get(0), Arrays.copyOfRange(allAlleleFractions, 1, allAlleleFractions.length)); //omit the first entry of the array corresponding to the reference
-            }
+       if ( g.hasAD() ) {
+            final int[] AD = g.getAD();
+            final double[] allAlleleFractions = MathUtils.normalizeSumToOne(Arrays.stream(AD).mapToDouble(x -> x).toArray());
+            gb.attribute(getKeyNames().get(0), Arrays.copyOfRange(allAlleleFractions, 1, allAlleleFractions.length)); //omit the first entry of the array corresponding to the reference
+        }
+        // if there is no AD value calculate it now using likelihoods
+        else if (likelihoods != null) {
+            DepthPerAlleleBySample adCalc = new DepthPerAlleleBySample();
+            final int[] AD = adCalc.annotateWithLikelihoods(vc, g, new LinkedHashSet<>(vc.getAlleles()), likelihoods);
+            final double[] allAlleleFractions = MathUtils.normalizeSumToOne(Arrays.stream(AD).mapToDouble(x -> x*1.0).toArray());
+            gb.attribute(getKeyNames().get(0), Arrays.copyOfRange(allAlleleFractions, 1, allAlleleFractions.length)); //omit the first entry of the array corresponding to the reference
         }
     }
 

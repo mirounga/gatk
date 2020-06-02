@@ -13,6 +13,8 @@ import org.broadinstitute.barclay.argparser.CommandLineException;
 import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
 import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
+import org.broadinstitute.hellbender.exceptions.UserException;
+import org.broadinstitute.hellbender.utils.SequenceDictionaryUtils;
 import picard.cmdline.programgroups.VariantManipulationProgramGroup;
 import org.broadinstitute.hellbender.engine.FeatureContext;
 import org.broadinstitute.hellbender.engine.ReadsContext;
@@ -29,6 +31,11 @@ import java.io.File;
  * <p>This tool is designed to update the sequence dictionary in a variant file using a dictionary from another variant,
  * alignment, dictionary, or reference file. The dictionary must be valid, i.e. must contain a sequence record, for all
  * variants in the target file. The dictionary lines start with '##contig='.
+ * </p>
+ *
+ * <p>
+ *     By specifying both --replace and --disable-sequence-dictionary-validation, one can force replace an invalid
+ *     sequence dictionary in a variant file with a valid sequence dictionary in another file.
  * </p>
  *
  * <h3>Usage example</h3>
@@ -74,7 +81,7 @@ import java.io.File;
 )
 @DocumentedFeature
 public final class UpdateVCFSequenceDictionary extends VariantWalker {
-    static final Logger logger = LogManager.getLogger(UpdateVCFSequenceDictionary.class);
+    private static final Logger logger = LogManager.getLogger(UpdateVCFSequenceDictionary.class);
 
     @Argument(fullName = StandardArgumentDefinitions.OUTPUT_LONG_NAME,
             shortName = StandardArgumentDefinitions.OUTPUT_SHORT_NAME,
@@ -108,20 +115,24 @@ public final class UpdateVCFSequenceDictionary extends VariantWalker {
         getDefaultToolVCFHeaderLines().forEach(line -> outputHeader.addMetaDataLine(line));
         sourceDictionary = getBestAvailableSequenceDictionary();
 
-        // Warn and require opt-in via -replace if we're about to clobber a valid sequence
-        // dictionary. Check the input file directly via the header rather than using the
+        // If -replace is set, do not need to check the sequence dictionary for validity here -- it will still be
+        // checked in our normal sequence dictionary validation. Warn and require opt-in via -replace if we're about to
+        // clobber a valid sequence dictionary. Check the input file directly via the header rather than using the
         // engine, since it might dig one up from an index.
-        SAMSequenceDictionary oldDictionary =
-                inputHeader == null ? null : inputHeader.getSequenceDictionary();
-        if ( (oldDictionary != null && !oldDictionary.getSequences().isEmpty()) && !replace) {
-            throw new CommandLineException.BadArgumentValue(
-                    String.format(
-                            "The input variant file %s already contains a sequence dictionary. " +
-                            "Use %s to force the dictionary to be replaced.",
-                            getDrivingVariantsFeatureInput().getName(),
-                            REPLACE_ARGUMENT_NAME
-                    )
-            );
+        if (!replace) {
+            SAMSequenceDictionary oldDictionary =
+                    inputHeader == null ? null : inputHeader.getSequenceDictionary();
+            if (oldDictionary != null && !oldDictionary.getSequences().isEmpty())  {
+                throw new CommandLineException.BadArgumentValue(
+                        String.format(
+                                "The input variant file %s already contains a sequence dictionary. " +
+                                        "Use %s to force the dictionary to be replaced.",
+                                getDrivingVariantsFeatureInput().getName(),
+                                REPLACE_ARGUMENT_NAME
+                        )
+                );
+            }
+
         }
 
         outputHeader.setSequenceDictionary(sourceDictionary);
@@ -174,14 +185,14 @@ public final class UpdateVCFSequenceDictionary extends VariantWalker {
     @Override
     public SAMSequenceDictionary getBestAvailableSequenceDictionary() {
 
-        SAMSequenceDictionary resultDictionary;
+        final SAMSequenceDictionary resultDictionary;
 
         final SAMSequenceDictionary masterDictionary = getMasterSequenceDictionary();
         if (dictionarySource == null) {
             if (masterDictionary != null) {
                 // We'll accept the master dictionary if one was specified. Using the master dictionary
                 // arg will result in sequence dictionary validation.
-                logger.warn("Using the dictionary supplied via the \"%s\" argument", StandardArgumentDefinitions.SEQUENCE_DICTIONARY_NAME);
+                logger.warn("Using the dictionary supplied via the {} argument", StandardArgumentDefinitions.SEQUENCE_DICTIONARY_NAME);
                 resultDictionary = masterDictionary;
             }
             else if (hasReference()) {
@@ -200,11 +211,22 @@ public final class UpdateVCFSequenceDictionary extends VariantWalker {
             if (resultDictionary == null || resultDictionary.getSequences().isEmpty()) {
                 throw new CommandLineException.BadArgumentValue(
                     String.format(
-                        "The specified dictionary source has an empty or invalid sequence dictionary",
+                        "The specified dictionary source has an empty or invalid sequence dictionary: %s",
                         dictionarySource)
                 );
             }
         }
+
+        if( seqValidationArguments.performSequenceDictionaryValidation()
+                && resultDictionary != null
+                && dictionaryHasMissingLengths(resultDictionary)) {
+            throw new UserException.SequenceDictionaryIsMissingContigLengths(dictionarySource, resultDictionary);
+        }
+
         return resultDictionary;
+    }
+
+    private boolean dictionaryHasMissingLengths(final SAMSequenceDictionary resultDictionary) {
+        return resultDictionary.getSequences().stream().anyMatch(s -> s.getSequenceLength() == SAMSequenceRecord.UNKNOWN_SEQUENCE_LENGTH);
     }
 }

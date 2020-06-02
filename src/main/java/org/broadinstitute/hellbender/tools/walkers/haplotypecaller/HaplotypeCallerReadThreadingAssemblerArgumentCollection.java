@@ -32,31 +32,24 @@ public class HaplotypeCallerReadThreadingAssemblerArgumentCollection extends Rea
     @Argument(fullName="recover-dangling-heads", doc="This argument is deprecated since version 3.3", optional = true)
     public boolean DEPRECATED_RecoverDanglingHeads = false;
 
-    /**
-     * This argument is specifically intended for 1000G consensus analysis mode. Setting this flag will inject all
-     * provided alleles to the assembly graph but will not forcibly genotype all of them.
-     */
-    @Advanced
-    @Argument(fullName="consensus", doc="1000G consensus mode", optional = true)
-    public boolean consensusMode = false;
-
     @Override
     public ReadThreadingAssembler makeReadThreadingAssembler() {
         final ReadThreadingAssembler assemblyEngine = new ReadThreadingAssembler(maxNumHaplotypesInPopulation, kmerSizes,
                 dontIncreaseKmerSizesForCycles, allowNonUniqueKmersInRef, numPruningSamples, useAdaptivePruning ? 0 : minPruneFactor,
-                useAdaptivePruning, initialErrorRateForPruning, pruningLogOddsThreshold, maxUnprunedVariants);
+                useAdaptivePruning, initialErrorRateForPruning, pruningLogOddsThreshold, maxUnprunedVariants, useLinkedDeBruijnGraph);
         assemblyEngine.setDebugGraphTransformations(debugGraphTransformations);
         assemblyEngine.setRecoverDanglingBranches(!doNotRecoverDanglingBranches);
         assemblyEngine.setRecoverAllDanglingBranches(recoverAllDanglingBranches);
         assemblyEngine.setMinDanglingBranchLength(minDanglingBranchLength);
+        assemblyEngine.setArtificialHaplotypeRecoveryMode(disableArtificialHaplotypeRecovery);
 
         if ( graphOutput != null ) {
             assemblyEngine.setGraphWriter(new File(graphOutput));
         }
+        if ( haplotypeHistogramOutput != null ) {
+            assemblyEngine.setDebugHistogramOutput(new File(haplotypeHistogramOutput));
+        }
 
         return assemblyEngine;
     }
-
-    @Override
-    public boolean consensusMode() { return consensusMode; }
 }

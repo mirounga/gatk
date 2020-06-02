@@ -76,18 +76,22 @@ public abstract class BaseGraph<V extends BaseVertex, E extends BaseEdge> extend
 
     /**
      * Get the set of source vertices of this graph
+     * NOTE: We return a LinkedHashSet here in order to preserve the determinism in the output order of VertexSet(),
+     *       which is deterministic in output due to the underlying sets all being LinkedHashSets.
      * @return a non-null set
      */
-    public final Set<V> getSources() {
-        return vertexSet().stream().filter(v -> isSource(v)).collect(Collectors.toSet());
+    public final LinkedHashSet<V> getSources() {
+        return vertexSet().stream().filter(v -> isSource(v)).collect(Collectors.toCollection(LinkedHashSet::new));
     }
 
     /**
      * Get the set of sink vertices of this graph
+     * NOTE: We return a LinkedHashSet here in order to preserve the determinism in the output order of VertexSet(),
+     *       which is deterministic in output due to the underlying sets all being LinkedHashSets.
      * @return a non-null set
      */
-    public final Set<V> getSinks() {
-        return vertexSet().stream().filter(v -> isSink(v)).collect(Collectors.toSet());
+    public final LinkedHashSet<V> getSinks() {
+        return vertexSet().stream().filter(v -> isSink(v)).collect(Collectors.toCollection(LinkedHashSet::new));
     }
 
     /**
@@ -128,6 +132,17 @@ public abstract class BaseGraph<V extends BaseVertex, E extends BaseEdge> extend
     public final byte[] getAdditionalSequence( final V v ) {
         Utils.nonNull(v, "Attempting to pull sequence from a null vertex.");
         return v.getAdditionalSequence(isSource(v));
+    }
+
+    /**
+     * Pull out the additional sequence implied by traversing this node in the graph
+     * @param v the vertex from which to pull out the additional base sequence
+     * @param isSource if true, treat v as a source vertex regardless of in-degree
+     * @return  non-null byte array
+     */
+    public static final byte[] getAdditionalSequence( final BaseVertex v, final boolean isSource) {
+        Utils.nonNull(v, "Attempting to pull sequence from a null vertex.");
+        return v.getAdditionalSequence(isSource);
     }
 
     /**
@@ -175,14 +190,14 @@ public abstract class BaseGraph<V extends BaseVertex, E extends BaseEdge> extend
     /**
      * @return the reference source vertex pulled from the graph, can be null if it doesn't exist in the graph
      */
-    public final V getReferenceSourceVertex( ) {
+    public V getReferenceSourceVertex( ) {
         return vertexSet().stream().filter(v -> isRefSource(v)).findFirst().orElse(null);
     }
 
     /**
      * @return the reference sink vertex pulled from the graph, can be null if it doesn't exist in the graph
      */
-    public final V getReferenceSinkVertex( ) {
+    public V getReferenceSinkVertex( ) {
         return vertexSet().stream().filter(v -> isRefSink(v)).findFirst().orElse(null);
     }
 
@@ -247,7 +262,7 @@ public abstract class BaseGraph<V extends BaseVertex, E extends BaseEdge> extend
      * @param includeStop   should the ending vertex be included in the path
      * @return              byte[] array holding the reference bases, this can be null if there are no nodes between the starting and ending vertex (insertions for example)
      */
-    public final byte[] getReferenceBytes( final V fromVertex, final V toVertex, final boolean includeStart, final boolean includeStop ) {
+    public byte[] getReferenceBytes( final V fromVertex, final V toVertex, final boolean includeStart, final boolean includeStop ) {
         Utils.nonNull(fromVertex, "Starting vertex in requested path cannot be null.");
         Utils.nonNull(toVertex, "From vertex in requested path cannot be null.");
 
@@ -326,22 +341,26 @@ public abstract class BaseGraph<V extends BaseVertex, E extends BaseEdge> extend
 
     /**
      * Get the set of vertices connected by outgoing edges of V
+     * NOTE: We return a LinkedHashSet here in order to preserve the determinism in the output order of VertexSet(),
+     *       which is deterministic in output due to the underlying sets all being LinkedHashSets.
      * @param v a non-null vertex
      * @return a set of vertices connected by outgoing edges from v
      */
     public final Set<V> outgoingVerticesOf(final V v) {
         Utils.nonNull(v);
-        return outgoingEdgesOf(v).stream().map(e -> getEdgeTarget(e)).collect(Collectors.toSet());
+        return outgoingEdgesOf(v).stream().map(e -> getEdgeTarget(e)).collect(Collectors.toCollection(LinkedHashSet::new));
     }
 
     /**
      * Get the set of vertices connected to v by incoming edges
+     * NOTE: We return a LinkedHashSet here in order to preserve the determinism in the output order of VertexSet(),
+     *       which is deterministic in output due to the underlying sets all being LinkedHashSets.
      * @param v a non-null vertex
      * @return a set of vertices {X} connected X -> v
      */
     public final Set<V> incomingVerticesOf(final V v) {
         Utils.nonNull(v);
-        return incomingEdgesOf(v).stream().map(e -> getEdgeSource(e)).collect(Collectors.toSet());
+        return incomingEdgesOf(v).stream().map(e -> getEdgeSource(e)).collect(Collectors.toCollection(LinkedHashSet::new));
     }
 
     /**
@@ -362,7 +381,7 @@ public abstract class BaseGraph<V extends BaseVertex, E extends BaseEdge> extend
         try (PrintStream stream = new PrintStream(new FileOutputStream(destination))) {
             printGraph(stream, true, pruneFactor);
         } catch ( final FileNotFoundException e ) {
-            throw new UserException.CouldNotReadInputFile(destination, e);
+            throw new UserException.CouldNotReadInputFile(destination.getAbsolutePath(), e);
         }
     }
 
@@ -390,9 +409,16 @@ public abstract class BaseGraph<V extends BaseVertex, E extends BaseEdge> extend
             graphWriter.println(String.format("\t%s [label=\"%s\",shape=box]", v.toString(), new String(getAdditionalSequence(v)) + v.getAdditionalInfo()));
         }
 
+        getExtraGraphFileLines().forEach(graphWriter::println);
+
         if ( writeHeader ) {
             graphWriter.println("}");
         }
+    }
+
+    // Extendable method intended to allow for adding extra material to the graph
+    public List<String> getExtraGraphFileLines() {
+        return Collections.emptyList();
     }
 
     /**

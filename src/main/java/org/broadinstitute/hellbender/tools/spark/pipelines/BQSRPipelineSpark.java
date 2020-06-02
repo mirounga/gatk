@@ -96,7 +96,7 @@ public final class BQSRPipelineSpark extends GATKSparkTool {
 
     @Override
     protected void runTool(final JavaSparkContext ctx) {
-        String referenceFileName = addReferenceFilesForSpark(ctx, referenceArguments.getReferenceFileName());
+        String referenceFileName = addReferenceFilesForSpark(ctx, referenceArguments.getReferencePath());
         List<String> localKnownSitesFilePaths = addVCFsForSpark(ctx, knownVariants);
 
         //Should this get the getUnfilteredReads? getReads will merge default and command line filters.
@@ -116,7 +116,7 @@ public final class BQSRPipelineSpark extends GATKSparkTool {
         final RecalibrationReport bqsrReport = BaseRecalibratorSparkFn.apply(readsWithVariants, getHeaderForReads(), referenceFileName, bqsrArgs);
 
         final Broadcast<RecalibrationReport> reportBroadcast = ctx.broadcast(bqsrReport);
-        final JavaRDD<GATKRead> finalReads = ApplyBQSRSparkFn.apply(initialReads, reportBroadcast, getHeaderForReads(), applyBqsrArgs.toApplyBQSRArgumentCollection(bqsrArgs.PRESERVE_QSCORES_LESS_THAN));
+        final JavaRDD<GATKRead> finalReads = ApplyBQSRSparkFn.apply(initialReads, reportBroadcast, getHeaderForReads(), applyBqsrArgs.toApplyBQSRArgumentCollection(bqsrArgs));
 
         writeReads(ctx, output, finalReads);
     }

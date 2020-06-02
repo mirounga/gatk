@@ -2,9 +2,16 @@ package org.broadinstitute.hellbender.engine;
 
 import htsjdk.samtools.SAMSequenceDictionary;
 import htsjdk.samtools.util.IOUtil;
-import htsjdk.tribble.*;
+import htsjdk.samtools.util.Locatable;
+import htsjdk.tribble.AbstractFeatureReader;
+import htsjdk.tribble.CloseableTribbleIterator;
+import htsjdk.tribble.Feature;
+import htsjdk.tribble.FeatureCodec;
+import htsjdk.tribble.FeatureReader;
+import htsjdk.tribble.TribbleException;
 import htsjdk.variant.bcf2.BCF2Codec;
 import htsjdk.variant.variantcontext.VariantContext;
+import htsjdk.variant.vcf.VCFCodec;
 import htsjdk.variant.vcf.VCFHeader;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -12,17 +19,18 @@ import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.tools.IndexFeatureFile;
 import org.broadinstitute.hellbender.tools.genomicsdb.GenomicsDBConstants;
+import org.broadinstitute.hellbender.tools.genomicsdb.GenomicsDBOptions;
 import org.broadinstitute.hellbender.utils.IndexUtils;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.gcs.BucketUtils;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
-import org.broadinstitute.hellbender.utils.nio.SeekableByteChannelPrefetcher;
 import org.genomicsdb.model.GenomicsDBExportConfiguration;
 import org.genomicsdb.reader.GenomicsDBFeatureReader;
 
 import java.io.File;
 import java.io.IOException;
+import java.lang.reflect.InvocationTargetException;
 import java.nio.channels.SeekableByteChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -78,13 +86,13 @@ public final class FeatureDataSource<T extends Feature> implements GATKDataSourc
     /**
      * Our intervals for traversal. If set, restricts full traversals initiated via {@link #iterator} to
      * return only Features overlapping this set of intervals. Does not affect individual queries
-     * initiated via {@link #query(SimpleInterval)} and/or {@link #queryAndPrefetch(SimpleInterval)}.
+     * initiated via {@link #query(SimpleInterval)} and/or {@link #queryAndPrefetch(Locatable)}.
      */
     private List<SimpleInterval> intervalsForTraversal;
 
     /**
      * Cache containing Features from recent queries initiated via {@link #query(SimpleInterval)} and/or
-     * {@link #queryAndPrefetch(SimpleInterval)}. This is guaranteed to start at the start position of the
+     * {@link #queryAndPrefetch(Locatable)}. This is guaranteed to start at the start position of the
      * most recent query, but will typically end well after the end of the most recent query. Designed to
      * improve performance of the common access pattern involving multiple queries across nearby intervals
      * with gradually increasing start positions.
@@ -228,7 +236,7 @@ public final class FeatureDataSource<T extends Feature> implements GATKDataSourc
     public FeatureDataSource(final FeatureInput<T> featureInput, final int queryLookaheadBases, final Class<? extends Feature> targetFeatureType,
                              final int cloudPrefetchBuffer, final int cloudIndexPrefetchBuffer) {
         this(featureInput, queryLookaheadBases, targetFeatureType, cloudPrefetchBuffer, cloudIndexPrefetchBuffer,
-                null);
+             new GenomicsDBOptions());
     }
 
     /**
@@ -241,19 +249,40 @@ public final class FeatureDataSource<T extends Feature> implements GATKDataSourc
      *                                 that produce this type of Feature. May be null, which results in an unrestricted search.
      * @param cloudPrefetchBuffer      MB size of caching/prefetching wrapper for the data, if on Google Cloud (0 to disable).
      * @param cloudIndexPrefetchBuffer MB size of caching/prefetching wrapper for the index, if on Google Cloud (0 to disable).
-     * @param reference                Path to a reference. May be null. Needed only for reading from GenomicsDB.
+     * @param reference                 the reference genome corresponding to the data to be read
      */
     public FeatureDataSource(final FeatureInput<T> featureInput, final int queryLookaheadBases, final Class<? extends Feature> targetFeatureType,
                              final int cloudPrefetchBuffer, final int cloudIndexPrefetchBuffer, final Path reference) {
+        this(featureInput, queryLookaheadBases, targetFeatureType, cloudPrefetchBuffer, cloudIndexPrefetchBuffer,
+                new GenomicsDBOptions(reference));
+    }
+
+    /**
+     * Creates a FeatureDataSource backed by the provided FeatureInput. We will look ahead the specified number of bases
+     * during queries that produce cache misses.
+     *
+     * @param featureInput             a FeatureInput specifying a source of Features
+     * @param queryLookaheadBases      look ahead this many bases during queries that produce cache misses
+     * @param targetFeatureType        When searching for a {@link FeatureCodec} for this data source, restrict the search to codecs
+     *                                 that produce this type of Feature. May be null, which results in an unrestricted search.
+     * @param cloudPrefetchBuffer      MB size of caching/prefetching wrapper for the data, if on Google Cloud (0 to disable).
+     * @param cloudIndexPrefetchBuffer MB size of caching/prefetching wrapper for the index, if on Google Cloud (0 to disable).
+     * @param genomicsDBOptions         options and info for reading from a GenomicsDB; may be null
+     */
+    public FeatureDataSource(final FeatureInput<T> featureInput, final int queryLookaheadBases, final Class<? extends Feature> targetFeatureType,
+                             final int cloudPrefetchBuffer, final int cloudIndexPrefetchBuffer, final GenomicsDBOptions genomicsDBOptions) {
         Utils.validateArg(queryLookaheadBases >= 0, "Query lookahead bases must be >= 0");
         this.featureInput = Utils.nonNull(featureInput, "featureInput must not be null");
-
-        final Function<SeekableByteChannel, SeekableByteChannel> cloudWrapper = (cloudPrefetchBuffer > 0 ? is -> SeekableByteChannelPrefetcher.addPrefetcher(cloudPrefetchBuffer, is) : Function.identity());
-        final Function<SeekableByteChannel, SeekableByteChannel> cloudIndexWrapper = (cloudIndexPrefetchBuffer > 0 ? is -> SeekableByteChannelPrefetcher.addPrefetcher(cloudIndexPrefetchBuffer, is) : Function.identity());
+        if (IOUtils.isGenomicsDBPath(featureInput)) {
+            Utils.nonNull(genomicsDBOptions, "GenomicsDBOptions must not be null. Calling tool may not read from a GenomicsDB data source.");
+        }
 
         // Create a feature reader without requiring an index.  We will require one ourselves as soon as
         // a query by interval is attempted.
-        this.featureReader = getFeatureReader(featureInput, targetFeatureType, cloudWrapper, cloudIndexWrapper, reference);
+        this.featureReader = getFeatureReader(featureInput, targetFeatureType,
+                BucketUtils.getPrefetchingWrapper(cloudPrefetchBuffer),
+                BucketUtils.getPrefetchingWrapper(cloudIndexPrefetchBuffer),
+                genomicsDBOptions);
 
         if (IOUtils.isGenomicsDBPath(featureInput)) {
             //genomics db uri's have no associated index file to read from, but they do support random access
@@ -285,16 +314,17 @@ public final class FeatureDataSource<T extends Feature> implements GATKDataSourc
     private static <T extends Feature> FeatureReader<T> getFeatureReader(final FeatureInput<T> featureInput, final Class<? extends Feature> targetFeatureType,
                                                                          final Function<SeekableByteChannel, SeekableByteChannel> cloudWrapper,
                                                                          final Function<SeekableByteChannel, SeekableByteChannel> cloudIndexWrapper,
-                                                                         final Path reference) {
-        if (IOUtils.isGenomicsDBPath(featureInput)) {
+                                                                         final GenomicsDBOptions genomicsDBOptions) {
+        if (IOUtils.isGenomicsDBPath(featureInput.getFeaturePath())) {
+            Utils.nonNull(genomicsDBOptions);
             try {
-                if (reference == null) {
+                if (genomicsDBOptions.getReference() == null) {
                     throw new UserException.MissingReference("You must provide a reference if you want to load from GenomicsDB");
                 }
                 try {
-                    final File referenceAsFile = reference.toFile();
-                    return (FeatureReader<T>) getGenomicsDBFeatureReader(featureInput, referenceAsFile);
-                } catch (final UnsupportedOperationException e) {
+                    final File referenceAsFile = genomicsDBOptions.getReference().toFile();
+                    return (FeatureReader<T>)getGenomicsDBFeatureReader(featureInput, referenceAsFile, genomicsDBOptions);
+                } catch (final UnsupportedOperationException e){
                     throw new UserException.BadInput("GenomicsDB requires that the reference be a local file.", e);
                 }
             } catch (final ClassCastException e) {
@@ -325,8 +355,8 @@ public final class FeatureDataSource<T extends Feature> implements GATKDataSourc
             featureInput.setFeatureCodecClass((Class<FeatureCodec<T, ?>>) codec.getClass());
         } else {
             try {
-                codec = codecClass.newInstance();
-            } catch (final InstantiationException | IllegalAccessException e) {
+                codec = codecClass.getDeclaredConstructor().newInstance();
+            } catch (final InstantiationException | IllegalAccessException | NoSuchMethodException | InvocationTargetException e) {
                 throw new GATKException("Unable to automatically instantiate codec " + codecClass.getName());
             }
         }
@@ -343,18 +373,18 @@ public final class FeatureDataSource<T extends Feature> implements GATKDataSourc
             // a query by interval is attempted.
             final boolean requireIndex = false;
 
-            // Only apply the wrappers if the feature input is on Google Cloud Storage
-            if (BucketUtils.isCloudStorageUrl(featureInput)) {
+            // Only apply the wrappers if the feature input is in a remote location which will benefit from prefetching.
+            if (BucketUtils.isEligibleForPrefetching(featureInput)) {
                 return AbstractFeatureReader.getFeatureReader(absoluteRawPath, null, codec, requireIndex, cloudWrapper, cloudIndexWrapper);
             } else {
-                return AbstractFeatureReader.getFeatureReader(absoluteRawPath, null, codec, requireIndex, Function.identity(), Function.identity());
+                return AbstractFeatureReader.getFeatureReader(absoluteRawPath, null, codec, requireIndex, Utils.identityFunction(), Utils.identityFunction());
             }
         } catch (final TribbleException e) {
             throw new GATKException("Error initializing feature reader for path " + featureInput.getFeaturePath(), e);
         }
     }
 
-    protected static FeatureReader<VariantContext> getGenomicsDBFeatureReader(final GATKPathSpecifier path, final File reference) {
+    protected static FeatureReader<VariantContext> getGenomicsDBFeatureReader(final GATKPathSpecifier path, final File reference, final GenomicsDBOptions genomicsDBOptions) {
         final String workspace = IOUtils.getGenomicsDBAbsolutePath(path) ;
         if (workspace == null) {
             throw new IllegalArgumentException("Trying to create a GenomicsDBReader from  non-GenomicsDB inputpath " + path);
@@ -370,8 +400,12 @@ public final class FeatureDataSource<T extends Feature> implements GATKDataSourc
 
         try {
             final GenomicsDBExportConfiguration.ExportConfiguration exportConfigurationBuilder =
-                    createExportConfiguration(reference, workspace, callsetJson, vidmapJson, vcfHeader);
-            return new GenomicsDBFeatureReader<>(exportConfigurationBuilder, new BCF2Codec(), Optional.empty());
+                    createExportConfiguration(workspace, callsetJson, vidmapJson, vcfHeader, genomicsDBOptions);
+            if (genomicsDBOptions.useVCFCodec()) {
+                return new GenomicsDBFeatureReader<>(exportConfigurationBuilder, new VCFCodec(), Optional.empty());
+            } else {
+                return new GenomicsDBFeatureReader<>(exportConfigurationBuilder, new BCF2Codec(), Optional.empty());
+            }
         } catch (final IOException e) {
             throw new UserException("Couldn't create GenomicsDBFeatureReader", e);
         }
@@ -400,7 +434,7 @@ public final class FeatureDataSource<T extends Feature> implements GATKDataSourc
 
     /**
      * Restricts traversals of this data source via {@link #iterator} to only return Features that overlap the provided
-     * intervals. Calls to {@link #query(SimpleInterval)} and/or {@link #queryAndPrefetch(SimpleInterval)} are not
+     * intervals. Calls to {@link #query(SimpleInterval)} and/or {@link #queryAndPrefetch(Locatable)} are not
      * affected by these intervals.
      * <p>
      * Intervals MUST be non-overlapping and sorted in order of increasing start position, otherwise traversal
@@ -485,7 +519,7 @@ public final class FeatureDataSource<T extends Feature> implements GATKDataSourc
      * @param interval retrieve all Features overlapping this interval
      * @return a List of all Features in this data source that overlap the provided interval
      */
-    public List<T> queryAndPrefetch(final SimpleInterval interval) {
+    public List<T> queryAndPrefetch(final Locatable interval) {
         if (!supportsRandomAccess) {
             throw new UserException("Input " + featureInput.getFeaturePath() + " must support random access to enable queries by interval. " +
                     "If it's a file, please index it using the bundled tool " + IndexFeatureFile.class.getSimpleName());
@@ -516,7 +550,7 @@ public final class FeatureDataSource<T extends Feature> implements GATKDataSourc
      *
      * @param interval the query interval that produced a cache miss
      */
-    private void refillQueryCache(final SimpleInterval interval) {
+    private void refillQueryCache(final Locatable interval) {
         // Tribble documentation states that having multiple iterators open simultaneously over the same FeatureReader
         // results in undefined behavior
         closeOpenIterationIfNecessary();

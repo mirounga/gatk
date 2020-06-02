@@ -10,9 +10,10 @@ import htsjdk.variant.vcf.VCFStandardHeaderLines;
 import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.engine.ReferenceContext;
 import org.broadinstitute.hellbender.utils.Utils;
-import org.broadinstitute.hellbender.utils.genotyper.ReadLikelihoods;
+import org.broadinstitute.hellbender.utils.genotyper.AlleleLikelihoods;
 import org.broadinstitute.hellbender.utils.help.HelpConstants;
 import org.broadinstitute.hellbender.utils.pileup.PileupElement;
+import org.broadinstitute.hellbender.utils.read.GATKRead;
 
 import java.util.*;
 import java.util.stream.Collectors;
@@ -43,7 +44,7 @@ public final class DepthPerAlleleBySample extends GenotypeAnnotation implements 
                          final VariantContext vc,
                          final Genotype g,
                          final GenotypeBuilder gb,
-                         final ReadLikelihoods<Allele> likelihoods) {
+                         final AlleleLikelihoods<GATKRead, Allele> likelihoods) {
         Utils.nonNull(gb, "gb is null");
         Utils.nonNull(vc, "vc is null");
 
@@ -53,54 +54,19 @@ public final class DepthPerAlleleBySample extends GenotypeAnnotation implements 
         final Set<Allele> alleles = new LinkedHashSet<>(vc.getAlleles());
 
         // make sure that there's a meaningful relationship between the alleles in the likelihoods and our VariantContext
-        Utils.validateArg(likelihoods.alleles().containsAll(alleles), () -> "VC alleles " + alleles + " not a  subset of ReadLikelihoods alleles " + likelihoods.alleles());
+        Utils.validateArg(likelihoods.alleles().containsAll(alleles), () -> "VC alleles " + alleles + " not a  subset of AlleleLikelihoods alleles " + likelihoods.alleles());
 
-        int[] counts;
-        if (likelihoods.hasFilledLikelihoods()) {
-            // Compute based on the alignment map
-            counts = annotateWithLikelihoods(vc, g, alleles, likelihoods);
-        } else if (likelihoods.readCount()==0) {
-            // No reads, thus cant compute the AD so do nothing
-            return;
-        } else if (vc.isSNP()) {
-            // Compute based on pileup bases at the snp site (won't match haplotype caller output)
-            counts = annotateWithPileup(vc, likelihoods.getStratifiedPileups(vc).get(g.getSampleName()));
-        } else {
-            // Otherwise return an empty AD field for an indel.
-            counts = new int[vc.getNAlleles()];
-        }
-
-        gb.AD(counts);
+        gb.AD(annotateWithLikelihoods(vc, g, alleles, likelihoods));
     }
 
-    private int[] annotateWithPileup(final VariantContext vc, List<PileupElement> pileupElements) {
-
-        final HashMap<Byte, Integer> alleleCounts = new HashMap<>();
-        for ( final Allele allele : vc.getAlleles() ) {
-            alleleCounts.put(allele.getBases()[0], 0);
-        }
-        for ( final PileupElement p : pileupElements) {
-            // only count bases that support alleles in the variant context
-            alleleCounts.computeIfPresent(p.getBase(), (base, count) -> count+ 1);
-        }
-
-        // we need to add counts in the correct order
-        final int[] counts = new int[alleleCounts.size()];
-        counts[0] = alleleCounts.get(vc.getReference().getBases()[0]);
-        for (int i = 0; i < vc.getNAlleles() -1; i++) {
-            counts[i + 1] = alleleCounts.get(vc.getAlternateAllele(i).getBases()[0]);
-        }
-        return counts;
-    }
-
-    protected int[] annotateWithLikelihoods(VariantContext vc, Genotype g, Set<Allele> alleles, ReadLikelihoods<Allele> likelihoods) {
+    protected int[] annotateWithLikelihoods(VariantContext vc, Genotype g, Set<Allele> alleles, final AlleleLikelihoods<GATKRead, Allele> likelihoods) {
 
         final Map<Allele, Integer> alleleCounts = new LinkedHashMap<>();
         for ( final Allele allele : vc.getAlleles() ) {
             alleleCounts.put(allele, 0);
         }
         final Map<Allele, List<Allele>> alleleSubset = alleles.stream().collect(Collectors.toMap(a -> a, Arrays::asList));
-        final ReadLikelihoods<Allele> subsettedLikelihoods = likelihoods.marginalize(alleleSubset);
+        final AlleleLikelihoods<GATKRead, Allele> subsettedLikelihoods = likelihoods.marginalize(alleleSubset);
         subsettedLikelihoods.bestAllelesBreakingTies(g.getSampleName()).stream()
                 .filter(ba -> ba.isInformative())
                 .forEach(ba -> alleleCounts.compute(ba.allele, (allele,prevCount) -> prevCount + 1));

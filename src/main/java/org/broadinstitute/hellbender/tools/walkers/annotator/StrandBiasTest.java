@@ -6,9 +6,8 @@ import htsjdk.variant.variantcontext.GenotypesContext;
 import htsjdk.variant.variantcontext.VariantContext;
 import org.broadinstitute.hellbender.engine.ReferenceContext;
 import org.broadinstitute.hellbender.exceptions.GATKException;
-import org.broadinstitute.hellbender.tools.walkers.mutect.SomaticGenotypingEngine;
 import org.broadinstitute.hellbender.utils.Utils;
-import org.broadinstitute.hellbender.utils.genotyper.ReadLikelihoods;
+import org.broadinstitute.hellbender.utils.genotyper.AlleleLikelihoods;
 import org.broadinstitute.hellbender.utils.pileup.PileupElement;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
@@ -27,7 +26,7 @@ public abstract class StrandBiasTest extends InfoFieldAnnotation {
     //template method for calculating strand bias annotations using the three different methods
     public Map<String, Object> annotate(final ReferenceContext ref,
                                         final VariantContext vc,
-                                        final ReadLikelihoods<Allele> likelihoods) {
+                                        final AlleleLikelihoods<GATKRead, Allele> likelihoods) {
         Utils.nonNull(vc);
         if ( !vc.isVariant() ) {
             return Collections.emptyMap();
@@ -43,23 +42,14 @@ public abstract class StrandBiasTest extends InfoFieldAnnotation {
         }
 
         if (likelihoods != null) {
-            if (vc.isSNP() && !likelihoods.hasFilledLikelihoods() && (likelihoods.readCount() != 0)) {
-                return calculateAnnotationFromStratifiedContexts(likelihoods.getStratifiedPileups(vc), vc);
-            }
-
-            if (likelihoods.hasFilledLikelihoods()) {
-                return calculateAnnotationFromLikelihoods(likelihoods, vc);
-            }
+            return calculateAnnotationFromLikelihoods(likelihoods, vc);
         }
         return Collections.emptyMap();
     }
 
     protected abstract Map<String, Object> calculateAnnotationFromGTfield(final GenotypesContext genotypes);
 
-    protected abstract Map<String, Object> calculateAnnotationFromStratifiedContexts(final Map<String, List<PileupElement>> stratifiedContexts,
-                                                                                     final VariantContext vc);
-
-    protected abstract Map<String, Object> calculateAnnotationFromLikelihoods(final ReadLikelihoods<Allele> likelihoods,
+    protected abstract Map<String, Object> calculateAnnotationFromLikelihoods(final AlleleLikelihoods<GATKRead, Allele> likelihoods,
                                                                               final VariantContext vc);
 
     /**
@@ -78,7 +68,7 @@ public abstract class StrandBiasTest extends InfoFieldAnnotation {
         boolean foundData = false;
 
         for( final Genotype g : genotypes ) {
-            if( g.isNoCall() || ! g.hasAnyAttribute(GATKVCFConstants.STRAND_BIAS_BY_SAMPLE_KEY) ) {
+            if( ! g.hasAnyAttribute(GATKVCFConstants.STRAND_BIAS_BY_SAMPLE_KEY) ) {
                 continue;
             }
 
@@ -128,7 +118,7 @@ public abstract class StrandBiasTest extends InfoFieldAnnotation {
      *   allele2   #       #
      * @return a 2x2 contingency table
      */
-    public static int[][] getContingencyTable( final ReadLikelihoods<Allele> likelihoods,
+    public static int[][] getContingencyTable( final AlleleLikelihoods<GATKRead, Allele> likelihoods,
                                                final VariantContext vc,
                                                final int minCount) {
         return getContingencyTable(likelihoods, vc, minCount, likelihoods.samples());
@@ -141,7 +131,7 @@ public abstract class StrandBiasTest extends InfoFieldAnnotation {
      *   allele2   #       #
      * @return a 2x2 contingency table
      */
-    public static int[][] getContingencyTable( final ReadLikelihoods<Allele> likelihoods,
+    public static int[][] getContingencyTable( final AlleleLikelihoods<GATKRead, Allele> likelihoods,
                                                final VariantContext vc,
                                                final int minCount,
                                                final Collection<String> samples) {
@@ -157,7 +147,7 @@ public abstract class StrandBiasTest extends InfoFieldAnnotation {
             final int[] sampleTable = new int[ARRAY_SIZE];
             likelihoods.bestAllelesBreakingTies(sample).stream()
                     .filter(ba -> ba.isInformative())
-                    .forEach(ba -> updateTable(sampleTable, ba.allele, ba.read, ref, allAlts));
+                    .forEach(ba -> updateTable(sampleTable, ba.allele, ba.evidence, ref, allAlts));
             if (passesMinimumThreshold(sampleTable, minCount)) {
                 copyToMainTable(sampleTable, table);
             }
@@ -238,7 +228,7 @@ public abstract class StrandBiasTest extends InfoFieldAnnotation {
      * @param array the array used by the per-sample Strand Bias annotation
      * @return the table used by the StrandBiasTest annotation
      */
-    private static int[][] decodeSBBS( final int[] array ) {
+    public static int[][] decodeSBBS( final int[] array ) {
         if(array.length != ARRAY_SIZE) {
             return null;
         }
@@ -247,35 +237,6 @@ public abstract class StrandBiasTest extends InfoFieldAnnotation {
         table[0][1] = array[1];
         table[1][0] = array[2];
         table[1][1] = array[3];
-        return table;
-    }
-
-    /**
-     Allocate and fill a 2x2 strand contingency table.  In the end, it'll look something like this:
-     *             fw      rc
-     *   allele1   #       #
-     *   allele2   #       #
-     * @return a 2x2 contingency table over SNP sites
-     */
-    protected static int[][] getPileupContingencyTable(final Map<String, List<PileupElement>> stratifiedContexts,
-                                                       final Allele ref,
-                                                       final List<Allele> allAlts,
-                                                       final int minQScoreToConsider,
-                                                       final int minCount ) {
-        int[][] table = new int[ARRAY_DIM][ARRAY_DIM];
-
-        for (final Map.Entry<String, List<PileupElement>> sample : stratifiedContexts.entrySet() ) {
-            final int[] myTable = new int[ARRAY_SIZE];
-            for (final PileupElement p : sample.getValue()) {
-                if (PileupElement.isUsableBaseForAnnotation(p) && Math.min(p.getQual(), p.getMappingQual()) >= minQScoreToConsider) {
-                    updateTable(myTable, Allele.create(p.getBase(), false), p.getRead(), ref, allAlts);
-                }
-            }
-
-            if ( passesMinimumThreshold( myTable, minCount ) ) {
-                copyToMainTable(myTable, table);
-            }
-        }
         return table;
     }
 

@@ -4,6 +4,7 @@ import java.util.*;
 import java.io.File;
 import java.util.stream.Collectors;
 
+import htsjdk.variant.variantcontext.Allele;
 import htsjdk.variant.vcf.VCFHeader;
 import htsjdk.variant.vcf.VCFHeaderLine;
 import htsjdk.variant.vcf.VCFFilterHeaderLine;
@@ -23,10 +24,27 @@ import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
 import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 
+import org.broadinstitute.hellbender.utils.variant.GATKVariantContextUtils;
 import picard.cmdline.programgroups.VariantFilteringProgramGroup;
 
 /**
  * Apply tranche filtering to VCF based on scores from an annotation in the INFO field.
+ * The annotation can come from the {@link CNNScoreVariants} tool (CNNLOD), VQSR (VQSLOD),
+ * or any other variant scoring tool which adds numeric annotations in a VCF's INFO field.
+ *
+ * Tranches are specified in percent sensitivity to the variants in the resource files.
+ * For example, if you specify INDEL tranches 98.0 and 99.0 using the CNN_2D score
+ * the filtered VCF will contain 2 filter tranches for INDELS: CNN_2D_INDEL_Tranche_98.00_99.00
+ * and CNN_2D_INDEL_Tranche_99.00_100.00. Variants that scored better than the 98th percentile of variants in the
+ * resources pass through the filter and will have `PASS` in the filter field. We expect variants in the tranche
+ * CNN_2D_INDEL_Tranche_99.00_100.00 to be more sensitive, but less precise than CNN_2D_INDEL_Tranche_98.00_99.00,
+ * because variants in CNN_2D_INDEL_Tranche_99.00_100.00 have lower scores than variants in the tranche
+ * CNN_2D_INDEL_Tranche_98.00_99.00.
+ *
+ * The default tranche filtering threshold for SNPs is 99.95 and for INDELs it is 99.4.
+ * These thresholds maximize the F1 score (the harmonic mean of sensitivity and precision)
+ * for whole genome human data but may need to be tweaked for different datasets.
+ *
  *
  * <h3>Inputs</h3>
  * <ul>
@@ -35,6 +53,9 @@ import picard.cmdline.programgroups.VariantFilteringProgramGroup;
  *      <li>info-key The key from the INFO field of the VCF which contains the values that will be used to filter.</li>
  *      <li>tranche List of percent sensitivities to the known sites at which we will filter.  Must be between 0 and 100.</li>
  * </ul>
+ *
+ * If you want to remove existing filters from your VCF add the argument `--invalidate-previous-filters`.
+ *
  *
  * <h3>Outputs</h3>
  * <ul>
@@ -51,10 +72,40 @@ import picard.cmdline.programgroups.VariantFilteringProgramGroup;
  *   --resource hapmap.vcf \
  *   --resource mills.vcf \
  *   --info-key CNN_1D \
- *   --tranche 99.9 --tranche 99.0 --tranche 95 \
+ *   --snp-tranche 99.95 \
+ *   --indel-tranche 99.4 \
  *   -O filtered.vcf
  * </pre>
  *
+ * <h4>Apply tranche filters based on the scores in the info field with key CNN_2D
+ * and remove any existing filters from the VCF.</h4>
+ * <pre>
+ * gatk FilterVariantTranches \
+ *   -V input.vcf.gz \
+ *   --resource hapmap.vcf \
+ *   --resource mills.vcf \
+ *   --info-key CNN_2D \
+ *   --snp-tranche 99.95 \
+ *   --indel-tranche 99.4 \
+ *   --invalidate-previous-filters \
+ *   -O filtered.vcf
+ * </pre>
+ *
+ * <h4>Apply several tranche filters based on the scores in the info field with key CNN_2D.</h4>
+ * This will result in a VCF with filters: CNN_2D_SNP_Tranche_99.90_99.95, CNN_2D_SNP_Tranche_99.95_100.00
+ * CNN_2D_INDEL_Tranche_99.00_99.50, CNN_2D_INDEL_Tranche_99.50_100.00.
+ * The interpretation is that `PASS` variants are the best, variants in the tranche `CNN_2D_INDEL_Tranche_99.00_99.50`
+ * are ok and variants in the tranche `CNN_2D_INDEL_Tranche_99.50_100.00` are the worst.
+ * <pre>
+ * gatk FilterVariantTranches \
+ *   -V input.vcf.gz \
+ *   --resource hapmap.vcf \
+ *   --resource mills.vcf \
+ *   --info-key CNN_2D \
+ *   --snp-tranche 99.9 --snp-tranche 99.95 \
+ *   --indel-tranche 99.0 --indel-tranche 99.4 \
+ *   -O filtered.vcf
+ * </pre>
  */
 @DocumentedFeature
 @CommandLineProgramProperties(
@@ -75,7 +126,7 @@ public class FilterVariantTranches extends TwoPassVariantWalker {
                     "Higher numbers mean more desired sensitivity and thus less stringent filtering." +
                     "Specified in percents, i.e. 99.9 for 99.9 percent and 1.0 for 1 percent.",
             optional=true)
-    private List<Double> snpTranches = new ArrayList<>(Arrays.asList(99.9, 99.99));
+    private List<Double> snpTranches = new ArrayList<>(Arrays.asList(99.95));
 
     @Argument(fullName="indel-tranche",
             shortName="indel-tranche",
@@ -83,10 +134,9 @@ public class FilterVariantTranches extends TwoPassVariantWalker {
                     "Higher numbers mean more desired sensitivity and thus less stringent filtering." +
                     "Specified in percents, i.e. 99.9 for 99.9 percent and 1.0 for 1 percent.",
             optional=true)
-    private List<Double> indelTranches = new ArrayList<>(Arrays.asList(99.0, 99.5));
+    private List<Double> indelTranches = new ArrayList<>(Arrays.asList(99.4));
 
-    @Argument(fullName="resource",
-            shortName = "resource",
+    @Argument(fullName=StandardArgumentDefinitions.RESOURCE_LONG_NAME,
             doc="A list of validated VCFs with known sites of common variation",
             optional=false)
     private List<FeatureInput<VariantContext>> resources = new ArrayList<>();
@@ -133,15 +183,15 @@ public class FilterVariantTranches extends TwoPassVariantWalker {
 
         for (FeatureInput<VariantContext> featureSource : resources) {
             for (VariantContext v : featureContext.getValues(featureSource)) {
-                if (variant.isSNP()){
-                    if(variant.getAlternateAlleles().stream().anyMatch(v.getAlternateAlleles()::contains)) {
-                        resourceSNPScores.add(Double.parseDouble((String) variant.getAttribute(infoKey)));
-                        return;
-                    }
-                } else if (variant.isIndel()){
-                    if(variant.getAlternateAlleles().stream().anyMatch(v.getAlternateAlleles()::contains)){
-                        resourceIndelScores.add(Double.parseDouble((String)variant.getAttribute(infoKey)));
-                        return;
+                for (final Allele a : variant.getAlternateAlleles()) {
+                    if ((variant.getStart() == v.getStart()) && GATKVariantContextUtils.isAlleleInList(variant.getReference(), a, v.getReference(), v.getAlternateAlleles())) {
+                        if (variant.isSNP()) {
+                            resourceSNPScores.add(Double.parseDouble((String) variant.getAttribute(infoKey)));
+                            return;
+                        } else {
+                            resourceIndelScores.add(Double.parseDouble((String)variant.getAttribute(infoKey)));
+                            return;
+                        }
                     }
                 }
             }
@@ -153,21 +203,37 @@ public class FilterVariantTranches extends TwoPassVariantWalker {
         logger.info(String.format("Found %d SNPs and %d indels with INFO score key:%s.", scoredSnps, scoredIndels, infoKey));
         logger.info(String.format("Found %d SNPs and %d indels in the resources.", resourceSNPScores.size(), resourceIndelScores.size()));
 
-        if (scoredSnps == 0 || scoredIndels == 0 || resourceSNPScores.size() == 0 || resourceIndelScores.size() == 0){
-            throw new UserException("VCF must contain SNPs and indels with scores and resources must contain matching SNPs and indels.");
+        if (scoredSnps == 0 && scoredIndels == 0) {
+            throw new UserException.BadInput("VCF contains no variants or no variants with INFO score key \"" + infoKey + "\"");
+        }
+
+        if (resourceSNPScores.size() == 0 && resourceIndelScores.size() == 0) {
+            throw new UserException.BadInput("Neither SNP nor indel resource contains variants overlapping input.  Filtering cannot be performed.");
+        }
+
+        if ((scoredSnps > 0 && resourceSNPScores.size() == 0)) {
+            throw new UserException.BadInput("SNPs are present in input VCF, but cannot be filtered because no overlapping SNPs were found in the resources.");
+        }
+
+        if ((scoredIndels > 0 && resourceIndelScores.size() == 0)) {
+            throw new UserException.BadInput("Indels are present in input VCF, but cannot be filtered because no overlapping indels were found in the resources.");
         }
 
         Collections.sort(resourceSNPScores, Collections.reverseOrder());
         Collections.sort(resourceIndelScores, Collections.reverseOrder());
 
-        for(double t : snpTranches) {
-            int snpIndex = (int)((t/100.0)*(double)(resourceSNPScores.size()-1));
-            snpCutoffs.add(resourceSNPScores.get(snpIndex));
+        if (resourceSNPScores.size() != 0) {
+            for (double t : snpTranches) {
+                int snpIndex = (int) ((t / 100.0) * (double) (resourceSNPScores.size() - 1));
+                snpCutoffs.add(resourceSNPScores.get(snpIndex));
+            }
         }
 
-        for(double t : indelTranches) {
-            int indelIndex = (int)((t/100.0)*(double)(resourceIndelScores.size()-1));
-            indelCutoffs.add(resourceIndelScores.get(indelIndex));
+        if (resourceIndelScores.size() != 0) {
+            for (double t : indelTranches) {
+                int indelIndex = (int) ((t / 100.0) * (double) (resourceIndelScores.size() - 1));
+                indelCutoffs.add(resourceIndelScores.get(indelIndex));
+            }
         }
 
     }
@@ -182,13 +248,17 @@ public class FilterVariantTranches extends TwoPassVariantWalker {
 
         if (variant.hasAttribute(infoKey)) {
             final double score = Double.parseDouble((String) variant.getAttribute(infoKey));
-            if (variant.isSNP() && isTrancheFiltered(score, snpCutoffs)) {
+            if (variant.isSNP() && snpCutoffs.size() != 0 && isTrancheFiltered(score, snpCutoffs)) {
                 builder.filter(filterStringFromScore(SNPString, score, snpTranches, snpCutoffs));
                 filteredSnps++;
-            } else if (variant.isIndel() && isTrancheFiltered(score, indelCutoffs)) {
+            } else if (variant.isIndel() && indelCutoffs.size() != 0 && isTrancheFiltered(score, indelCutoffs)) {
                 builder.filter(filterStringFromScore(INDELString, score, indelTranches, indelCutoffs));
                 filteredIndels++;
             }
+        }
+
+        if (builder.getFilters() == null || builder.getFilters().size() == 0){
+            builder.passFilters();
         }
         
         vcfWriter.add(builder.make());

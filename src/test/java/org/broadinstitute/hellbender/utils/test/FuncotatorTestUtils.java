@@ -23,9 +23,10 @@ import org.broadinstitute.hellbender.tools.funcotator.dataSources.gencode.Gencod
 import org.broadinstitute.hellbender.tools.funcotator.dataSources.gencode.GencodeFuncotationFactory;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
-import org.broadinstitute.hellbender.utils.codecs.gencode.GencodeGtfFeature;
-import org.broadinstitute.hellbender.utils.codecs.gencode.GencodeGtfFeatureBaseData;
-import org.broadinstitute.hellbender.utils.codecs.gencode.GencodeGtfTranscriptFeature;
+import org.broadinstitute.hellbender.utils.codecs.gtf.GencodeGtfCodec;
+import org.broadinstitute.hellbender.utils.codecs.gtf.GencodeGtfFeature;
+import org.broadinstitute.hellbender.utils.codecs.gtf.GencodeGtfFeatureBaseData;
+import org.broadinstitute.hellbender.utils.codecs.gtf.GencodeGtfTranscriptFeature;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
 import org.broadinstitute.hellbender.utils.param.ParamUtils;
 import org.broadinstitute.hellbender.utils.reference.ReferenceBases;
@@ -54,9 +55,9 @@ public class FuncotatorTestUtils {
      * @param interval genomic interval for the result.  Typically, this would be the interval of the variant.  Never {@link null}.
      * @param featureQueryLookahead When querying FeatureDataSources, cache this many extra bases of context beyond
      *                              the end of query intervals in anticipation of future queries. Must be >= 0.  If uncertain, use zero.
-     * @param cloudPrefetchBuffer See {@link FeatureManager#FeatureManager(CommandLineProgram, int, int, int, Path)}  If uncertain, use zero.
-     * @param cloudIndexPrefetchBuffer See {@link FeatureManager#FeatureManager(CommandLineProgram, int, int, int, Path)}  If uncertain, use zero.
-     * @param reference See {@link FeatureManager#FeatureManager(CommandLineProgram, int, int, int, Path)}  If uncertain, use {@code null}.
+     * @param cloudPrefetchBuffer See {@link FeatureManager#FeatureManager(CommandLineProgram, int, int, int, org.broadinstitute.hellbender.tools.genomicsdb.GenomicsDBOptions)}  If uncertain, use zero.
+     * @param cloudIndexPrefetchBuffer See {@link FeatureManager#FeatureManager(CommandLineProgram, int, int, int, org.broadinstitute.hellbender.tools.genomicsdb.GenomicsDBOptions)}  If uncertain, use zero.
+     * @param reference See {@link FeatureManager#FeatureManager(CommandLineProgram, int, int, int, org.broadinstitute.hellbender.tools.genomicsdb.GenomicsDBOptions)}  If uncertain, use {@code null}.
      * @return a {@link FeatureContext} ready for querying the funcotation factories on the given interval.  Never {@code null}.
      */
     @VisibleForTesting
@@ -281,9 +282,10 @@ public class FuncotatorTestUtils {
     public static GencodeGtfTranscriptFeature createArtificialGencodeGtfTranscriptFeatureForTesting( final String contig, final int start, final int stop, final Strand strand) {
         return (GencodeGtfTranscriptFeature)GencodeGtfTranscriptFeature.create(
                 new GencodeGtfFeatureBaseData(
+                        GencodeGtfCodec.GTF_FILE_TYPE_STRING,
                         2,
                         contig,
-                        GencodeGtfFeature.AnnotationSource.ENSEMBL,
+                        GencodeGtfFeature.ANNOTATION_SOURCE_ENSEMBL,
                         GencodeGtfFeature.FeatureType.TRANSCRIPT,
                         start,
                         stop,
@@ -329,6 +331,21 @@ public class FuncotatorTestUtils {
     public static VariantContext createDummySegmentVariantContext() {
         return createSimpleVariantContext(FuncotatorReferenceTestUtils.retrieveHg19Chr3Ref(),
                 "3", 2100000, 3200000, "T",
+                AnnotatedIntervalToSegmentVariantContextConverter.COPY_NEUTRAL_ALLELE.getDisplayString());
+    }
+
+    /**
+     * Create a very simple dummy variant context that may or may not adhere to the conventions in
+     * {@link AnnotatedIntervalToSegmentVariantContextConverter#convert(AnnotatedInterval, ReferenceContext)}
+     *
+     * Resulting variant will be based on hg19 and will be placed on Chromosome 3.
+     * Resulting variant will always have {@link AnnotatedIntervalToSegmentVariantContextConverter#COPY_NEUTRAL_ALLELE} as its ALT allele.
+     *
+     * @return Never {@code null}
+     */
+    public static VariantContext createDummySegmentVariantContext(final int start, final int end, final String refAllele) {
+        return createSimpleVariantContext(FuncotatorReferenceTestUtils.retrieveHg19Chr3Ref(),
+                "3", start, end, refAllele,
                 AnnotatedIntervalToSegmentVariantContextConverter.COPY_NEUTRAL_ALLELE.getDisplayString());
     }
 

@@ -1,12 +1,18 @@
 import os
 
 # set theano flags
-os.environ["THEANO_FLAGS"] = "device=cpu,floatX=float64,optimizer=fast_run,compute_test_value=ignore," + \
-                             "openmp=true,blas.ldflags=-lmkl_rt,openmp_elemwise_minsize=10"
+user_theano_flags = os.environ.get("THEANO_FLAGS")
+default_theano_flags = "device=cpu,floatX=float64,optimizer=fast_run,compute_test_value=ignore," + \
+                       "openmp=true,blas.ldflags=-lmkl_rt,openmp_elemwise_minsize=10"
+theano_flags = default_theano_flags + ("" if user_theano_flags is None else "," + user_theano_flags)
+os.environ["THEANO_FLAGS"] = theano_flags
 
+import logging
 import argparse
 import gcnvkernel
 import shutil
+
+logger = logging.getLogger("cohort_determine_ploidy_and_depth")
 
 parser = argparse.ArgumentParser(description="gCNV contig ploidy and read depth determination tool",
                                  formatter_class=gcnvkernel.cli_commons.GCNVHelpFormatter)
@@ -74,6 +80,16 @@ if __name__ == "__main__":
     args = parser.parse_args()
     gcnvkernel.cli_commons.set_logging_config_from_args(args)
 
+    logger.info("THEANO_FLAGS environment variable has been set to: {theano_flags}".format(theano_flags=theano_flags))
+
+    # copy the intervals and ploidy priors to the model path
+    # (we do this early to avoid inadvertent cleanup of temporary files)
+    gcnvkernel.io_commons.assert_output_path_writable(args.output_model_path)
+    shutil.copy(args.interval_list,
+                os.path.join(args.output_model_path, gcnvkernel.io_consts.default_interval_list_filename))
+    shutil.copy(args.contig_ploidy_prior_table,
+                os.path.join(args.output_model_path, gcnvkernel.io_consts.default_contig_ploidy_prior_tsv_filename))
+
     # read contig ploidy prior map from file
     contig_ploidy_prior_map = gcnvkernel.io_ploidy.get_contig_ploidy_prior_map_from_tsv_file(
         args.contig_ploidy_prior_table)
@@ -112,9 +128,3 @@ if __name__ == "__main__":
     gcnvkernel.io_ploidy.SamplePloidyWriter(ploidy_config, ploidy_workspace,
                                             ploidy_task.continuous_model, ploidy_task.continuous_model_approx,
                                             args.output_calls_path)()
-
-    # save a copy of interval list and ploidy priors as well
-    shutil.copy(args.interval_list,
-                os.path.join(args.output_model_path, gcnvkernel.io_consts.default_interval_list_filename))
-    shutil.copy(args.contig_ploidy_prior_table,
-                os.path.join(args.output_model_path, gcnvkernel.io_consts.default_contig_ploidy_prior_tsv_filename))

@@ -13,7 +13,9 @@ import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.tools.walkers.annotator.allelespecific.ReducibleAnnotation;
 import org.broadinstitute.hellbender.tools.walkers.annotator.allelespecific.ReducibleAnnotationData;
 import org.broadinstitute.hellbender.utils.Utils;
-import org.broadinstitute.hellbender.utils.genotyper.ReadLikelihoods;
+import org.broadinstitute.hellbender.utils.genotyper.AlleleLikelihoods;
+import org.broadinstitute.hellbender.utils.read.GATKRead;
+import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
 import org.broadinstitute.hellbender.utils.variant.GATKVariantContextUtils;
 
 import java.util.*;
@@ -48,8 +50,8 @@ public final class VariantAnnotatorEngine {
  *                   The annotation engine will mark variants overlapping anything in those sets using the name given by {@link FeatureInput#getName()}.
  *                   Note: the DBSNP FeatureInput should be passed in separately, and not as part of this List - an GATKException will be thrown otherwise.
  *                   Note: there are no non-DBSNP comparison FeatureInputs an empty List should be passed in here, rather than null.
-     * @param useRaw When this is set to true, the annotation engine will call {@link ReducibleAnnotation#annotateRawData(ReferenceContext, VariantContext, ReadLikelihoods)}
-*               on annotations that extend {@link ReducibleAnnotation}, instead of {@link InfoFieldAnnotation#annotate(ReferenceContext, VariantContext, ReadLikelihoods)},
+     * @param useRaw When this is set to true, the annotation engine will call {@link ReducibleAnnotation#annotateRawData(ReferenceContext, VariantContext, AlleleLikelihoods)}
+*               on annotations that extend {@link ReducibleAnnotation}, instead of {@link InfoFieldAnnotation#annotate(ReferenceContext, VariantContext, AlleleLikelihoods)},
      * @param keepCombined If true, retain the combined raw annotation values instead of removing them after finalizing
      */
     public VariantAnnotatorEngine(final Collection<Annotation> annotationList,
@@ -69,12 +71,14 @@ public final class VariantAnnotatorEngine {
             }
         }
         variantOverlapAnnotator = initializeOverlapAnnotator(dbSNPInput, featureInputs);
-        reducibleKeys = new HashSet<>();
+        reducibleKeys = new LinkedHashSet<>();
         useRawAnnotations = useRaw;
         keepRawCombinedAnnotations = keepCombined;
         for (InfoFieldAnnotation annot : infoAnnotations) {
             if (annot instanceof ReducibleAnnotation) {
-                reducibleKeys.add(((ReducibleAnnotation) annot).getRawKeyName());
+                for (final String rawKey : ((ReducibleAnnotation) annot).getRawKeyNames()) {
+                    reducibleKeys.add(rawKey);
+                }
             }
         }
     }
@@ -180,7 +184,7 @@ public final class VariantAnnotatorEngine {
     }
 
     /**
-     * Combine (raw) data for reducible annotations (those that use raw data in gVCFs)
+     * Combine (raw) data for reducible annotations (those that use raw data in gVCFs) according to their primary raw key
      * Mutates annotationMap by removing the annotations that were combined
      *
      * Additionally, will combine other annotations by parsing them as numbers and reducing them
@@ -197,12 +201,17 @@ public final class VariantAnnotatorEngine {
         for (final InfoFieldAnnotation annotationType : infoAnnotations) {
             if (annotationType instanceof ReducibleAnnotation) {
                 ReducibleAnnotation currentASannotation = (ReducibleAnnotation) annotationType;
-                if (annotationMap.containsKey(currentASannotation.getRawKeyName())) {
-                    final List<ReducibleAnnotationData<?>> annotationValue = (List<ReducibleAnnotationData<?>>) annotationMap.get(currentASannotation.getRawKeyName());
-                    final Map<String, Object> annotationsFromCurrentType = currentASannotation.combineRawData(allelesList, annotationValue);
-                    combinedAnnotations.putAll(annotationsFromCurrentType);
-                    //remove the combined annotations so that the next method only processes the non-reducible ones
-                    annotationMap.remove(currentASannotation.getRawKeyName());
+                for (final String rawKey : currentASannotation.getRawKeyNames()) {
+                    //here we're assuming that each annotation combines data corresponding to its primary raw key, which is index zero
+                    //AS_QD only needs to be combined if it's relying on its primary raw key
+                    if (annotationMap.containsKey(rawKey)) {
+                        final List<ReducibleAnnotationData<?>> annotationValue = (List<ReducibleAnnotationData<?>>)
+                                annotationMap.get(rawKey);
+                        final Map<String, Object> annotationsFromCurrentType = currentASannotation.combineRawData(allelesList, annotationValue);
+                        combinedAnnotations.putAll(annotationsFromCurrentType);
+                        //remove all the raw keys for the annotation because we already used all of them in combineRawData
+                        annotationMap.keySet().removeAll(currentASannotation.getRawKeyNames());
+                    }
                 }
             }
         }
@@ -229,10 +238,16 @@ public final class VariantAnnotatorEngine {
                     variantAnnotations.putAll(annotationsFromCurrentType);
                 }
                 //clean up raw annotation data after annotations are finalized
-                if (!keepRawCombinedAnnotations) {
-                    variantAnnotations.remove(currentASannotation.getRawKeyName());
+                for (final String rawKey: currentASannotation.getRawKeyNames()) {
+                    if (!keepRawCombinedAnnotations) {
+                        variantAnnotations.remove(rawKey);
+                    }
                 }
             }
+        }
+        //this is manual because the AS_QUAL "rawKey" get added by genotyping
+        if (!keepRawCombinedAnnotations) {
+            variantAnnotations.remove(GATKVCFConstants.AS_QUAL_KEY);
         }
 
         // generate a new annotated VC
@@ -255,7 +270,7 @@ public final class VariantAnnotatorEngine {
     public VariantContext annotateContext(final VariantContext vc,
                                           final FeatureContext features,
                                           final ReferenceContext ref,
-                                          final ReadLikelihoods<Allele> likelihoods,
+                                          final AlleleLikelihoods<GATKRead, Allele> likelihoods,
                                           final Predicate<VariantAnnotation> addAnnot) {
         Utils.nonNull(vc, "vc cannot be null");
         Utils.nonNull(features, "features cannot be null");
@@ -292,7 +307,7 @@ public final class VariantAnnotatorEngine {
 
     private GenotypesContext annotateGenotypes(final ReferenceContext ref,
                                                final VariantContext vc,
-                                               final ReadLikelihoods<Allele> likelihoods,
+                                               final AlleleLikelihoods<GATKRead, Allele> likelihoods,
                                                final Predicate<VariantAnnotation> addAnnot) {
         if ( genotypeAnnotations.isEmpty() ) {
             return vc.getGenotypes();

@@ -1,6 +1,7 @@
 package org.broadinstitute.hellbender.tools.walkers.haplotypecaller;
 
 import com.google.common.base.Strings;
+import htsjdk.samtools.CigarOperator;
 import htsjdk.samtools.SAMFileHeader;
 import htsjdk.samtools.SAMReadGroupRecord;
 import htsjdk.variant.variantcontext.*;
@@ -15,8 +16,8 @@ import org.broadinstitute.hellbender.utils.GenomeLoc;
 import org.broadinstitute.hellbender.utils.GenomeLocParser;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
+import org.broadinstitute.hellbender.utils.genotyper.AlleleLikelihoods;
 import org.broadinstitute.hellbender.utils.genotyper.IndexedAlleleList;
-import org.broadinstitute.hellbender.utils.genotyper.ReadLikelihoods;
 import org.broadinstitute.hellbender.utils.genotyper.SampleList;
 import org.broadinstitute.hellbender.utils.haplotype.Haplotype;
 import org.broadinstitute.hellbender.utils.pileup.PileupElement;
@@ -325,13 +326,13 @@ public final class ReferenceConfidenceModelUnitTest extends GATKBaseTest {
         final GATKRead readCache = ArtificialReadUtils.createArtificialRead(readBases.getBytes(), quals, cigar);
 
         for ( int i = 0; i < readBases.getBytes().length; i++ ) {
-            final Pair<Integer, Boolean> readCoordinateForReferenceCoordinate = ReadUtils.getReadCoordinateForReferenceCoordinate(readCache, readCache.getStart() + i, true);
+            final Pair<Integer, CigarOperator> readCoordinateForReferenceCoordinate = ReadUtils.getReadIndexForReferenceCoordinate(readCache, readCache.getStart() + i);
 
-            if (!readCoordinateForReferenceCoordinate.getValue() && readCoordinateForReferenceCoordinate.getKey() != -1) {
+            if (readCoordinateForReferenceCoordinate.getRight() != null && readCoordinateForReferenceCoordinate.getRight().consumesReadBases()) {
                 final GATKRead readNoCache = ArtificialReadUtils.createArtificialRead(readBases.getBytes(), quals, cigar);
                 final SimpleInterval loc = new SimpleInterval("20", i + 1 + readStartIntoRef, i + 1 + readStartIntoRef);
-                final ReadPileup pileupCache = new ReadPileup(loc, Collections.singletonList(readCache), readCoordinateForReferenceCoordinate.getKey());
-                final ReadPileup pileupNoCache = new ReadPileup(loc, Collections.singletonList(readNoCache), ReadUtils.getReadCoordinateForReferenceCoordinate(readNoCache, readNoCache.getStart() + i).getKey());
+                final ReadPileup pileupCache = new ReadPileup(loc, Collections.singletonList(readCache), readCoordinateForReferenceCoordinate.getLeft());
+                final ReadPileup pileupNoCache = new ReadPileup(loc, Collections.singletonList(readNoCache), ReadUtils.getReadIndexForReferenceCoordinate(readNoCache, readNoCache.getStart() + i).getKey());
                 final int actualCache = model.calcNReadsWithNoPlausibleIndelsReads(pileupCache, i + readStartIntoRef, ref.getBytes(), maxIndelSize);
                 final int actualNoCache = model.calcNReadsWithNoPlausibleIndelsReads(pileupNoCache, i + readStartIntoRef, ref.getBytes(), maxIndelSize);
                 Assert.assertEquals(actualCache, (int)expected.get(i), "cached result failed at position " + i);
@@ -356,7 +357,7 @@ public final class ReferenceConfidenceModelUnitTest extends GATKBaseTest {
     public void testGetHeaderLines() throws Exception {
         final Set<VCFHeaderLine> vcfHeaderLines = model.getVCFHeaderLines();
         Assert.assertEquals(vcfHeaderLines.size(), 1);
-        Assert.assertEquals(vcfHeaderLines.iterator().next(), new VCFSimpleHeaderLine(GATKVCFConstants.SYMBOLIC_ALLELE_DEFINITION_HEADER_TAG, GATKVCFConstants.NON_REF_SYMBOLIC_ALLELE_NAME, "Represents any possible alternative allele at this location"));
+        Assert.assertEquals(vcfHeaderLines.iterator().next(), new VCFSimpleHeaderLine(GATKVCFConstants.SYMBOLIC_ALLELE_DEFINITION_HEADER_TAG, GATKVCFConstants.NON_REF_SYMBOLIC_ALLELE_NAME, ReferenceConfidenceModel.NON_REF_ALLELE_DESCRIPTION));
     }
 
     @Test
@@ -502,7 +503,7 @@ public final class ReferenceConfidenceModelUnitTest extends GATKBaseTest {
             data.getActiveRegion().add(data.makeRead(0, data.getRefLength()));
         }
 
-        final ReadLikelihoods<Haplotype> likelihoods = createDummyStratifiedReadMap(data.getRefHap(), samples, data.getActiveRegion());
+        final AlleleLikelihoods<GATKRead, Haplotype> likelihoods = createDummyStratifiedReadMap(data.getRefHap(), samples, data.getActiveRegion());
 
         final PloidyModel ploidyModel = new HomogeneousPloidyModel(samples,2);
         final IndependentSampleGenotypesModel genotypingModel = new IndependentSampleGenotypesModel();
@@ -528,7 +529,7 @@ public final class ReferenceConfidenceModelUnitTest extends GATKBaseTest {
                 final List<VariantContext> calls = Collections.emptyList();
 
                 data.getActiveRegion().add(data.makeRead(start, readLen));
-                final ReadLikelihoods<Haplotype> likelihoods = createDummyStratifiedReadMap(data.getRefHap(), samples, data.getActiveRegion());
+                final AlleleLikelihoods<GATKRead, Haplotype> likelihoods = createDummyStratifiedReadMap(data.getRefHap(), samples, data.getActiveRegion());
 
                 final List<Integer> expectedDPs = new ArrayList<>(Collections.nCopies(data.getActiveRegion().getSpan().size(), 0));
                 for ( int i = start; i < readLen + start; i++ ) expectedDPs.set(i, 1);
@@ -569,7 +570,7 @@ public final class ReferenceConfidenceModelUnitTest extends GATKBaseTest {
                         data.getActiveRegion().add(data.makeRead(0, data.getRefLength()));
                     }
 
-                    final ReadLikelihoods<Haplotype> likelihoods = createDummyStratifiedReadMap(data.getRefHap(), samples, data.getActiveRegion());
+                    final AlleleLikelihoods<GATKRead, Haplotype> likelihoods = createDummyStratifiedReadMap(data.getRefHap(), samples, data.getActiveRegion());
 
                     final List<Integer> expectedDPs = Collections.nCopies(data.getActiveRegion().getSpan().size(), nReads);
                     final List<VariantContext> contexts = model.calculateRefConfidence(data.getRefHap(), haplotypes, data.getPaddedRefLoc(), data.getActiveRegion(), likelihoods, ploidyModel, calls);
@@ -590,10 +591,10 @@ public final class ReferenceConfidenceModelUnitTest extends GATKBaseTest {
      * @param region the active region containing reads
      * @return a map from sample -> PerReadAlleleLikelihoodMap that maps each read to ref
      */
-    public static ReadLikelihoods<Haplotype> createDummyStratifiedReadMap(final Haplotype refHaplotype,
+    public static AlleleLikelihoods<GATKRead, Haplotype> createDummyStratifiedReadMap(final Haplotype refHaplotype,
                                                                           final SampleList samples,
                                                                           final AssemblyRegion region) {
-        return new ReadLikelihoods<>(samples, new IndexedAlleleList<>(refHaplotype),
+        return new AlleleLikelihoods<>(samples, new IndexedAlleleList<>(refHaplotype),
                 splitReadsBySample(samples, region.getReads(), region.getHeader()));
     }
 
@@ -614,7 +615,7 @@ public final class ReferenceConfidenceModelUnitTest extends GATKBaseTest {
     private void checkReferenceModelResult(final RefConfData data, final List<VariantContext> contexts, final List<Integer> expectedDPs, final List<VariantContext> calls) {
         Assert.assertNotNull(contexts);
 
-        final SimpleInterval loc = data.getActiveRegion().getExtendedSpan();
+        final SimpleInterval loc = data.getActiveRegion().getPaddedSpan();
         final List<Boolean> seenBP = new ArrayList<>(Collections.nCopies(data.getActiveRegion().getSpan().size(), false));
 
         for ( int i = 0; i < loc.size(); i++ ) {

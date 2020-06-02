@@ -1,9 +1,13 @@
 package org.broadinstitute.hellbender.tools.walkers.filters;
 
+import htsjdk.variant.variantcontext.VariantContext;
 import org.broadinstitute.hellbender.CommandLineProgramTest;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
+import org.broadinstitute.hellbender.engine.FeatureDataSource;
 import org.broadinstitute.hellbender.exceptions.UserException;
+import org.broadinstitute.hellbender.testutils.ArgumentsBuilder;
 import org.broadinstitute.hellbender.testutils.IntegrationTestSpec;
+import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
@@ -44,6 +48,7 @@ public final class VariantFiltrationIntegrationTest extends CommandLineProgramTe
                 {"foo", "--mask " + getToolTestDataDir() + "vcfexample2.vcf", "testVariantFiltration_testMask1.vcf"},
                 {"foo", "--mask " + new File(getToolTestDataDir() + "vcfMask.vcf").getAbsolutePath(), "testVariantFiltration_testMask2.vcf"},
                 {"foo", "--" + VariantFiltration.MASK_EXTENSION_LONG_NAME + " 10 --mask:VCF " + getToolTestDataDir() + "vcfMask.vcf", "testVariantFiltration_testMask3.vcf"},
+                {"foo", "--apply-allele-specific-filters --mask " + new File(getToolTestDataDir() + "vcfMask.vcf").getAbsolutePath(), "testVariantFiltration_testMask4.vcf"}
         };
     }
 
@@ -51,6 +56,25 @@ public final class VariantFiltrationIntegrationTest extends CommandLineProgramTe
     public void testMask(final String maskName, final String mask, final String expected) throws IOException {
         final IntegrationTestSpec spec = new IntegrationTestSpec(
                 baseTestString("vcfexample2.vcf", " -mask-name " + maskName + " " + mask),
+                Arrays.asList(getToolTestDataDir() + "expected/" + expected)
+        );
+
+        spec.executeTest("testMask", this);
+    }
+
+    @DataProvider(name="masksWithFilters")
+    public Object[][] masksWithFilters() {
+        return new String[][]{
+                {"blacklisted_site", "--apply-allele-specific-filters --mask " + new File(getToolTestDataDir() + "blacklistedMask.bed").getAbsolutePath(), "testVariantFiltration_testMaskWithFilters1.vcf"},
+                {"blacklisted_site", "--invalidate-previous-filters --apply-allele-specific-filters --mask " + new File(getToolTestDataDir() + "blacklistedMask.bed").getAbsolutePath(), "testVariantFiltration_testMaskWithFilters2.vcf"}
+        };
+    }
+
+
+    @Test(dataProvider = "masksWithFilters")
+    public void testMaskWithFilters(final String maskName, final String mask, final String expected) throws IOException {
+        final IntegrationTestSpec spec = new IntegrationTestSpec(
+                baseTestString("filtered.vcf", " -mask-name " + maskName + " " + mask),
                 Arrays.asList(getToolTestDataDir() + "expected/" + expected)
         );
 
@@ -271,5 +295,38 @@ public final class VariantFiltrationIntegrationTest extends CommandLineProgramTe
         );
 
         spec.executeTest("testFilteringZfromFORMATAndFailMissing", this);
+    }
+
+    @Test
+    public void testFilteredAndPassBecomeUnfiltered() throws IOException {
+        final File output = createTempFile("testFilteredAndPassBecomeUnfiltered", ".vcf");
+
+        final ArgumentsBuilder args = new ArgumentsBuilder();
+                args.add("V", getTestFile("expected/testVariantFiltration_testUnfilteredBecomesFilteredAndPass.vcf"))
+                .add(StandardArgumentDefinitions.INVALIDATE_PREVIOUS_FILTERS_LONG_NAME, "true")
+                .add(StandardArgumentDefinitions.ADD_OUTPUT_VCF_COMMANDLINE, "false");
+        args.addOutput(output);
+
+        runCommandLine(args);
+
+        try (final FeatureDataSource<VariantContext> actualVcs = new FeatureDataSource<>(output)) {
+            for (final VariantContext vc : actualVcs) {
+                Assert.assertFalse(vc.filtersWereApplied());  //this checks for null VC filters, output as a '.' FILTER status, which is what we want
+            }
+        }
+
+        final ArgumentsBuilder args2 = new ArgumentsBuilder();
+        args2.add("V", getTestFile("expected/testVariantFiltration_testUnfilteredBecomesFilteredAndPass.vcf"))
+                .add(StandardArgumentDefinitions.INVALIDATE_PREVIOUS_FILTERS_LONG_NAME, "false")
+                .add(StandardArgumentDefinitions.ADD_OUTPUT_VCF_COMMANDLINE, "false");
+        args2.addOutput(output);
+
+        runCommandLine(args2);
+
+        try (final FeatureDataSource<VariantContext> actualVcs = new FeatureDataSource<>(output)) {
+            for (final VariantContext vc : actualVcs) {
+                Assert.assertTrue(vc.filtersWereApplied());  //variants should still be filtered if we don't invalidate
+            }
+        }
     }
 }

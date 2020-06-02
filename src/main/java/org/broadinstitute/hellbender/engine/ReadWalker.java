@@ -65,7 +65,7 @@ public abstract class ReadWalker extends WalkerBase {
     void initializeFeatures() {
         //We override this method to change lookahead of the cache
         features = new FeatureManager(this, FEATURE_CACHE_LOOKAHEAD, cloudPrefetchBuffer, cloudIndexPrefetchBuffer,
-                                      referenceArguments.getReferencePath());
+                                      getGenomicsDBOptions());
         if ( features.isEmpty() ) {  // No available sources of Features discovered for this tool
             features = null;
         }
@@ -125,6 +125,17 @@ public abstract class ReadWalker extends WalkerBase {
      */
     public List<ReadFilter> getDefaultReadFilters() {
         return Collections.singletonList(new WellformedReadFilter());
+    }
+
+    /**
+     * Reset the reads data source so the caller can iterate through the reads again.
+     */
+    public void resetReadsDataSource() {
+        if (!reads.supportsSerialIteration()) {
+            // Reinitialize the reads data source to prepare for another iteration.
+            reads.close();
+            initializeReads();
+        }
     }
 
     /**

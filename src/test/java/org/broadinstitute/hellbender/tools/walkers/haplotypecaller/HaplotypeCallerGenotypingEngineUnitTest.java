@@ -3,13 +3,18 @@ package org.broadinstitute.hellbender.tools.walkers.haplotypecaller;
 import com.google.common.base.Strings;
 import htsjdk.samtools.util.Locatable;
 import htsjdk.variant.variantcontext.*;
-import org.apache.commons.lang3.tuple.Pair;
 import org.broadinstitute.gatk.nativebindings.smithwaterman.SWOverhangStrategy;
 import org.broadinstitute.gatk.nativebindings.smithwaterman.SWParameters;
+import org.broadinstitute.hellbender.engine.FeatureContext;
+import org.broadinstitute.hellbender.engine.FeatureInput;
 import org.broadinstitute.hellbender.testutils.VariantContextTestUtils;
+import org.broadinstitute.hellbender.tools.walkers.annotator.VariantAnnotatorEngine;
 import org.broadinstitute.hellbender.utils.QualityUtils;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
+import org.broadinstitute.hellbender.utils.genotyper.AlleleLikelihoods;
+import org.broadinstitute.hellbender.utils.genotyper.IndexedAlleleList;
+import org.broadinstitute.hellbender.utils.genotyper.SampleList;
 import org.broadinstitute.hellbender.utils.haplotype.EventMap;
 import org.broadinstitute.hellbender.utils.haplotype.Haplotype;
 import org.broadinstitute.hellbender.utils.pileup.ReadPileup;
@@ -302,6 +307,33 @@ public final class HaplotypeCallerGenotypingEngineUnitTest extends GATKBaseTest 
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    public void testMakeAnnotatedCallTrimmingAlleles(){
+        List<Allele> alleles = Arrays.asList(Allele.create("AGGGGGGGGG", true), Allele.create("TGGGGGGGGG", false));
+        List<Allele> mergedAlleles = Arrays.asList(Allele.create("AGGGGGGGGG", true), Allele.create("TGGGGGGGGG", false), Allele.create("A", false));
+        AlleleLikelihoods<GATKRead, Allele> likelihoods = new AlleleLikelihoods<GATKRead, Allele>(SampleList.EMPTY_LIST, new IndexedAlleleList<Allele>(alleles), new HashMap<>());
+
+        // Both a deletion and SNPs are present at this site
+        final VariantContext originalVC = new VariantContextBuilder("source", "1", 1000000, 1000009, alleles).make();
+
+        final List<FeatureInput<VariantContext>> features = Collections.emptyList();
+
+        VariantContext reducedVC = HaplotypeCallerGenotypingEngine.makeAnnotatedCall("AGGGGGGGGG".getBytes(),
+                new SimpleInterval(originalVC),
+                new FeatureContext(),
+                ArtificialReadUtils.createArtificialSamHeader(),
+                originalVC,
+                mergedAlleles.size(),
+                likelihoods,
+                originalVC,
+                new VariantAnnotatorEngine(Collections.emptyList(), null, features, false, true));
+
+        // Asserting that the two alleles were trimmed after calling removeExcessAltAlleles
+        Assert.assertEquals(reducedVC.getNAlleles(), 2);
+        Assert.assertTrue(reducedVC.getAlleles().containsAll(Arrays.asList(Allele.create("A", true), Allele.create("T", false))));
+    }
+
+    @Test
     public void testReplaceWithSpanDelVC() {
         final VariantContext snp = new VariantContextBuilder("source", "1", 1000000, 1000000,
                 Arrays.asList(Allele.create("A", true),
@@ -323,7 +355,7 @@ public final class HaplotypeCallerGenotypingEngineUnitTest extends GATKBaseTest 
                         Allele.SPAN_DEL)).make();
 
         VariantContextTestUtils.assertVariantContextsAreEqual(spanDelReplacement,
-                expectedSpanDelReplacement, Collections.emptyList());
+                expectedSpanDelReplacement, Collections.emptyList(), Collections.emptyList());
 
         final VariantContext spanDelWithGt = new VariantContextBuilder("source", "1", 999995, 1000005,
                 Arrays.asList(Allele.create("AAAAAAAAAAA", true),
@@ -335,7 +367,7 @@ public final class HaplotypeCallerGenotypingEngineUnitTest extends GATKBaseTest 
                 HaplotypeCallerGenotypingEngine.replaceWithSpanDelVC(spanDelWithGt, Allele.create("A", true), 1000000);
 
         VariantContextTestUtils.assertVariantContextsAreEqual(spanDelWithGTReplacement,
-                expectedSpanDelReplacement, Collections.emptyList());
+                expectedSpanDelReplacement, Collections.emptyList(), Collections.emptyList());
 
     }
 }

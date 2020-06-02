@@ -25,7 +25,6 @@ import org.broadinstitute.hellbender.tools.funcotator.dataSources.gencode.Gencod
 import org.broadinstitute.hellbender.tools.funcotator.metadata.FuncotationMetadata;
 import org.broadinstitute.hellbender.tools.funcotator.vcfOutput.VcfOutputRenderer;
 import org.broadinstitute.hellbender.tools.spark.sv.discovery.SimpleSVType;
-import org.broadinstitute.hellbender.utils.GATKProtectedVariantContextUtils;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
@@ -53,6 +52,8 @@ public final class FuncotatorUtils {
      * DO NOT INSTANTIATE THIS CLASS!
      */
     private FuncotatorUtils() {}
+
+    public static final int DEFAULT_MIN_NUM_BASES_FOR_VALID_SEGMENT = 150;
 
     private static final Map<String, AminoAcid> tableByCodon;
     private static final Map<String, AminoAcid> tableByCode;
@@ -256,8 +257,8 @@ public final class FuncotatorUtils {
         // NOTE: because there could be degenerate VCF files that have more than one leading base overlapping, we need
         //       to detect how many leading bases there are that overlap, rather than assuming there is only one.
         final int varStart;
-        if ( GATKProtectedVariantContextUtils.typeOfVariant(variant.getReference(), altAllele).equals(VariantContext.Type.INDEL) &&
-             !GATKProtectedVariantContextUtils.isComplexIndel(variant.getReference(), altAllele) ) {
+        if ( GATKVariantContextUtils.typeOfVariant(variant.getReference(), altAllele).equals(VariantContext.Type.INDEL) &&
+             !GATKVariantContextUtils.isComplexIndel(variant.getReference(), altAllele) ) {
             int startOffset = 0;
             while ( (startOffset < variant.getReference().length()) && (startOffset < altAllele.length()) && (variant.getReference().getBases()[ startOffset ] == altAllele.getBases()[ startOffset ]) ) {
                 ++startOffset;
@@ -2071,11 +2072,11 @@ public final class FuncotatorUtils {
      * Dev note: this is done by examining the length and the alt allele of the segment.
      *
      * @param vc Never {@code null}
+     * @param minSizeForSegment Minimum size for a segment to be valid.
      * @return Boolean whether the given variant context could represent a copy number segment.
      */
-    public static boolean isSegmentVariantContext(final VariantContext vc) {
+    public static boolean isSegmentVariantContext(final VariantContext vc, final int minSizeForSegment) {
         Utils.nonNull(vc);
-        final int MIN_SIZE_FOR_SEGMENT = 150;
         final List<String> ACCEPTABLE_ALT_ALLELES = Stream.concat(
                 Stream.of(SimpleSVType.SupportedType.values())
                         .map(s -> SimpleSVType.createBracketedSymbAlleleString(s.toString())),
@@ -2090,7 +2091,7 @@ public final class FuncotatorUtils {
             }
         }
 
-        return acceptableAlternateAllele && (VariantContextUtils.getSize(vc) > MIN_SIZE_FOR_SEGMENT);
+        return acceptableAlternateAllele && (VariantContextUtils.getSize(vc) > minSizeForSegment);
     }
 
     // ========================================================================================

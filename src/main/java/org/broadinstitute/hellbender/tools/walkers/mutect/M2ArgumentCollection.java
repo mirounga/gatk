@@ -61,6 +61,11 @@ public class M2ArgumentCollection extends AssemblyBasedCallerArgumentCollection 
     public static final int DEFAULT_CALLABLE_DEPTH = 10;
 
     public static final double DEFAULT_MITO_PRUNING_LOG_ODDS_THRESHOLD = MathUtils.log10ToLog(-4);
+    public static final String INDEPENDENT_MATES_LONG_NAME = "independent-mates";
+    public static final String MINIMUM_ALLELE_FRACTION_LONG_NAME = "minimum-allele-fraction";
+    public static final String MINIMUM_ALLELE_FRACTION_SHORT_NAME = "min-AF";
+    public static final String LOD_BAND_LONG_NAME = "gvcf-lod-band";
+    public static final String LOD_BAND_SHORT_NAME = "LODB";
 
     @Override
     protected int getDefaultMaxMnpDistance() { return 1; }
@@ -238,7 +243,7 @@ public class M2ArgumentCollection extends AssemblyBasedCallerArgumentCollection 
      * Note that, unlike the GQ used by HaplotypeCaller GVCFs, here the reference calls with the highest confidence are the most negative.
      */
     @Advanced
-    @Argument(fullName = "gvcf-lod-band", shortName = "LODB", doc = "Exclusive upper bounds for reference confidence LOD bands " +
+    @Argument(fullName = LOD_BAND_LONG_NAME, shortName = LOD_BAND_SHORT_NAME, doc = "Exclusive upper bounds for reference confidence LOD bands " +
             "(must be specified in increasing order)", optional = true)
     public List<Double> GVCFGQBands = new ArrayList<>(70);
     {
@@ -248,13 +253,10 @@ public class M2ArgumentCollection extends AssemblyBasedCallerArgumentCollection 
     }
 
     @Advanced
-    @Argument(fullName = "minimum-allele-fraction", shortName = "min-AF", doc = "Lower bound of variant allele fractions to consider when calculating variant LOD", optional = true)
+    @Argument(fullName = MINIMUM_ALLELE_FRACTION_LONG_NAME, shortName = MINIMUM_ALLELE_FRACTION_SHORT_NAME, doc = "Lower bound of variant allele fractions to consider when calculating variant LOD", optional = true)
     public double minAF = 0.00;
-
-    @Argument(fullName="alleles", doc="The set of alleles for which to force genotyping regardless of evidence", optional=true)
-    public FeatureInput<VariantContext> alleles;
-
+    
     @Advanced
-    @Argument(fullName = "genotype-filtered-alleles", doc = "Whether to force genotype even filtered alleles", optional = true)
-    public boolean genotypeFilteredAlleles = false;
+    @Argument(fullName = INDEPENDENT_MATES_LONG_NAME, doc = "Allow paired reads to independently support different haplotypes.  Useful for validations with ill-designed synthetic data.", optional = true)
+    public boolean independentMates = false;
 }

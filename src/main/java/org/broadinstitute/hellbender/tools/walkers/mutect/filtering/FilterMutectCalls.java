@@ -4,6 +4,7 @@ import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.variantcontext.writer.VariantContextWriter;
 import htsjdk.variant.vcf.VCFHeader;
 import htsjdk.variant.vcf.VCFHeaderLine;
+import htsjdk.variant.vcf.VCFStandardHeaderLines;
 import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.barclay.argparser.ArgumentCollection;
 import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
@@ -17,6 +18,7 @@ import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.tools.walkers.contamination.CalculateContamination;
 import org.broadinstitute.hellbender.tools.walkers.mutect.Mutect2;
+import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
 import org.broadinstitute.hellbender.utils.param.ParamUtils;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
@@ -104,20 +106,26 @@ public final class FilterMutectCalls extends MultiplePassVariantWalker {
     private static final int NUMBER_OF_LEARNING_PASSES = 2;
 
     @Override
-    protected int numberOfPasses() { return NUMBER_OF_LEARNING_PASSES + 1; }
+    protected int numberOfPasses() { return NUMBER_OF_LEARNING_PASSES + 2; }    // {@code NUMBER_OF_LEARNING_PASSES} passes for learning, one for the threshold, and one for calling
 
     @Override
     public boolean requiresReference() { return true;}
 
     @Override
     public void onTraversalStart() {
+        Utils.resetRandomGenerator();
         final VCFHeader inputHeader = getHeaderForVariants();
         final Set<VCFHeaderLine> headerLines = inputHeader.getMetaDataInSortedOrder().stream()
                 .filter(line -> !line.getKey().equals(FILTERING_STATUS_VCF_KEY)) //remove header line from Mutect2 stating that calls are unfiltered.
                 .collect(Collectors.toSet());
         headerLines.add(new VCFHeaderLine(FILTERING_STATUS_VCF_KEY, "These calls have been filtered by " + FilterMutectCalls.class.getSimpleName() + " to label false positives with a list of failed filters and true positives with PASS."));
 
+        // all possible filters, even allele specific (since they can apply to the site as well
         GATKVCFConstants.MUTECT_FILTER_NAMES.stream().map(GATKVCFHeaderLines::getFilterLine).forEach(headerLines::add);
+
+        // these are the possible allele specific filters which will be in the INFO section
+        // when all relevant alleles (non-symbolic, etc) are filtered, the filter will be applied to the site level filter also
+        GATKVCFConstants.MUTECT_AS_FILTER_NAMES.stream().map(GATKVCFHeaderLines::getInfoLine).forEach(headerLines::add);
 
         headerLines.addAll(getDefaultToolVCFHeaderLines());
 
@@ -142,9 +150,9 @@ public final class FilterMutectCalls extends MultiplePassVariantWalker {
                                 final FeatureContext featureContext,
                                 final int n) {
         ParamUtils.isPositiveOrZero(n, "Passes must start at the 0th pass.");
-        if (n < NUMBER_OF_LEARNING_PASSES) {
+        if (n <= NUMBER_OF_LEARNING_PASSES) {
             filteringEngine.accumulateData(variant, referenceContext);
-        } else if (n == NUMBER_OF_LEARNING_PASSES) {
+        } else if (n == NUMBER_OF_LEARNING_PASSES + 1) {
             vcfWriter.add(filteringEngine.applyFiltersAndAccumulateOutputStats(variant, referenceContext));
         } else {
             throw new GATKException.ShouldNeverReachHereException("This walker should never reach (zero-indexed) pass " + n);
@@ -156,9 +164,11 @@ public final class FilterMutectCalls extends MultiplePassVariantWalker {
         if (n < NUMBER_OF_LEARNING_PASSES) {
             filteringEngine.learnParameters();
         } else if (n == NUMBER_OF_LEARNING_PASSES) {
-            final Path filteringStats = IOUtils.getPath(
-                filteringStatsOutput != null ? filteringStatsOutput
-                    : outputVcf + FILTERING_STATS_EXTENSION);
+            // it's important for filter parameters to stay the same and only learn the threshold in the final pass so that the
+            // final threshold used corresponds exactly to the filters
+            filteringEngine.learnThreshold();
+        }else if (n == NUMBER_OF_LEARNING_PASSES + 1) {
+            final Path filteringStats = IOUtils.getPath(filteringStatsOutput != null ? filteringStatsOutput : outputVcf + FILTERING_STATS_EXTENSION);
             filteringEngine.writeFilteringStats(filteringStats);
         } else {
             throw new GATKException.ShouldNeverReachHereException("This walker should never reach (zero-indexed) pass " + n);

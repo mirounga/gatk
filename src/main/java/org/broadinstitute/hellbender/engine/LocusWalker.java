@@ -145,8 +145,7 @@ public abstract class LocusWalker extends WalkerBase {
      * Implementation of locus-based traversal.
      *
      * The default implementation iterates over all positions in the reference covered by reads (filtered and transformed)
-     * for all samples in the read groups, using the downsampling method provided by {@link #getDownsamplingInfo()}
-     * and including deletions only if {@link #includeDeletions()} returns {@code true}.
+     * for all samples in the read groups, using the downsampling method provided by {@link #getDownsamplingInfo()}.
      *
      * NOTE: You should only override {@link #traverse()} if you are writing a new walker base class in the
      * engine package that extends this class. It is not meant to be overridden by tools outside of the engine
@@ -154,25 +153,8 @@ public abstract class LocusWalker extends WalkerBase {
      */
     @Override
     public void traverse() {
-        final SAMFileHeader header = getHeaderForReads();
-        // get the samples from the read groups
-        final Set<String> samples = header.getReadGroups().stream()
-                                          .map(SAMReadGroupRecord::getSample)
-                                          .collect(Collectors.toSet());
         final CountingReadFilter countedFilter = makeReadFilter();
-        // get the filter and transformed iterator
-        final Iterator<GATKRead> readIterator = getTransformedReadStream(countedFilter).iterator();
-
-        final AlignmentContextIteratorBuilder alignmentContextIteratorBuilder = new AlignmentContextIteratorBuilder();
-        alignmentContextIteratorBuilder.setDownsamplingInfo(getDownsamplingInfo());
-        alignmentContextIteratorBuilder.setEmitEmptyLoci(emitEmptyLoci());
-        alignmentContextIteratorBuilder.setIncludeDeletions(includeDeletions());
-        alignmentContextIteratorBuilder.setKeepUniqueReadListInLibs(keepUniqueReadListInLibs());
-        alignmentContextIteratorBuilder.setIncludeNs(includeNs());
-
-        final Iterator<AlignmentContext> iterator = alignmentContextIteratorBuilder.build(
-                readIterator, header, userIntervals, getBestAvailableSequenceDictionary(),
-                hasReference());
+        final Iterator<AlignmentContext> iterator = getAlignmentContextIterator(countedFilter);
 
         // iterate over each alignment, and apply the function
         iterator.forEachRemaining(alignmentContext -> {
@@ -182,6 +164,33 @@ public abstract class LocusWalker extends WalkerBase {
                 }
             );
         logger.info(countedFilter.getSummaryLine());
+    }
+
+    /**
+     * Helper method that returns an AlignmentContext Iterator object based on the provided parameters.
+     *
+     * This is intended to make it easier for traversals that extend LocusWalker to maintain consistent configuration
+     * code as this class.
+     */
+    final Iterator<AlignmentContext> getAlignmentContextIterator(final CountingReadFilter readFilterToUse) {
+        final SAMFileHeader header = getHeaderForReads();
+        // get the samples from the read groups
+        final Set<String> samples = header.getReadGroups().stream()
+                                          .map(SAMReadGroupRecord::getSample)
+                                          .collect(Collectors.toSet());
+        // get the filter and transformed iterator
+        final Iterator<GATKRead> readIterator = getTransformedReadStream(readFilterToUse).iterator();
+
+        final AlignmentContextIteratorBuilder alignmentContextIteratorBuilder = new AlignmentContextIteratorBuilder();
+        alignmentContextIteratorBuilder.setDownsamplingInfo(getDownsamplingInfo());
+        alignmentContextIteratorBuilder.setEmitEmptyLoci(emitEmptyLoci());
+        alignmentContextIteratorBuilder.setIncludeDeletions(includeDeletions());
+        alignmentContextIteratorBuilder.setKeepUniqueReadListInLibs(keepUniqueReadListInLibs());
+        alignmentContextIteratorBuilder.setIncludeNs(includeNs());
+
+        return alignmentContextIteratorBuilder.build(
+                readIterator, header, userIntervals, getBestAvailableSequenceDictionary(),
+                hasReference());
     }
 
     /**
@@ -207,22 +216,5 @@ public abstract class LocusWalker extends WalkerBase {
     protected final void onShutdown() {
         // Overridden only to make final so that concrete tool implementations don't override
         super.onShutdown();
-    }
-
-    /**
-     *  The emit empty loci parameter comes with several pitfalls when used incorrectly.  Here we check and either give
-     *   warnings or errors.
-     */
-    protected void validateEmitEmptyLociParameters() {
-        if (emitEmptyLoci()) {
-            if (getBestAvailableSequenceDictionary() == null) {
-                throw new UserException.MissingReference("Could not create a sequence dictionary nor find a reference.  Therefore, emitting empty loci is impossible and this tool cannot be run.  The easiest fix here is to specify a reference dictionary.");
-            }
-            if (!hasReference() && !hasUserSuppliedIntervals()) {
-                logger.warn("****************************************");
-                logger.warn("* Running this tool without a reference nor intervals can yield unexpected results, since it will emit results for loci with no reads.  A sequence dictionary has been found.  The easiest way avoid this message is to specify a reference.");
-                logger.warn("****************************************");
-            }
-        }
     }
 }

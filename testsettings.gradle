@@ -9,29 +9,29 @@ tasks.withType(Test) {
      * anything else             : run the non-cloud tests
      */
     String TEST_TYPE = "$System.env.TEST_TYPE"
-
+    forkEvery 100
     useTestNG {
         if (TEST_TYPE == "cloud") {
             // run only the cloud tests
-            includeGroups 'cloud', 'bucket'
+            includeGroups "cloud", "bucket"
         } else if (TEST_TYPE == "integration"){
             include "**/*IntegrationTest.class"
-            excludeGroups "cloud", "bucket", "python", "funcotatorValidation", "variantcalling"
+            excludeGroups "cloud", "bucket", "python", "R", "funcotatorValidation", "variantcalling"
         } else if (TEST_TYPE == "unit") {
             exclude "**/*IntegrationTest.class"
-            excludeGroups "cloud", "bucket", "python", "funcotatorValidation", "variantcalling"
+            excludeGroups "cloud", "bucket", "python", "R", "funcotatorValidation", "variantcalling"
         } else if (TEST_TYPE == "variantcalling") {
             includeGroups "variantcalling"
-            excludeGroups "cloud", "bucket", "python", "funcotatorValidation"
+            excludeGroups "cloud", "bucket", "python", "R", "funcotatorValidation"
         } else if (TEST_TYPE == "spark") {
             includeGroups "spark"
-            excludeGroups "cloud", "bucket", "python", "funcotatorValidation", "variantcalling"
-        } else if (TEST_TYPE == "python") {
-            includeGroups "python"
+            excludeGroups "cloud", "bucket", "python", "R", "funcotatorValidation", "variantcalling"
+        } else if (TEST_TYPE == "conda") {
+            includeGroups "python", "R"
         } else if (TEST_TYPE == "all"){
             //include everything
         } else {
-            excludeGroups "cloud", "bucket", "python", "funcotatorValidation"
+            excludeGroups "cloud", "bucket", "python", "R", "funcotatorValidation"
         }
     }
 
@@ -45,8 +45,8 @@ tasks.withType(Test) {
     environment "SUPPRESS_GCLOUD_CREDS_WARNING","true"
 
     // set heap size for the test JVM(s)
-    minHeapSize = "1G"
-    maxHeapSize = "4G"
+    minHeapSize = "500M"
+    maxHeapSize = "3500M"
 
     if (TEST_VERBOSITY == "minimal") {
         int count = 0
