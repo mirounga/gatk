@@ -139,7 +139,7 @@ class HybridInferenceTask(InferenceTask):
     """The hybrid inference framework is applicable to PGMs with the following general structure:
 
         +--------------+           +----------------+
-        | discrete RVs + --------► + continuous RVs |
+        | discrete RVs + --------> + continuous RVs |
         +--------------+           +----------------+
 
     Note that discrete RVs do not have any continuous parents. The inference is approximately
@@ -392,6 +392,7 @@ class HybridInferenceTask(InferenceTask):
             try:
                 for _ in progress_bar:
                     loss = self.continuous_model_step_func() / self.elbo_normalization_factor
+                    assert not np.isnan(loss), "The optimization step for ELBO update returned a NaN"
                     self.i_advi += 1
 
                     try:

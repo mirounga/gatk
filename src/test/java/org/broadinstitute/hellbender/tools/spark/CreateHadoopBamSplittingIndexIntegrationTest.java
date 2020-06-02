@@ -1,7 +1,7 @@
 package org.broadinstitute.hellbender.tools.spark;
 
-import htsjdk.samtools.BAMIndex;
 import htsjdk.samtools.SBIIndex;
+import htsjdk.samtools.util.FileExtensions;
 import htsjdk.samtools.util.IOUtil;
 import org.broadinstitute.barclay.argparser.CommandLineException;
 import org.broadinstitute.hellbender.CommandLineProgramTest;
@@ -37,13 +37,13 @@ public class CreateHadoopBamSplittingIndexIntegrationTest extends CommandLinePro
         splittingIndex.delete();
         Assert.assertFalse(splittingIndex.exists());
         final ArgumentsBuilder args = getInputAndOutputArgs(bam, splittingIndex)
-           .add("--"+ CreateHadoopBamSplittingIndex.SPLITTING_INDEX_GRANULARITY_LONG_NAME).add("1");
+           .addRaw("--"+ CreateHadoopBamSplittingIndex.SPLITTING_INDEX_GRANULARITY_LONG_NAME).addRaw("1");
         this.runCommandLine(args);
         assertIndexIsNotEmpty(splittingIndex);
 
         //checked in index created with
         // ./gatk CreateHadoopBamSplittingIndex --input <filename> --splitting-index-granularity 1
-        final File expectedSplittingIndex = new File(bam.toPath() + SBIIndex.FILE_EXTENSION);
+        final File expectedSplittingIndex = new File(bam.toPath() + FileExtensions.SBI);
 
         IOUtil.assertFilesEqual(splittingIndex, expectedSplittingIndex);
     }
@@ -57,7 +57,7 @@ public class CreateHadoopBamSplittingIndexIntegrationTest extends CommandLinePro
     @Test(expectedExceptions = CommandLineException.BadArgumentValue.class)
     public void testNegativeGranularity(){
         final ArgumentsBuilder args = getInputAndOutputArgs(SORTED_BAM, getTempIndexFile())
-            .add("--"+ CreateHadoopBamSplittingIndex.SPLITTING_INDEX_GRANULARITY_LONG_NAME).add(-10);
+            .addRaw("--"+ CreateHadoopBamSplittingIndex.SPLITTING_INDEX_GRANULARITY_LONG_NAME).addRaw(-10);
         this.runCommandLine(args);
     }
 
@@ -81,7 +81,7 @@ public class CreateHadoopBamSplittingIndexIntegrationTest extends CommandLinePro
         // we're going to write an index next to it on disk, and we don't want to write into the test resources folder
         final File bamCopy = createTempFile("copy-"+bam, ".bam");
         Files.copy(bam.toPath(), bamCopy.toPath(), StandardCopyOption.REPLACE_EXISTING);
-        final File expectedIndex = new File(bamCopy.toPath() + SBIIndex.FILE_EXTENSION);
+        final File expectedIndex = new File(bamCopy.toPath() + FileExtensions.SBI);
         Assert.assertFalse(expectedIndex.exists());
         final ArgumentsBuilder args = new ArgumentsBuilder().addInput(bamCopy);
         this.runCommandLine(args);
@@ -98,7 +98,7 @@ public class CreateHadoopBamSplittingIndexIntegrationTest extends CommandLinePro
 
         final File splittingIndexWithBai = getTempIndexFile();
         final ArgumentsBuilder splittingAndBaiArgs = getInputAndOutputArgs(SORTED_BAM, splittingIndexWithBai)
-                .add("--"+ CreateHadoopBamSplittingIndex.CREATE_BAI_LONG_NAME);
+                .addRaw("--"+ CreateHadoopBamSplittingIndex.CREATE_BAI_LONG_NAME);
         this.runCommandLine(splittingAndBaiArgs);
         assertIndexIsNotEmpty(splittingIndexWithBai);
 
@@ -114,10 +114,10 @@ public class CreateHadoopBamSplittingIndexIntegrationTest extends CommandLinePro
     @Test
     public void testCreateWithBaiCreatesBai(){
         final File splittingIndex = getTempIndexFile();
-        final File baiIndex = IOUtils.replaceExtension(splittingIndex, BAMIndex.BAI_INDEX_SUFFIX);
+        final File baiIndex = IOUtils.replaceExtension(splittingIndex, FileExtensions.BAI_INDEX);
         Assert.assertFalse(baiIndex.exists());
         final ArgumentsBuilder args = getInputAndOutputArgs(SORTED_BAM, splittingIndex)
-                .add("--" + CreateHadoopBamSplittingIndex.CREATE_BAI_LONG_NAME);
+                .addRaw("--" + CreateHadoopBamSplittingIndex.CREATE_BAI_LONG_NAME);
         this.runCommandLine(args);
         Assert.assertTrue(baiIndex.exists());
     }
@@ -125,12 +125,12 @@ public class CreateHadoopBamSplittingIndexIntegrationTest extends CommandLinePro
     @Test(expectedExceptions = UserException.BadInput.class)
     public void testCantCreateBaiForUnsortedFile(){
         final ArgumentsBuilder args = getInputAndOutputArgs(UNSORTED_BAM, getTempIndexFile())
-                .add("--"+ CreateHadoopBamSplittingIndex.CREATE_BAI_LONG_NAME);
+                .addRaw("--"+ CreateHadoopBamSplittingIndex.CREATE_BAI_LONG_NAME);
         this.runCommandLine(args);
     }
 
     private static File getTempIndexFile() {
-        return createTempFile("index", "bam" + SBIIndex.FILE_EXTENSION);
+        return createTempFile("index", "bam" + FileExtensions.SBI);
     }
 
 

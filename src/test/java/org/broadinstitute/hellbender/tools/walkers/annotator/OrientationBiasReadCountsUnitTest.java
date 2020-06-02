@@ -5,7 +5,7 @@ import htsjdk.samtools.TextCigarCodec;
 import htsjdk.variant.variantcontext.*;
 import org.apache.commons.lang3.tuple.ImmutablePair;
 import org.apache.commons.lang3.tuple.Pair;
-import org.broadinstitute.hellbender.tools.exome.orientationbiasvariantfilter.OrientationBiasUtils;
+import org.broadinstitute.hellbender.tools.walkers.mutect.filtering.ReadOrientationFilter;
 import org.broadinstitute.hellbender.utils.QualityUtils;
 import org.broadinstitute.hellbender.utils.genotyper.*;
 import org.broadinstitute.hellbender.utils.read.ArtificialReadUtils;
@@ -91,15 +91,15 @@ public final class OrientationBiasReadCountsUnitTest {
         final Genotype g = new GenotypeBuilder(sample1, alleles).DP(dpDepth).make();
 
         // these reads start at 10,000 and end at 10,009
-        final Pair<VariantContext, ReadLikelihoods<Allele>> pair = makeReads(altF1R2, altF2R1, refF1R2, refF2R1, refAllele, altAllele, alleles, g);
+        final Pair<VariantContext, AlleleLikelihoods<GATKRead, Allele>> pair = makeReads(altF1R2, altF2R1, refF1R2, refF2R1, refAllele, altAllele, alleles, g);
         final VariantContext vc = pair.getLeft();
-        final ReadLikelihoods<Allele> likelihoods = pair.getRight();
+        final AlleleLikelihoods<GATKRead, Allele> likelihoods = pair.getRight();
         final GenotypeBuilder gb = new GenotypeBuilder(g);
         new OrientationBiasReadCounts().annotate(null, vc, g, gb, likelihoods);
 
-        Assert.assertEquals(OrientationBiasUtils.getF1R2(gb.make()), new int[] {refF1R2, altF1R2});
+        Assert.assertEquals(ReadOrientationFilter.getF1R2(gb.make()), new int[] {refF1R2, altF1R2});
 
-        Assert.assertEquals(OrientationBiasUtils.getF2R1(gb.make()), new int[] {refF2R1, altF2R1});
+        Assert.assertEquals(ReadOrientationFilter.getF2R1(gb.make()), new int[] {refF2R1, altF2R1});
 
         //now test a no-op
         final GenotypeBuilder gb1 = new GenotypeBuilder(g);
@@ -107,7 +107,7 @@ public final class OrientationBiasReadCountsUnitTest {
         Assert.assertFalse(gb1.make().hasAD());
     }
 
-    private Pair<VariantContext, ReadLikelihoods<Allele>> makeReads(int alt_F1R2, int alt_F2R1, int ref_F1R2, int ref_F2R1, Allele refAllele, Allele altAllele, List<Allele> alleles, Genotype g) {
+    private Pair<VariantContext, AlleleLikelihoods<GATKRead, Allele>> makeReads(int alt_F1R2, int alt_F2R1, int ref_F1R2, int ref_F2R1, Allele refAllele, Allele altAllele, List<Allele> alleles, Genotype g) {
         final List<GATKRead> altReads = Stream.concat(IntStream.range(0, alt_F1R2).mapToObj(i -> makeRead(false, true, i)),
                 IntStream.range(0, alt_F2R1).mapToObj(i -> makeRead(false, false, i))).collect(Collectors.toList());
         final List<GATKRead> refReads = Stream.concat(IntStream.range(0, ref_F1R2).mapToObj(i -> makeRead(true, true, i)),
@@ -115,7 +115,7 @@ public final class OrientationBiasReadCountsUnitTest {
         final GATKRead badRead = ArtificialReadUtils.createArtificialRead(TextCigarCodec.decode(10 + "M"));
         badRead.setMappingQuality(20);
 
-        final ReadLikelihoods<Allele> likelihoods =
+        final AlleleLikelihoods<GATKRead, Allele> likelihoods =
                 ArtificialAnnotationUtils.makeLikelihoods(sample1, refReads, altReads, Arrays.asList(badRead), -100.0, -10.0, -1.1, refAllele, altAllele);
 
         return ImmutablePair.of(new VariantContextBuilder("test", "20", 10003, 10003, alleles).genotypes(Arrays.asList(g)).make(),

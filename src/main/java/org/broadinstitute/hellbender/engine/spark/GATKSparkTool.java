@@ -1,12 +1,12 @@
 package org.broadinstitute.hellbender.engine.spark;
 
-import com.google.common.annotations.VisibleForTesting;
 import htsjdk.samtools.SAMFileHeader;
 import htsjdk.samtools.SAMSequenceDictionary;
+import htsjdk.samtools.SBIIndexWriter;
 import htsjdk.samtools.SamFileHeaderMerger;
 import htsjdk.samtools.reference.ReferenceSequenceFileFactory;
+import htsjdk.samtools.util.FileExtensions;
 import htsjdk.samtools.util.GZIIndex;
-import htsjdk.samtools.util.IOUtil;
 import htsjdk.variant.vcf.VCFHeaderLine;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
@@ -28,6 +28,7 @@ import org.broadinstitute.hellbender.engine.spark.datasources.ReadsSparkSource;
 import org.broadinstitute.hellbender.engine.spark.datasources.ReferenceMultiSparkSource;
 import org.broadinstitute.hellbender.engine.spark.datasources.ReferenceWindowFunctions;
 import org.broadinstitute.hellbender.exceptions.GATKException;
+import org.broadinstitute.hellbender.engine.GATKPathSpecifier;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.tools.walkers.annotator.Annotation;
 import org.broadinstitute.hellbender.utils.*;
@@ -80,6 +81,8 @@ public abstract class GATKSparkTool extends SparkCommandLineProgram {
     public static final String SHARDED_OUTPUT_LONG_NAME = "sharded-output";
     public static final String OUTPUT_SHARD_DIR_LONG_NAME = "output-shard-tmp-dir";
     public static final String CREATE_OUTPUT_BAM_SPLITTING_INDEX_LONG_NAME = "create-output-bam-splitting-index";
+    public static final String USE_NIO = "use-nio";
+    public static final String SPLITTING_INDEX_GRANULARITY = "splitting-index-granularity";
 
     @ArgumentCollection
     public final ReferenceInputArgumentCollection referenceArguments = requiresReference() ? new RequiredReferenceInputArgumentCollection() :  new OptionalReferenceInputArgumentCollection();
@@ -97,6 +100,11 @@ public abstract class GATKSparkTool extends SparkCommandLineProgram {
             optional = true)
     protected long bamPartitionSplitSize = 0;
 
+    @Argument(doc = "Whether to use NIO or the Hadoop filesystem (default) for reading files. " +
+            "(Note that the Hadoop filesystem is always used for writing files.)",
+            fullName = USE_NIO,
+            optional = true)
+    protected boolean useNio = false;
 
     @ArgumentCollection
     protected SequenceDictionaryValidationArgumentCollection sequenceDictionaryValidationArguments = getSequenceDictionaryValidationArgumentCollection();
@@ -130,6 +138,12 @@ public abstract class GATKSparkTool extends SparkCommandLineProgram {
             doc = "If true, create a BAM splitting index (SBI) when writing a coordinate-sorted BAM file.", optional = true, common = true)
     public boolean createOutputBamSplittingIndex = ConfigFactory.getInstance().getGATKConfig().createOutputBamIndex();
 
+    @Argument(fullName = SPLITTING_INDEX_GRANULARITY,
+             doc = "Granularity to use when writing a splitting index, one entry will be put into the index every n reads where n is this granularity value. Smaller granularity results in a larger index with more available split points.",
+             optional = true, common = true,
+             minValue = 1)
+    public long splittingIndexGranularity = SBIIndexWriter.DEFAULT_GRANULARITY;
+
     @Argument(fullName = StandardArgumentDefinitions.CREATE_OUTPUT_VARIANT_INDEX_LONG_NAME,
             shortName = StandardArgumentDefinitions.CREATE_OUTPUT_VARIANT_INDEX_SHORT_NAME,
             doc = "If true, create a VCF index when writing a coordinate-sorted VCF file.", optional = true, common = true)
@@ -137,7 +151,7 @@ public abstract class GATKSparkTool extends SparkCommandLineProgram {
 
     private ReadsSparkSource readsSource;
     private SAMFileHeader readsHeader;
-    private LinkedHashMap<String, SAMFileHeader> readInputs;
+    private LinkedHashMap<GATKPathSpecifier, SAMFileHeader> readInputs;
     private ReferenceMultiSparkSource referenceSource;
     private SAMSequenceDictionary referenceDictionary;
     private List<SimpleInterval> userIntervals;
@@ -309,32 +323,31 @@ public abstract class GATKSparkTool extends SparkCommandLineProgram {
 
         JavaRDD<GATKRead> output = null;
         ReadsSparkSource source = readsSource;
-        for (String input : readInputs.keySet()) {
+        for (final GATKPathSpecifier inputPathSpecifier : readInputs.keySet()) {
             if (output == null) {
-                output = getGatkReadJavaRDD(traversalParameters, source, input);
+                output = getGatkReadJavaRDD(traversalParameters, source, inputPathSpecifier);
             } else {
-                output = output.union(getGatkReadJavaRDD(traversalParameters, source, input));
+                output = output.union(getGatkReadJavaRDD(traversalParameters, source, inputPathSpecifier));
             }
         }
         return output;
     }
 
-    protected JavaRDD<GATKRead> getGatkReadJavaRDD(TraversalParameters traversalParameters, ReadsSparkSource source, String input) {
+    protected JavaRDD<GATKRead> getGatkReadJavaRDD(TraversalParameters traversalParameters, ReadsSparkSource source, GATKPathSpecifier inputSpecifier) {
         JavaRDD<GATKRead> output;
         // TODO: This if statement is a temporary hack until #959 gets resolve
-        if (input.endsWith(".adam")) {
+        if (inputSpecifier.hasExtension(".adam")) {
             try {
-                output = source.getADAMReads(input, traversalParameters, getHeaderForReads());
+                output = source.getADAMReads(inputSpecifier, traversalParameters, getHeaderForReads());
             } catch (IOException e) {
-                throw new UserException("Failed to read ADAM file " + input, e);
+                throw new UserException("Failed to read ADAM file " + inputSpecifier, e);
             }
 
         } else {
             if (hasCramInput() && !hasReference()){
-                throw new UserException.MissingReference("A reference file is required when using CRAM files.");
+                throw UserException.MISSING_REFERENCE_FOR_CRAM;
             }
-            final String refPath = hasReference() ?  referenceArguments.getReferenceFileName() : null;
-            output = source.getParallelReads(input, refPath, traversalParameters, bamPartitionSplitSize);
+            output = source.getParallelReads(inputSpecifier, referenceArguments.getReferenceSpecifier(), traversalParameters, bamPartitionSplitSize, useNio);
         }
         return output;
     }
@@ -359,9 +372,9 @@ public abstract class GATKSparkTool extends SparkCommandLineProgram {
     public void writeReads(final JavaSparkContext ctx, final String outputFile, JavaRDD<GATKRead> reads, SAMFileHeader header, final boolean sortReadsToHeader) {
         try {
             ReadsSparkSink.writeReads(ctx, outputFile,
-                    hasReference() ? referenceArguments.getReferencePath().toAbsolutePath().toUri().toString() : null,
+                    hasReference() ? referenceArguments.getReferenceSpecifier() : null,
                     reads, header, shardedOutput ? ReadsWriteFormat.SHARDED : ReadsWriteFormat.SINGLE,
-                    getRecommendedNumReducers(), shardedPartsDir, createOutputBamIndex, createOutputBamSplittingIndex, sortReadsToHeader);
+                    getRecommendedNumReducers(), shardedPartsDir, createOutputBamIndex, createOutputBamSplittingIndex, sortReadsToHeader, splittingIndexGranularity);
         } catch (IOException e) {
             throw new UserException.CouldNotCreateOutputFile(outputFile,"writing failed", e);
         }
@@ -401,7 +414,7 @@ public abstract class GATKSparkTool extends SparkCommandLineProgram {
      * Helper method that simply returns a boolean regarding whether the input has CRAM files or not.
      */
     private boolean hasCramInput() {
-        return readArguments.getReadFiles().stream().anyMatch(IOUtils::isCramFile);
+        return readArguments.getReadPathSpecifiers().stream().anyMatch(GATKPathSpecifier::isCram);
     }
 
     /**
@@ -491,20 +504,25 @@ public abstract class GATKSparkTool extends SparkCommandLineProgram {
     }
 
     /**
-     * Returns the name of the source of reads data. It can be a file name or URL.
+     * Returns the name of the source of reads data. It can be a file name or URL. Throws if the tool has more
+     * than one source.
      */
-    protected List<String> getReadSourceName(){
+    protected String getReadSourceName(){
         if (readInputs.size() > 1) {
-            throw new GATKException("Multiple ReadsDataSources specificed but a single source requested by the tool");
+            throw new GATKException("Multiple ReadsDataSources specified but a single source requested by the tool");
         }
-        return new ArrayList<>(readInputs.keySet());
+        return readInputs.keySet().stream().findFirst().get().toString();
     }
 
     /**
-     * Returns a map of read input to header.
+     * Returns the header for a given input.
      */
-    protected LinkedHashMap<String, SAMFileHeader> getReadSourceHeaderMap(){
-        return readInputs;
+    protected SAMFileHeader getHeaderForReadsInput(final GATKPathSpecifier inputPathSpecifier){
+        final SAMFileHeader header = readInputs.get(inputPathSpecifier);
+        if (header == null) {
+            throw new GATKException(String.format("Input %s not present in tool inputs", inputPathSpecifier.getRawInputString()));
+        }
+        return header;
     }
 
     /**
@@ -543,19 +561,18 @@ public abstract class GATKSparkTool extends SparkCommandLineProgram {
      * Does nothing if no reads inputs are present.
      */
     private void initializeReads(final JavaSparkContext sparkContext) {
-        if ( readArguments.getReadFilesNames().isEmpty() ) {
+        if ( readArguments.getReadPathSpecifiers().isEmpty() ) {
             return;
         }
 
-        if (getReadInputMergingPolicy() == ReadInputMergingPolicy.doNotMerge && readArguments.getReadFilesNames().size() != 1 ) {
+        if (getReadInputMergingPolicy() == ReadInputMergingPolicy.doNotMerge && readArguments.getReadPathSpecifiers().size() != 1 ) {
             throw new UserException("Sorry, we only support a single reads input for for this spark tool.");
         }
 
         readInputs = new LinkedHashMap<>();
         readsSource = new ReadsSparkSource(sparkContext, readArguments.getReadValidationStringency());
-        for (String input : readArguments.getReadFilesNames()) {
-            readInputs.put(input, readsSource.getHeader(
-                    input, hasReference() ?  referenceArguments.getReferenceFileName() : null));
+        for (final GATKPathSpecifier input : readArguments.getReadPathSpecifiers()) {
+            readInputs.put(input, readsSource.getHeader(input, referenceArguments.getReferenceSpecifier()));
         }
         readsHeader = createHeaderMerger().getMergedHeader();
     }
@@ -581,12 +598,12 @@ public abstract class GATKSparkTool extends SparkCommandLineProgram {
      * Initializes our reference source. Does nothing if no reference was specified.
      */
     private void initializeReference() {
-        final String referenceURL = referenceArguments.getReferenceFileName();
-        if ( referenceURL != null ) {
-            referenceSource = new ReferenceMultiSparkSource(referenceURL, getReferenceWindowFunction());
+        final GATKPathSpecifier referencePathSpecifier = referenceArguments.getReferenceSpecifier();
+        if ( referencePathSpecifier != null ) {
+            referenceSource = new ReferenceMultiSparkSource(referencePathSpecifier, getReferenceWindowFunction());
             referenceDictionary = referenceSource.getReferenceSequenceDictionary(readsHeader != null ? readsHeader.getSequenceDictionary() : null);
             if (referenceDictionary == null) {
-                throw new UserException.MissingReferenceDictFile(referenceURL);
+                throw new UserException.MissingReferenceDictFile(referencePathSpecifier.getRawInputString());
             }
         }
     }
@@ -660,19 +677,18 @@ public abstract class GATKSparkTool extends SparkCommandLineProgram {
      * Register the reference file (and associated dictionary and index) to be downloaded to every node using Spark's
      * copying mechanism ({@code SparkContext#addFile()}).
      * @param ctx the Spark context
-     * @param referenceFile the reference file, can be a local file or a remote path
+     * @param referencePath the reference file, can be a local file or a remote path
      * @return the reference file name; the absolute path of the file can be found by a Spark task using {@code SparkFiles#get()}
      */
-    protected static String addReferenceFilesForSpark(JavaSparkContext ctx, String referenceFile) {
-        if (referenceFile == null) {
+    protected static String addReferenceFilesForSpark(JavaSparkContext ctx, Path referencePath) {
+        if (referencePath == null) {
             return null;
         }
-        Path referencePath = IOUtils.getPath(referenceFile);
         Path indexPath = ReferenceSequenceFileFactory.getFastaIndexFileName(referencePath);
         Path dictPath = ReferenceSequenceFileFactory.getDefaultDictionaryForReferenceSequence(referencePath);
         Path gziPath = GZIIndex.resolveIndexNameForBgzipFile(referencePath);
 
-        ctx.addFile(referenceFile);
+        ctx.addFile(referencePath.toUri().toString());
         if (Files.exists(indexPath)) {
             ctx.addFile(indexPath.toUri().toString());
         }
@@ -696,10 +712,10 @@ public abstract class GATKSparkTool extends SparkCommandLineProgram {
     protected static List<String> addVCFsForSpark(JavaSparkContext ctx, List<String> vcfFileNames) {
         for (String vcfFileName : vcfFileNames) {
             String vcfIndexFileName;
-            if (vcfFileName.endsWith(IOUtil.VCF_FILE_EXTENSION)) {
-                vcfIndexFileName = vcfFileName + IOUtil.VCF_INDEX_EXTENSION;
-            } else if (vcfFileName.endsWith(IOUtil.COMPRESSED_VCF_FILE_EXTENSION)) {
-                vcfIndexFileName = vcfFileName + IOUtil.COMPRESSED_VCF_INDEX_EXTENSION;
+            if (vcfFileName.endsWith(FileExtensions.VCF)) {
+                vcfIndexFileName = vcfFileName + FileExtensions.VCF_INDEX;
+            } else if (vcfFileName.endsWith(FileExtensions.COMPRESSED_VCF)) {
+                vcfIndexFileName = vcfFileName + FileExtensions.COMPRESSED_VCF_INDEX;
             } else {
                 throw new IllegalArgumentException("Unrecognized known sites file extension. Must be .vcf or .vcf.gz");
             }

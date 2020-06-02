@@ -1,8 +1,11 @@
 import os
 
 # set theano flags
-os.environ["THEANO_FLAGS"] = "device=cpu,floatX=float64,optimizer=fast_run,compute_test_value=ignore," + \
-                             "openmp=true,blas.ldflags=-lmkl_rt,openmp_elemwise_minsize=10"
+user_theano_flags = os.environ.get("THEANO_FLAGS")
+default_theano_flags = "device=cpu,floatX=float64,optimizer=fast_run,compute_test_value=ignore," + \
+                       "openmp=true,blas.ldflags=-lmkl_rt,openmp_elemwise_minsize=10"
+theano_flags = default_theano_flags + ("" if user_theano_flags is None else "," + user_theano_flags)
+os.environ["THEANO_FLAGS"] = theano_flags
 
 import logging
 import argparse
@@ -148,8 +151,16 @@ if __name__ == "__main__":
     args = parser.parse_args()
     gcnvkernel.cli_commons.set_logging_config_from_args(args)
 
+    logger.info("THEANO_FLAGS environment variable has been set to: {theano_flags}".format(theano_flags=theano_flags))
+
     # check gcnvkernel version in the input model path
     gcnvkernel.io_commons.check_gcnvkernel_version_from_path(args.input_model_path)
+
+    # copy the intervals to the calls path
+    # (we do this early to avoid inadvertent cleanup of temporary files)
+    gcnvkernel.io_commons.assert_output_path_writable(args.output_calls_path)
+    shutil.copy(os.path.join(args.input_model_path, gcnvkernel.io_consts.default_interval_list_filename),
+                os.path.join(args.output_calls_path, gcnvkernel.io_consts.default_interval_list_filename))
 
     # load modeling interval list from the model
     logging.info("Loading modeling interval list from the provided model...")
@@ -210,10 +221,6 @@ if __name__ == "__main__":
     gcnvkernel.io_denoising_calling.SampleDenoisingAndCallingPosteriorsWriter(
         denoising_config, calling_config, shared_workspace, task.continuous_model, task.continuous_model_approx,
         args.output_calls_path)()
-
-    # save a copy of targets in the calls path
-    shutil.copy(os.path.join(args.input_model_path, gcnvkernel.io_consts.default_interval_list_filename),
-                os.path.join(args.output_calls_path, gcnvkernel.io_consts.default_interval_list_filename))
 
     # save optimizer state
     if hasattr(args, 'output_opt_path'):

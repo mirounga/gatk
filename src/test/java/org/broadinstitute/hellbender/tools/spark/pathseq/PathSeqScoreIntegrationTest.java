@@ -43,11 +43,11 @@ public class PathSeqScoreIntegrationTest extends CommandLineProgramTest {
             final PSPathogenTaxonScore score = new PSPathogenTaxonScore();
             final String taxonId = tok[0];
             score.setKingdomTaxonId(Math.abs(tok[4].hashCode()));
-            score.addSelfScore(new Double(tok[5]));
-            score.addScoreNormalized(new Double(tok[6]));
-            score.addTotalReads(new Integer(tok[7]));
-            score.addUnambiguousReads(new Integer(tok[8]));
-            score.setReferenceLength(new Long(tok[9]));
+            score.addSelfScore(Double.parseDouble(tok[5]));
+            score.addScoreNormalized(Double.parseDouble(tok[6]));
+            score.addTotalReads(Integer.parseInt(tok[7]));
+            score.addUnambiguousReads(Integer.parseInt((tok[8])));
+            score.setReferenceLength(Long.parseLong(tok[9]));
             Assert.assertFalse(scores.containsKey(taxonId), "Found more than one entry for taxon ID " + taxonId);
             scores.put(taxonId, score);
         }
@@ -101,17 +101,17 @@ public class PathSeqScoreIntegrationTest extends CommandLineProgramTest {
         final File outputMetricsFile = createTempFile("score", ".metrics");
         final ArgumentsBuilder args = new ArgumentsBuilder();
         if (inputPairedBamFile != null) {
-            args.addFileArgument(PathSeqScoreSpark.PAIRED_INPUT_LONG_NAME, inputPairedBamFile);
+            args.add(PathSeqScoreSpark.PAIRED_INPUT_LONG_NAME, inputPairedBamFile);
         }
         if (inputUnpairedBamFile != null) {
-            args.addFileArgument(PathSeqScoreSpark.UNPAIRED_INPUT_LONG_NAME, inputUnpairedBamFile);
+            args.add(PathSeqScoreSpark.UNPAIRED_INPUT_LONG_NAME, inputUnpairedBamFile);
         }
-        args.addFileArgument(PSScoreArgumentCollection.SCORE_METRICS_FILE_LONG_NAME, outputMetricsFile);
-        args.addFileArgument(PSScoreArgumentCollection.TAXONOMIC_DATABASE_LONG_NAME, taxFile);
-        args.addFileArgument(PSScoreArgumentCollection.SCORES_OUTPUT_LONG_NAME, outputScoresFile);
+        args.add(PSScoreArgumentCollection.SCORE_METRICS_FILE_LONG_NAME, outputMetricsFile);
+        args.add(PSScoreArgumentCollection.TAXONOMIC_DATABASE_LONG_NAME, taxFile);
+        args.add(PSScoreArgumentCollection.SCORES_OUTPUT_LONG_NAME, outputScoresFile);
         args.addOutput(outputBamFile);
-        args.addBooleanArgument(PSScoreArgumentCollection.DIVIDE_BY_GENOME_LENGTH_LONG_NAME, divideByGenomeLength);
-        args.addBooleanArgument(PSScoreArgumentCollection.NOT_NORMALIZED_BY_KINGDOM_LONG_NAME, notNormalizedByKingdom);
+        args.add(PSScoreArgumentCollection.DIVIDE_BY_GENOME_LENGTH_LONG_NAME, divideByGenomeLength);
+        args.add(PSScoreArgumentCollection.NOT_NORMALIZED_BY_KINGDOM_LONG_NAME, notNormalizedByKingdom);
 
         this.runCommandLine(args.getArgsArray());
 

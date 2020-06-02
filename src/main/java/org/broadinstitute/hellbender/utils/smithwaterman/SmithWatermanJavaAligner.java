@@ -1,5 +1,6 @@
 package org.broadinstitute.hellbender.utils.smithwaterman;
 
+import com.google.common.collect.Lists;
 import htsjdk.samtools.Cigar;
 import htsjdk.samtools.CigarElement;
 import htsjdk.samtools.CigarOperator;
@@ -7,6 +8,7 @@ import org.broadinstitute.gatk.nativebindings.smithwaterman.SWOverhangStrategy;
 import org.broadinstitute.gatk.nativebindings.smithwaterman.SWParameters;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.read.AlignmentUtils;
+import org.broadinstitute.hellbender.utils.read.CigarBuilder;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -58,6 +60,8 @@ public final class SmithWatermanJavaAligner implements SmithWatermanAligner {
     public SmithWatermanAlignment align(final byte[] reference, final byte[] alternate, final SWParameters parameters, final SWOverhangStrategy overhangStrategy) {
         long startTime = System.nanoTime();
 
+        new String(reference);
+
         if ( reference == null || reference.length == 0 || alternate == null || alternate.length == 0 ) {
             throw new IllegalArgumentException("Non-null, non-empty sequences are required for the Smith-Waterman calculation");
         }
@@ -76,9 +80,7 @@ public final class SmithWatermanJavaAligner implements SmithWatermanAligner {
 
         if (matchIndex != -1) {
             // generate the alignment result when the substring search was successful
-            final List<CigarElement> lce = new ArrayList<>(alternate.length);
-            lce.add(makeElement(State.MATCH, alternate.length));
-            alignmentResult = new SWPairwiseAlignmentResult(AlignmentUtils.consolidateCigar(new Cigar(lce)), matchIndex);
+            alignmentResult = new SWPairwiseAlignmentResult(new Cigar(Collections.singletonList(new CigarElement(alternate.length, CigarOperator.M))), matchIndex);
         }
         else {
             // run full Smith-Waterman
@@ -333,7 +335,9 @@ public final class SmithWatermanJavaAligner implements SmithWatermanAligner {
             if ( new_state == state ) segment_length+=step_length;
             else {
                 // state changed, lets emit previous segment, whatever it was (Insertion Deletion, or (Mis)Match).
-                lce.add(makeElement(state, segment_length));
+                if (segment_length > 0) {
+                    lce.add(makeElement(state, segment_length));
+                }
                 segment_length = step_length;
                 state = new_state;
             }
@@ -371,8 +375,7 @@ public final class SmithWatermanJavaAligner implements SmithWatermanAligner {
             alignment_offset = 0;
         }
 
-        Collections.reverse(lce);
-        return new SWPairwiseAlignmentResult(AlignmentUtils.consolidateCigar(new Cigar(lce)), alignment_offset);
+        return new SWPairwiseAlignmentResult(new Cigar(Lists.reverse(lce)), alignment_offset);
     }
 
     private static CigarElement makeElement(final State state, final int length) {

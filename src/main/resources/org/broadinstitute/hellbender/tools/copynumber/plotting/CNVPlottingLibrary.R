@@ -3,7 +3,7 @@ ReadTSV = function(tsv_file) {
     # however, the standard 'fread("grep ...")' causes issues with the default Docker container, so we use a temporary file.
     # See https://github.com/broadinstitute/gatk/issues/4140.
     temp_file = tempfile()
-    system(sprintf("grep -v ^@ %s > %s", tsv_file, temp_file))
+    system(sprintf('grep -v ^@ "%s" > %s', tsv_file, temp_file))
     return(suppressWarnings(fread(temp_file, sep="\t", stringsAsFactors=FALSE, header=TRUE, check.names=FALSE, data.table=FALSE, showProgress=FALSE, verbose=FALSE)))
 }
 
@@ -28,9 +28,9 @@ SetUpPlot = function(sample_name, y.lab, y.min, y.max, x.lab, contig_names, cont
     }
 }
 
-PlotCopyRatios = function(copy_ratios_df, color, contig_names, contig_starts) {
+PlotCopyRatios = function(copy_ratios_df, color, contig_names, contig_starts, point_size) {
     genomic_coordinates = contig_starts[match(copy_ratios_df[["CONTIG"]], contig_names)] + copy_ratios_df[["MIDDLE"]]
-    points(x=genomic_coordinates, y=copy_ratios_df[["COPY_RATIO"]], col=color, pch=".", cex=0.2)
+    points(x=genomic_coordinates, y=copy_ratios_df[["COPY_RATIO"]], col=color, pch=".", cex=point_size)
 }
 
 PlotCopyRatiosWithModeledSegments = function(denoised_copy_ratios_df, modeled_segments_df, contig_names, contig_starts, point_size=0.2) {

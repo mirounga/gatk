@@ -1,11 +1,12 @@
 
 package org.broadinstitute.hellbender.tools.walkers.haplotypecaller;
 
+import htsjdk.samtools.util.Locatable;
 import htsjdk.variant.variantcontext.VariantContext;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.broadinstitute.hellbender.engine.AssemblyRegion;
-import org.broadinstitute.hellbender.tools.walkers.haplotypecaller.readthreading.ReadThreadingGraph;
+import org.broadinstitute.hellbender.tools.walkers.haplotypecaller.readthreading.AbstractReadThreadingGraph;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.haplotype.EventMap;
@@ -40,7 +41,6 @@ public final class AssemblyResultSet {
     private SimpleInterval paddedReferenceLoc;
     private boolean variationPresent;
     private Haplotype refHaplotype;
-    private boolean wasTrimmed = false;
     private final SortedSet<Integer>  kmerSizes;
     private SortedSet<VariantContext> variationEvents;
     private OptionalInt lastMaxMnpDistanceUsed = OptionalInt.empty();
@@ -70,7 +70,7 @@ public final class AssemblyResultSet {
      */
     public AssemblyResultSet trimTo(final AssemblyRegion trimmedAssemblyRegion) {
 
-        final Map<Haplotype,Haplotype> originalByTrimmedHaplotypes = calculateOriginalByTrimmedHaplotypes(trimmedAssemblyRegion);
+        final Map<Haplotype,Haplotype> originalByTrimmedHaplotypes = calculateOriginalByTrimmedHaplotypes(trimmedAssemblyRegion.getPaddedSpan());
         if (refHaplotype == null) {
             throw new IllegalStateException("refHaplotype is null");
         }
@@ -97,11 +97,10 @@ public final class AssemblyResultSet {
         if (result.refHaplotype == null) {
             throw new IllegalStateException("missing reference haplotype in the trimmed set");
         }
-        result.wasTrimmed = true;
         return result;
     }
 
-    private Map<Haplotype, Haplotype> calculateOriginalByTrimmedHaplotypes(final AssemblyRegion trimmedAssemblyRegion) {
+    private Map<Haplotype, Haplotype> calculateOriginalByTrimmedHaplotypes(final Locatable span) {
         if ( debug ) {
             logger.info("Trimming active region " + getRegionForGenotyping() + " with " + getHaplotypeCount() + " haplotypes");
         }
@@ -109,7 +108,7 @@ public final class AssemblyResultSet {
         final List<Haplotype> haplotypeList = getHaplotypeList();
 
         // trim down the haplotypes
-        final Map<Haplotype, Haplotype> originalByTrimmedHaplotypes = trimDownHaplotypes(trimmedAssemblyRegion, haplotypeList);
+        final Map<Haplotype, Haplotype> originalByTrimmedHaplotypes = trimDownHaplotypes(span, haplotypeList);
 
         // create the final list of trimmed haplotypes
         final List<Haplotype> trimmedHaplotypes = new ArrayList<>(originalByTrimmedHaplotypes.keySet());
@@ -119,8 +118,7 @@ public final class AssemblyResultSet {
         final Map<Haplotype, Haplotype> sortedOriginalByTrimmedHaplotypes = mapOriginalToTrimmed(originalByTrimmedHaplotypes, trimmedHaplotypes);
 
         if ( debug ) {
-            logger.info("Trimmed region to " + trimmedAssemblyRegion.getSpan() + " size " +
-                    trimmedAssemblyRegion.getSpan().size() + " reduced number of haplotypes from " +
+            logger.info("Trimmed region to " + span + " and reduced number of haplotypes from " +
                     haplotypeList.size() + " to only " + trimmedHaplotypes.size());
 
             for (final Haplotype remaining : trimmedHaplotypes) {
@@ -130,11 +128,11 @@ public final class AssemblyResultSet {
         return sortedOriginalByTrimmedHaplotypes;
     }
 
-    private Map<Haplotype, Haplotype> trimDownHaplotypes(final AssemblyRegion trimmedAssemblyRegion, final List<Haplotype> haplotypeList) {
+    private Map<Haplotype, Haplotype> trimDownHaplotypes(final Locatable span, final List<Haplotype> haplotypeList) {
         final Map<Haplotype,Haplotype> originalByTrimmedHaplotypes = new HashMap<>();
 
         for ( final Haplotype h : haplotypeList ) {
-            final Haplotype trimmed = h.trim(trimmedAssemblyRegion.getExtendedSpan());
+            final Haplotype trimmed = h.trim(span);
 
             if ( trimmed != null ) {
                 if (originalByTrimmedHaplotypes.containsKey(trimmed)) {
@@ -149,8 +147,7 @@ public final class AssemblyResultSet {
                 throw new IllegalStateException("trimming eliminates the reference haplotype");
             } else if ( debug ) {
                 logger.info("Throwing out haplotype " + h + " with cigar " + h.getCigar() +
-                        " because it starts with or ends with an insertion or deletion when trimmed to " +
-                        trimmedAssemblyRegion.getExtendedSpan());
+                        " because it starts with or ends with an insertion or deletion when trimmed to " + span);
             }
         }
         return originalByTrimmedHaplotypes;
@@ -197,14 +194,14 @@ public final class AssemblyResultSet {
             return;
         }
         pw.println("Active Region " + regionForGenotyping.getSpan());
-        pw.println("Extended Act Region " + getRegionForGenotyping().getExtendedSpan());
+        pw.println("Extended Act Region " + getRegionForGenotyping().getPaddedSpan());
         pw.println("Ref haplotype coords " + getHaplotypeList().get(0).getGenomeLocation());
         pw.println("Haplotype count " + haplotypes.size());
         final Map<Integer,Integer> kmerSizeToCount = new HashMap<>();
 
         for (final Map.Entry<Haplotype,AssemblyResult> e : assemblyResultByHaplotype.entrySet()) {
             final AssemblyResult as = e.getValue();
-            final int kmerSize = as.getGraph().getKmerSize();
+            final int kmerSize = as.getKmerSize();
             if (kmerSizeToCount.containsKey(kmerSize)) {
                 kmerSizeToCount.put(kmerSize,kmerSizeToCount.get(kmerSize) + 1);
             } else {
@@ -433,21 +430,12 @@ public final class AssemblyResultSet {
      *
      * @return {@code null} if there is no read-threading-graph amongst assembly results with that kmerSize.
      */
-    public ReadThreadingGraph getUniqueReadThreadingGraph(final int kmerSize) {
+    public AbstractReadThreadingGraph getUniqueReadThreadingGraph(final int kmerSize) {
         final AssemblyResult assemblyResult = assemblyResultByKmerSize.get(kmerSize);
         if (assemblyResult == null) {
             return null;
         }
         return assemblyResult.getThreadingGraph();
-    }
-
-    /**
-     * Checks whether this assembly result set was trimmed.
-     *
-     * @return {@code true} iff this assembly result set was trimmed.
-     */
-    public boolean wasTrimmed() {
-        return wasTrimmed;
     }
 
     /**
@@ -525,9 +513,25 @@ public final class AssemblyResultSet {
     public void regenerateVariationEvents(int maxMnpDistance) {
         final List<Haplotype> haplotypeList = getHaplotypeList();
         EventMap.buildEventMapsForHaplotypes(haplotypeList, fullReferenceWithPadding, paddedReferenceLoc, debug, maxMnpDistance);
-        variationEvents = EventMap.getAllVariantContexts(haplotypeList);
+        variationEvents = getAllVariantContexts(haplotypeList);
         lastMaxMnpDistanceUsed = OptionalInt.of(maxMnpDistance);
         variationPresent = haplotypeList.stream().anyMatch(Haplotype::isNonReference);
+    }
+
+    /**
+     * Get all of the VariantContexts in the event maps for all haplotypes, sorted by their start position
+     * @param haplotypes the set of haplotypes to grab the VCs from
+     * @return a sorted set of variant contexts
+     */
+    private static SortedSet<VariantContext> getAllVariantContexts( final List<Haplotype> haplotypes ) {
+        // Using the cigar from each called haplotype figure out what events need to be written out in a VCF file
+        final TreeSet<VariantContext> vcs = new TreeSet<>(Comparator.comparingInt(VariantContext::getStart));
+
+        for( final Haplotype h : haplotypes ) {
+            vcs.addAll(h.getEventMap().getVariantContexts());
+        }
+
+        return vcs;
     }
 
     public void setDebug(boolean debug) {

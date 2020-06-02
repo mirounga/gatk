@@ -37,7 +37,7 @@ public final class ValidateVariantsIntegrationTest extends CommandLineProgramTes
     }
 
     private static String excludeValidationTypesButString(ValidateVariants.ValidationType type) {
-        if (type.equals(ALL)) {
+        if (type == null || type.equals(ALL)) {
             return "";
         }
         final StringBuilder sbuilder = new StringBuilder();
@@ -67,6 +67,55 @@ public final class ValidateVariantsIntegrationTest extends CommandLineProgramTes
         );
 
         spec.executeTest("test good file", this);
+    }
+
+    //Test 1 - default (no exclusion -> ALL), no ref, no dbsnp
+    @Test
+    public void testBadEverythingDefaultNoRefNoDBNSP() throws IOException {
+        IntegrationTestSpec spec = new IntegrationTestSpec(
+                baseTestStringWithoutReference(false, "validationExampleBad.vcf", false, ALL),
+                0,
+                UserException.FailsStrictValidation.class
+        );
+
+        spec.executeTest("test that validation occurs w/o dbsnp or ref files", this);
+    }
+
+
+    //Test 2 - default, no ref, yes dbsnp
+    @Test
+    public void testBadEverythingDefaultNoRefYesDBSNP() throws IOException {
+        IntegrationTestSpec spec = new IntegrationTestSpec(
+                baseTestStringWithoutReference(false, "validationExampleBad.vcf", false, ALL) + " --dbsnp " + hg19_chr1_1M_dbSNP_modified,
+                0,
+                UserException.FailsStrictValidation.class
+        );
+
+        spec.executeTest("test that validation occurs w/o ref, w/ dbsnp", this);
+    }
+
+    //Test 3 - default, yes ref, no dbsnp
+    @Test
+    public void testBadEverythingDefaultYesRefNoDBSNP() throws IOException {
+        IntegrationTestSpec spec = new IntegrationTestSpec(
+                baseTestString(false, "validationExampleBad.vcf", false, ALL),
+                0,
+                UserException.FailsStrictValidation.class
+        );
+
+        spec.executeTest("test that validation occurs w/ ref, w/o dbsnp", this);
+    }
+
+    //Test 4 - default, yes ref, yes dbsnp
+    @Test
+    public void testBadEverythingDefaultYesRefYesDBSNP() throws IOException {
+        IntegrationTestSpec spec = new IntegrationTestSpec(
+                baseTestString(false, "validationExampleBad.vcf", false, ALL)  + " --dbsnp " + hg19_chr1_1M_dbSNP_modified,
+                0,
+                UserException.FailsStrictValidation.class
+        );
+
+        spec.executeTest("test that validation occurs w/ ref, w/ dbsnp", this);
     }
 
     @Test
@@ -104,13 +153,22 @@ public final class ValidateVariantsIntegrationTest extends CommandLineProgramTes
 
     @Test
     public void testBadChrCount1() throws IOException {
-        IntegrationTestSpec spec = new IntegrationTestSpec(
+        final IntegrationTestSpec spec = new IntegrationTestSpec(
                 baseTestString(false, "validationExampleBad.vcf", false, CHR_COUNTS),
                 0,
                 UserException.FailsStrictValidation.class
         );
 
         spec.executeTest("test bad chr counts #1", this);
+
+        //test with no reference and no validations specified
+        final IntegrationTestSpec spec2 = new IntegrationTestSpec(
+                baseTestStringWithoutReference(false, "validationExampleBad.vcf", false, null),
+                0,
+                UserException.FailsStrictValidation.class
+        );
+
+        spec2.executeTest("test bad chr counts with no ref and no validations specified", this);
     }
 
     @Test
@@ -124,6 +182,7 @@ public final class ValidateVariantsIntegrationTest extends CommandLineProgramTes
         spec.executeTest("test bad chr counts #2", this);
     }
 
+    //note - validationExampleBadRSID.vcf also has faulty CHR_COUNTS
     @Test
     public void testBadID() throws IOException {
         final IntegrationTestSpec spec = new IntegrationTestSpec(
@@ -304,5 +363,37 @@ public final class ValidateVariantsIntegrationTest extends CommandLineProgramTes
                 baseTestString(false, "gvcf.basepairResolution.vcf", true, ALLELES, "20:10000000-10002158", b37_reference_20_21) + " -gvcf ",
                 Collections.emptyList());
         spec.executeTest("tests capture of non-complete region, on BP_RESOLUTION gvcf", this);
+    }
+
+    @Test
+    public void testGoodVariantsOrderTwoContigs() throws IOException {
+        IntegrationTestSpec spec = new IntegrationTestSpec(
+                baseTestString(false, "goodGVCF.inOrderTwoContigs.g.vcf", true, ALLELES, null, hg38Reference) + " -gvcf  ",
+                Collections.emptyList());
+        spec.executeTest("tests the variants order validation for a valid file including two contigs", this);
+    }
+
+    @Test
+    public void testBadVariantsOrderTwoContigs() throws IOException {
+        IntegrationTestSpec spec = new IntegrationTestSpec(
+                baseTestString(false, "badGVCF.outOfOrderTwoContigs.g.vcf", true, ALLELES, null, hg38Reference) + " -gvcf  ",
+                0, UserException.class);
+        spec.executeTest("tests the variants order validation for an invalid file including two contigs", this);
+    }
+
+    @Test
+    public void testGoodVariantsOrderThreeContigs() throws IOException {
+        IntegrationTestSpec spec = new IntegrationTestSpec(
+                baseTestString(false, "goodGVCF.inOrderThreeContigs.g.vcf", true, ALLELES, null, hg38Reference) + " -gvcf  ",
+                Collections.emptyList());
+        spec.executeTest("tests the variants order validation for a valid file including three contigs", this);
+    }
+
+    @Test
+    public void testBadVariantsOrderThreeContigs() throws IOException {
+        IntegrationTestSpec spec = new IntegrationTestSpec(
+                baseTestString(false, "badGVCF.outOfOrderThreeContigs.g.vcf", true, ALLELES, null, hg38Reference) + " -gvcf  ",
+                0, UserException.class);
+        spec.executeTest("tests the variants order validation for an invalid file including three contigs", this);
     }
 }

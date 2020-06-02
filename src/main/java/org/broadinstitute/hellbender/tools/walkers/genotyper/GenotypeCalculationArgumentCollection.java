@@ -17,6 +17,14 @@ public final class GenotypeCalculationArgumentCollection implements Serializable
     public static final String SUPPORTING_CALLSET_LONG_NAME = "population-callset";
     public static final String SUPPORTING_CALLSET_SHORT_NAME = "population";
     public static final String NUM_REF_SAMPLES_LONG_NAME = "num-reference-samples-if-no-call";
+    public static final String MAX_ALTERNATE_ALLELES_LONG_NAME = "max-alternate-alleles";
+    public static final String MAX_GENOTYPE_COUNT_LONG_NAME = "max-genotype-count";
+    public static final String SAMPLE_PLOIDY_SHORT_NAME = "ploidy";
+    public static final String SAMPLE_PLOIDY_LONG_NAME = "sample-ploidy";
+
+    public static final double DEFAULT_STANDARD_CONFIDENCE_FOR_CALLING = 30.0;
+    public static final int DEFAULT_MAX_ALTERNATE_ALLELES = 6;
+    public static final int DEFAULT_MAX_GENOTYPE_COUNT = 1024;
 
     /**
      * Creates a GenotypeCalculationArgumentCollection with default values.
@@ -31,32 +39,15 @@ public final class GenotypeCalculationArgumentCollection implements Serializable
     public GenotypeCalculationArgumentCollection( final GenotypeCalculationArgumentCollection other ) {
         Utils.nonNull(other);
 
-        this.useNewAFCalculator = other.useNewAFCalculator;
-        this.useOldAFCalculator = other.useOldAFCalculator;
         this.ANNOTATE_NUMBER_OF_ALLELES_DISCOVERED = other.ANNOTATE_NUMBER_OF_ALLELES_DISCOVERED;
         this.snpHeterozygosity = other.snpHeterozygosity;
         this.indelHeterozygosity = other.indelHeterozygosity;
         this.STANDARD_CONFIDENCE_FOR_CALLING = other.STANDARD_CONFIDENCE_FOR_CALLING;
         this.MAX_ALTERNATE_ALLELES = other.MAX_ALTERNATE_ALLELES;
-        this.inputPrior = new ArrayList<>(other.inputPrior);
         this.samplePloidy = other.samplePloidy;
         this.supportVariants = other.supportVariants;
         this.numRefIfMissing = other.numRefIfMissing;
     }
-
-
-    /**
-     * As of version 4.1.0.0, this argument is no longer needed because the new qual score is now on by default. See GATK 3.3 release notes for more details.
-     */
-    @Deprecated
-    @Argument(fullName = "use-new-qual-calculator", shortName = "new-qual", doc = "Use the new AF model instead of the so-called exact model", optional = true)
-    public boolean useNewAFCalculator = true;
-
-    /**
-     * Use the old GATK 3 qual score aka the "exact model"
-     */
-    @Argument(fullName = "use-old-qual-calculator", shortName = "old-qual", doc = "Use the old AF model", optional = true)
-    public boolean useOldAFCalculator = false;
 
     /**
      * Depending on the value of the --max_alternate_alleles argument, we may genotype only a fraction of the alleles being sent on for genotyping.
@@ -121,7 +112,7 @@ public final class GenotypeCalculationArgumentCollection implements Serializable
      * Note that the default was changed from 10.0 to 30.0 in version 4.1.0.0 to accompany the switch to use the the new quality score by default.
      */
     @Argument(fullName = "standard-min-confidence-threshold-for-calling", shortName = "stand-call-conf", doc = "The minimum phred-scaled confidence threshold at which variants should be called", optional = true)
-    public double STANDARD_CONFIDENCE_FOR_CALLING = 30.0;
+    public double STANDARD_CONFIDENCE_FOR_CALLING = DEFAULT_STANDARD_CONFIDENCE_FOR_CALLING;
 
     /**
      * If there are more than this number of alternate alleles presented to the genotyper (either through discovery or GENOTYPE_GIVEN ALLELES),
@@ -132,8 +123,8 @@ public final class GenotypeCalculationArgumentCollection implements Serializable
      * See also {@link #MAX_GENOTYPE_COUNT}.
      */
     @Advanced
-    @Argument(fullName = "max-alternate-alleles", doc = "Maximum number of alternate alleles to genotype", optional = true)
-    public int MAX_ALTERNATE_ALLELES = 6;
+    @Argument(fullName = MAX_ALTERNATE_ALLELES_LONG_NAME, doc = "Maximum number of alternate alleles to genotype", optional = true)
+    public int MAX_ALTERNATE_ALLELES = DEFAULT_MAX_ALTERNATE_ALLELES;
 
     /**
      * If there are more than this number of genotypes at a locus presented to the genotyper, then only this many genotypes will be used.
@@ -152,36 +143,13 @@ public final class GenotypeCalculationArgumentCollection implements Serializable
      * See also {@link #MAX_ALTERNATE_ALLELES}.
      */
     @Advanced
-    @Argument(fullName = "max-genotype-count", doc = "Maximum number of genotypes to consider at any site", optional = true)
-    public int MAX_GENOTYPE_COUNT = 1024;
-
-    /**
-     * By default, the prior specified with the argument --heterozygosity/-hets is used for variant discovery at a particular locus, using an infinite sites model,
-     * see e.g. Waterson (1975) or Tajima (1996).
-     * This model asserts that the probability of having a population of k variant sites in N chromosomes is proportional to theta/k, for 1=1:N
-     *
-     * There are instances where using this prior might not be desireable, e.g. for population studies where prior might not be appropriate,
-     * as for example when the ancestral status of the reference allele is not known.
-     * By using this argument, user can manually specify priors to be used for calling as a vector for doubles, with the following restriciotns:
-     * a) User must specify 2N values, where N is the number of samples.
-     * b) Only diploid calls supported.
-     * c) Probability values are specified in double format, in linear space.
-     * d) No negative values allowed.
-     * e) Values will be added and Pr(AC=0) will be 1-sum, so that they sum up to one.
-     * f) If user-defined values add to more than one, an error will be produced.
-     *
-     * If user wants completely flat priors, then user should specify the same value (=1/(2*N+1)) 2*N times,e.g.
-     *   --input-prior 0.33 --input-prior 0.33
-     * for the single-sample diploid case.
-     */
-    @Advanced
-    @Argument(fullName = "input-prior",  doc = "Input prior for calls", optional = true)
-    public List<Double> inputPrior = new ArrayList<>();
+    @Argument(fullName = MAX_GENOTYPE_COUNT_LONG_NAME, doc = "Maximum number of genotypes to consider at any site", optional = true)
+    public int MAX_GENOTYPE_COUNT = DEFAULT_MAX_GENOTYPE_COUNT;
 
     /**
      *   Sample ploidy - equivalent to number of chromosomes per pool. In pooled experiments this should be = # of samples in pool * individual sample ploidy
      */
-    @Argument(shortName="ploidy", fullName="sample-ploidy", doc="Ploidy (number of chromosomes) per sample. For pooled data, set to (Number of samples in each pool * Sample Ploidy).", optional=true)
+    @Argument(shortName = SAMPLE_PLOIDY_SHORT_NAME, fullName = SAMPLE_PLOIDY_LONG_NAME, doc="Ploidy (number of chromosomes) per sample. For pooled data, set to (Number of samples in each pool * Sample Ploidy).", optional=true)
     public int samplePloidy = HomoSapiensConstants.DEFAULT_PLOIDY;
 
     /**

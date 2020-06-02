@@ -32,40 +32,20 @@ public class AlignmentContextIteratorBuilder {
     private boolean isIncludeNs;
     private LIBSDownsamplingInfo downsamplingInfo;
 
-    public boolean isEmitEmptyLoci() {
-        return isEmitEmptyLoci;
-    }
-
     public void setEmitEmptyLoci(boolean emitEmptyLoci) {
         isEmitEmptyLoci = emitEmptyLoci;
-    }
-
-    public boolean isKeepUniqueReadListInLibs() {
-        return isKeepUniqueReadListInLibs;
     }
 
     public void setKeepUniqueReadListInLibs(boolean keepUniqueReadListInLibs) {
         isKeepUniqueReadListInLibs = keepUniqueReadListInLibs;
     }
 
-    public boolean isIncludeDeletions() {
-        return isIncludeDeletions;
-    }
-
     public void setIncludeDeletions(boolean includeDeletions) {
         isIncludeDeletions = includeDeletions;
     }
 
-    public boolean isIncludeNs() {
-        return isIncludeNs;
-    }
-
     public void setIncludeNs(boolean includeNs) {
         isIncludeNs = includeNs;
-    }
-
-    public LIBSDownsamplingInfo getDownsamplingInfo() {
-        return downsamplingInfo;
     }
 
     public void setDownsamplingInfo(LIBSDownsamplingInfo downsamplingInfo) {
@@ -117,15 +97,15 @@ public class AlignmentContextIteratorBuilder {
      * @return iterator that produces AlignmentContexts ready for consumption (e.g. by a {@link org.broadinstitute.hellbender.engine.LocusWalker})
      */
     private static Iterator<AlignmentContext> createAlignmentContextIterator(final List<SimpleInterval> intervalsForTraversal,
-                                                                            final SAMFileHeader header,
-                                                                               final Iterator<GATKRead> readIterator,
-                                                                               final SAMSequenceDictionary dictionary,
-                                                                               final LIBSDownsamplingInfo downsamplingInfo,
-                                                                               final boolean isReference,
-                                                                               boolean emitEmptyLoci,
-                                                                               boolean isKeepUniqueReadListInLibs,
-                                                                               boolean isIncludeDeletions,
-                                                                               boolean isIncludeNs) {
+                                                                             final SAMFileHeader header,
+                                                                             final Iterator<GATKRead> readIterator,
+                                                                             final SAMSequenceDictionary dictionary,
+                                                                             final LIBSDownsamplingInfo downsamplingInfo,
+                                                                             final boolean isReference,
+                                                                             boolean emitEmptyLoci,
+                                                                             boolean isKeepUniqueReadListInLibs,
+                                                                             boolean isIncludeDeletions,
+                                                                             boolean isIncludeNs) {
 
         // get the samples from the read groups
         final Set<String> samples = header.getReadGroups().stream()

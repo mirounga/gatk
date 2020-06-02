@@ -6,13 +6,16 @@ import htsjdk.variant.variantcontext.GenotypeBuilder;
 import org.apache.spark.broadcast.Broadcast;
 import org.broadinstitute.hellbender.CommandLineProgramTest;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
+import org.broadinstitute.hellbender.engine.GATKPathSpecifier;
 import org.broadinstitute.hellbender.engine.spark.datasources.ReferenceMultiSparkSource;
 import org.broadinstitute.hellbender.engine.spark.datasources.ReferenceWindowFunctions;
 import org.broadinstitute.hellbender.engine.spark.SparkContextFactory;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.testutils.IntegrationTestSpec;
 import org.broadinstitute.hellbender.tools.walkers.genotyper.GenotypeCalculationArgumentCollection;
+import org.broadinstitute.hellbender.tools.walkers.haplotypecaller.AssemblyBasedCallerArgumentCollection;
 import org.broadinstitute.hellbender.tools.walkers.haplotypecaller.HaplotypeCallerArgumentCollection;
+import org.broadinstitute.hellbender.tools.walkers.haplotypecaller.ReferenceConfidenceMode;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.GATKBaseTest;
 import org.broadinstitute.hellbender.testutils.SparkTestUtils;
@@ -73,6 +76,7 @@ public class HaplotypeCallerSparkIntegrationTest extends CommandLineProgramTest 
                 "-O", outputPath,
                 "-pairHMM", "AVX_LOGLESS_CACHING",
                 "--" + StandardArgumentDefinitions.ADD_OUTPUT_VCF_COMMANDLINE, "false",
+                "--" + AssemblyBasedCallerArgumentCollection.ALLELE_EXTENSION_LONG_NAME, "2",
                 "--strict" // to match walker version
         };
 
@@ -99,6 +103,7 @@ public class HaplotypeCallerSparkIntegrationTest extends CommandLineProgramTest 
                 "-L", "20:10000000-10100000",
                 "-O", outputPath,
                 "-pairHMM", "AVX_LOGLESS_CACHING",
+                "--" + AssemblyBasedCallerArgumentCollection.ALLELE_EXTENSION_LONG_NAME, "2",
                 "--" + StandardArgumentDefinitions.ADD_OUTPUT_VCF_COMMANDLINE, "false"
         };
 
@@ -132,6 +137,7 @@ public class HaplotypeCallerSparkIntegrationTest extends CommandLineProgramTest 
                 "-R", b37_reference_20_21,
                 "-L", "20:10000000-10100000",
                 "-O", output.getAbsolutePath(),
+                "--" + AssemblyBasedCallerArgumentCollection.ALLELE_EXTENSION_LONG_NAME, "2",
                 "-pairHMM", "AVX_LOGLESS_CACHING"
         };
 
@@ -169,6 +175,7 @@ public class HaplotypeCallerSparkIntegrationTest extends CommandLineProgramTest 
                 "-O", output.getAbsolutePath(),
                 "-G", "StandardAnnotation",
                 "-G", "AS_StandardAnnotation",
+                "--" + AssemblyBasedCallerArgumentCollection.ALLELE_EXTENSION_LONG_NAME, "2",
                 "-pairHMM", "AVX_LOGLESS_CACHING"
         };
 
@@ -200,7 +207,8 @@ public class HaplotypeCallerSparkIntegrationTest extends CommandLineProgramTest 
                 "-R", b37_reference_20_21,
                 "-L", "20:10000000-10100000",
                 "-O", output.getAbsolutePath(),
-                "-ERC", "GVCF",
+                "--" + AssemblyBasedCallerArgumentCollection.EMIT_REF_CONFIDENCE_LONG_NAME, ReferenceConfidenceMode.GVCF.toString(),
+                "--" + AssemblyBasedCallerArgumentCollection.ALLELE_EXTENSION_LONG_NAME, "2",
                 "-pairHMM", "AVX_LOGLESS_CACHING"
         };
 
@@ -224,7 +232,8 @@ public class HaplotypeCallerSparkIntegrationTest extends CommandLineProgramTest 
                 "-I", NA12878_20_21_WGS_bam,
                 "-R", b37_reference_20_21,
                 "-O", createTempFile("testGVCF_GZ_throw_exception", extension).getAbsolutePath(),
-                "-ERC", "GVCF",
+                "--" + AssemblyBasedCallerArgumentCollection.EMIT_REF_CONFIDENCE_LONG_NAME, ReferenceConfidenceMode.GVCF.toString(),
+                "--" + AssemblyBasedCallerArgumentCollection.ALLELE_EXTENSION_LONG_NAME, "2",
         };
 
         runCommandLine(args);
@@ -259,7 +268,8 @@ public class HaplotypeCallerSparkIntegrationTest extends CommandLineProgramTest 
                 "-O", output.getAbsolutePath(),
                 "-G", "StandardAnnotation",
                 "-G", "AS_StandardAnnotation",
-                "-ERC", "GVCF",
+                "--" + AssemblyBasedCallerArgumentCollection.EMIT_REF_CONFIDENCE_LONG_NAME, ReferenceConfidenceMode.GVCF.toString(),
+                "--" + AssemblyBasedCallerArgumentCollection.ALLELE_EXTENSION_LONG_NAME, "2",
                 "-pairHMM", "AVX_LOGLESS_CACHING"
         };
 
@@ -285,7 +295,7 @@ public class HaplotypeCallerSparkIntegrationTest extends CommandLineProgramTest 
 
     @Test
     public void testReferenceMultiSourceIsSerializable() {
-        final ReferenceMultiSparkSource args = new ReferenceMultiSparkSource(GATKBaseTest.b37_reference_20_21, ReferenceWindowFunctions.IDENTITY_FUNCTION);
+        final ReferenceMultiSparkSource args = new ReferenceMultiSparkSource(new GATKPathSpecifier(GATKBaseTest.b37_reference_20_21), ReferenceWindowFunctions.IDENTITY_FUNCTION);
         SparkTestUtils.roundTripInKryo(args, ReferenceMultiSparkSource.class, SparkContextFactory.getTestSparkContext().getConf());
     }
 

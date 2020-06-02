@@ -1,24 +1,23 @@
 language: java
-sudo: required
-dist: trusty
+dist: bionic
 group: travis_lts
 git:
   depth: 9999999
   lfs_skip_smudge: true
 jdk:
-- openjdk8
+  - openjdk8
 env:
   matrix:
-  - TEST_TYPE=cloud UPLOAD=true TESTS_REQUIRE_GCLOUD=true
-  - TEST_TYPE=integration TEST_DOCKER=true TEST_VERBOSITY=minimal
-  - TEST_TYPE=unit TEST_DOCKER=true TEST_VERBOSITY=minimal
-  - TEST_TYPE=variantcalling TEST_DOCKER=true TEST_VERBOSITY=minimal
-  - TEST_TYPE=python TEST_DOCKER=true TEST_VERBOSITY=minimal
-  - RUN_CNV_GERMLINE_COHORT_WDL=true TESTS_REQUIRE_GCLOUD=true
-  - RUN_CNV_GERMLINE_CASE_WDL=true TESTS_REQUIRE_GCLOUD=true
-  - RUN_CNV_SOMATIC_WDL=true TESTS_REQUIRE_GCLOUD=true
-  - RUN_M2_WDL=true TESTS_REQUIRE_GCLOUD=true
-  - RUN_CNN_WDL=true TESTS_REQUIRE_GCLOUD=true
+  - SCALA_VERSION=2.11 TEST_TYPE=cloud UPLOAD=true TESTS_REQUIRE_GCLOUD=true
+  - SCALA_VERSION=2.11 TEST_TYPE=integration TEST_DOCKER=true TEST_VERBOSITY=minimal
+  - SCALA_VERSION=2.11 TEST_TYPE=unit TEST_DOCKER=true TEST_VERBOSITY=minimal
+  - SCALA_VERSION=2.11 TEST_TYPE=variantcalling TEST_DOCKER=true TEST_VERBOSITY=minimal
+  - SCALA_VERSION=2.11 TEST_TYPE=conda TEST_DOCKER=true TEST_VERBOSITY=minimal
+  - SCALA_VERSION=2.11 RUN_CNV_GERMLINE_COHORT_WDL=true TESTS_REQUIRE_GCLOUD=true
+  - SCALA_VERSION=2.11 RUN_CNV_GERMLINE_CASE_WDL=true TESTS_REQUIRE_GCLOUD=true
+  - SCALA_VERSION=2.11 RUN_CNV_SOMATIC_WDL=true TESTS_REQUIRE_GCLOUD=true
+  - SCALA_VERSION=2.11 RUN_M2_WDL=true TESTS_REQUIRE_GCLOUD=true
+  - SCALA_VERSION=2.11 RUN_CNN_WDL=true TESTS_REQUIRE_GCLOUD=true
   global:
   #gradle needs this
   - TERM=dumb
@@ -35,6 +34,8 @@ env:
   - HELLBENDER_TEST_LOGS=/hellbender-test-logs/build_reports/
   - HELLBENDER_TEST_PROJECT=broad-dsde-dev
   - HELLBENDER_JSON_SERVICE_ACCOUNT_KEY=servicekey.json
+  #Work around for https://github.com/googleapis/google-cloud-java/issues/5884
+  - export GOOGLE_CLOUD_PROJECT=$HELLBENDER_TEST_PROJECT
   #for uploading artifacts
   - ARTIFACTORY_USERNAME=gatkci
   #artifactory password
@@ -44,8 +45,15 @@ env:
 matrix:
   fast_finish: true
   include:
-     - jdk: oraclejdk8
-       env: TEST_TYPE=integration TEST_VERBOSITY=minimal TEST_REQUIRE_GCLOUD=true
+     - jdk: openjdk11
+       language: java
+       env: SCALA_VERSION=2.12 TEST_TYPE=integration TEST_VERBOSITY=minimal
+     - jdk: openjdk11
+       language: java
+       env: SCALA_VERSION=2.12 TEST_TYPE=unit TEST_VERBOSITY=minimal
+     - jdk: openjdk11
+       language: java
+       env: SCALA_VERSION=2.12 TEST_TYPE=cloud TESTS_REQUIRE_GCLOUD=true TEST_VERBOSITY=minimal
 before_cache:
   - rm -f  $HOME/.gradle/caches/modules-2/modules-2.lock
   - rm -fr $HOME/.gradle/caches/*/plugin-resolution/
@@ -80,27 +88,19 @@ before_install:
     ssh -T git@github.com;
     echo "Done testing github authentication";
   fi;
-#install R
-- if [[ $TEST_DOCKER != true ]]; then
-   sudo mkdir -p /usr/local/lib/R/;
-   sudo mkdir -p site-library;
-   sudo ln -sFv ~/site-library /usr/local/lib/R/site-library;
-   sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys E298A3A825C0D65DFD57CBB651716619E084DAB9;
-   sudo add-apt-repository "deb http://cran.rstudio.com/bin/linux/ubuntu trusty/";
-   sudo apt-get update;
-   sudo apt-get install -y --force-yes r-base-dev=3.1.3-1trusty;
-   sudo apt-get install -y --force-yes r-base-core=3.1.3-1trusty;
-   sudo Rscript scripts/docker/gatkbase/install_R_packages.R;
-  fi;
 # Download Cromwell jar -- if you change the version, please change the CROMWELL_JAR env variable above, too.
 - if [[ $RUN_CNV_GERMLINE_COHORT_WDL == true || $RUN_CNV_GERMLINE_CASE_WDL == true || $RUN_CNV_SOMATIC_WDL == true || $RUN_M2_WDL == true || $RUN_CNN_WDL == true ]]; then
     wget -O $CROMWELL_JAR https://github.com/broadinstitute/cromwell/releases/download/36/cromwell-36.jar;
   fi;
 # Download git lfs files
-- git lfs version
+- git lfs
 - git lfs install
 - git lfs fetch
 - git lfs checkout
+# Disable services enabled by default to free a bit of memory
+# http://docs.travis-ci.com/user/database-setup/#MySQL
+- sudo /etc/init.d/mysql stop
+- sudo /etc/init.d/postgresql stop
 install:
 - if [[ $TRAVIS_SECURE_ENV_VARS == false && $TEST_TYPE == cloud ]]; then
     echo "Can't run cloud tests without keys so don't bother building";
@@ -156,13 +156,13 @@ script:
     sudo mkdir -p build/reports/;
     sudo chmod -R a+w build/reports/;
     cp scripts/docker/dockertest.gradle .;
-    sudo docker run -v $(pwd):/gatkCloneMountPoint:cached -v $(pwd)/testJars:/jars:cached --rm -e "TEST_VERBOSITY=minimal" -e "TEST_TYPE=${TEST_TYPE}" -t broadinstitute/gatk:${DOCKER_TAG} bash --init-file /gatk/gatkenv.rc /root/run_unit_tests.sh;
+    sudo docker run -v $(pwd):/gatkCloneMountPoint:cached -v $(pwd)/testJars:/jars:cached --rm -e "scala.version=${SCALA_VERSION}" -e "TEST_VERBOSITY=minimal" -e "TEST_TYPE=${TEST_TYPE}" -t broadinstitute/gatk:${DOCKER_TAG} bash --init-file /gatk/gatkenv.rc /root/run_unit_tests.sh;
     TEST_EXIT_VALUE=$?;
     sudo mkdir build/reports/tests/test && sudo cp -rp build/reports/tests/testOnPackagedReleaseJar/* build/reports/tests/test && sudo rm -r build/reports/tests/testOnPackagedReleaseJar;
     $( exit ${TEST_EXIT_VALUE} );
   else
     ./gatk PrintReads -I src/test/resources/NA12878.chr17_69k_70k.dictFix.bam -O output.bam;
-    travis_wait 50 ./gradlew jacocoTestReport;
+    travis_wait 50 ./gradlew -Dscala.version=${SCALA_VERSION} jacocoTestReport;
   fi;
 # This creates and uploads the gatk zip file to the nightly build bucket, only keeping the 10 newest entries
 # This also constructs the Docker image and uploads it to https://cloud.docker.com/u/broadinstitute/repository/docker/broadinstitute/gatk-nightly/
@@ -186,16 +186,16 @@ script:
   fi;
 
 after_success:
-- bash <(curl -s https://codecov.io/bash)
+# - bash <(curl -s https://codecov.io/bash)
 - if [[ $TRAVIS_BRANCH == master && $UPLOAD == true ]]; then ./gradlew uploadArchives; fi;
 # if this is actually a commit to master and not a pull request build into master, then publish master-snapshot
 - if [[ $TRAVIS_BRANCH == master && $TRAVIS_PULL_REQUEST == false && $UPLOAD == true ]]; then
     git tag master;
     ./gradlew uploadArchives; 
   fi;
-
 after_failure:
 - dmesg | tail -100
+- export FAILED=true
 after_script:
 - if [[ $TRAVIS_SECURE_ENV_VARS == true && $TRAVIS_EVENT_TYPE != cron ]]; then
     if [[ ${TESTS_REQUIRE_GCLOUD} != "true" ]]; then
@@ -203,6 +203,9 @@ after_script:
     fi;
     $GCLOUD_HOME/gsutil -m cp -z html -z js -z xml -z css -r build/reports/tests gs:/$HELLBENDER_TEST_LOGS$REPORT_PATH/;
     echo "See the test report at https://storage.googleapis.com$HELLBENDER_TEST_LOGS$REPORT_PATH/tests/test/index.html";
+    if [[ ${FAILED} == true && ${TRAVIS_PULL_REQUEST} != false && -d build/reports/tests ]]; then
+      pip install --user PyGithub;
+      python scripts/travis/Reporter.py https://storage.googleapis.com$HELLBENDER_TEST_LOGS$REPORT_PATH/tests/test/index.html;
+    fi
   fi;
-
 

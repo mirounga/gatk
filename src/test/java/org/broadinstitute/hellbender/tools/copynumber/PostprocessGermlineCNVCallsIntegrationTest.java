@@ -1,9 +1,13 @@
 package org.broadinstitute.hellbender.tools.copynumber;
 
+import htsjdk.samtools.util.FileExtensions;
+import htsjdk.variant.vcf.VCFHeader;
 import org.broadinstitute.hellbender.CommandLineProgramTest;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.testutils.ArgumentsBuilder;
 import org.broadinstitute.hellbender.testutils.IntegrationTestSpec;
+import org.broadinstitute.hellbender.testutils.VariantContextTestUtils;
+import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
@@ -50,6 +54,11 @@ public final class PostprocessGermlineCNVCallsIntegrationTest extends CommandLin
             new File(TEST_SUB_DIR, "segments_output_SAMPLE_001.vcf"),
             new File(TEST_SUB_DIR, "segments_output_SAMPLE_002.vcf"));
 
+    private static final List<File> DENOISED_COPY_RATIOS_OUTPUTS = Arrays.asList(
+            new File(TEST_SUB_DIR, "denoised_copy_ratios_SAMPLE_000.tsv"),
+            new File(TEST_SUB_DIR, "denoised_copy_ratios_SAMPLE_001.tsv"),
+            new File(TEST_SUB_DIR, "denoised_copy_ratios_SAMPLE_002.tsv"));
+
     private static final int NUM_TEST_SAMPLES = 3;
 
     /**
@@ -61,32 +70,35 @@ public final class PostprocessGermlineCNVCallsIntegrationTest extends CommandLin
                                         final int sampleIndex,
                                         final File intervalsOutputVCF,
                                         final File segmentsOutputVCF,
+                                        final File denoisedCopyRatiosOutput,
                                         final List<String> allosomalContigs,
                                         final int refAutosomalCopyNumber) {
         final ArgumentsBuilder argumentsBuilder = new ArgumentsBuilder();
-        argumentsBuilder.addArgument(StandardArgumentDefinitions.ADD_OUTPUT_VCF_COMMANDLINE,
+        argumentsBuilder.add(StandardArgumentDefinitions.ADD_OUTPUT_VCF_COMMANDLINE,
                 "false");
 
-        argumentsBuilder.addArgument(PostprocessGermlineCNVCalls.SAMPLE_INDEX_LONG_NAME,
+        argumentsBuilder.add(PostprocessGermlineCNVCalls.SAMPLE_INDEX_LONG_NAME,
                 String.valueOf(sampleIndex));
-        callShards.forEach(callDir -> argumentsBuilder.addArgument(
+        callShards.forEach(callDir -> argumentsBuilder.add(
                 PostprocessGermlineCNVCalls.CALLS_SHARD_PATH_LONG_NAME, callDir));
-        argumentsBuilder.addArgument(PostprocessGermlineCNVCalls.OUTPUT_INTERVALS_VCF_LONG_NAME,
+        argumentsBuilder.add(PostprocessGermlineCNVCalls.OUTPUT_INTERVALS_VCF_LONG_NAME,
                 intervalsOutputVCF.getAbsolutePath());
-        allosomalContigs.forEach(contig -> argumentsBuilder.addArgument(
+        allosomalContigs.forEach(contig -> argumentsBuilder.add(
                 PostprocessGermlineCNVCalls.ALLOSOMAL_CONTIG_LONG_NAME, contig));
-        argumentsBuilder.addArgument(PostprocessGermlineCNVCalls.AUTOSOMAL_REF_COPY_NUMBER_LONG_NAME,
+        argumentsBuilder.add(PostprocessGermlineCNVCalls.AUTOSOMAL_REF_COPY_NUMBER_LONG_NAME,
                 String.valueOf(refAutosomalCopyNumber));
 
-        /* add the rest of the required arguments if segments VCF is required */
-        if (segmentsOutputVCF != null) {
-            argumentsBuilder.addArgument(PostprocessGermlineCNVCalls.CONTIG_PLOIDY_CALLS_LONG_NAME,
-                    PLOIDY_CALLS);
-            modelShards.forEach(modelDir -> argumentsBuilder.addArgument(
-                    PostprocessGermlineCNVCalls.MODEL_SHARD_PATH_LONG_NAME, modelDir));
-            argumentsBuilder.addArgument(PostprocessGermlineCNVCalls.OUTPUT_SEGMENTS_VCF_LONG_NAME,
-                    segmentsOutputVCF.getAbsolutePath());
-        }
+        /* add required arguments for segments VCF creation */
+        argumentsBuilder.add(PostprocessGermlineCNVCalls.CONTIG_PLOIDY_CALLS_LONG_NAME,
+                PLOIDY_CALLS);
+        modelShards.forEach(modelDir -> argumentsBuilder.add(
+                PostprocessGermlineCNVCalls.MODEL_SHARD_PATH_LONG_NAME, modelDir));
+        argumentsBuilder.add(PostprocessGermlineCNVCalls.OUTPUT_SEGMENTS_VCF_LONG_NAME,
+                segmentsOutputVCF.getAbsolutePath());
+
+        /* add denoised copy ratio output file path */
+        argumentsBuilder.add(PostprocessGermlineCNVCalls.OUTPUT_DENOISED_COPY_RATIOS_LONG_NAME,
+                denoisedCopyRatiosOutput.getAbsolutePath());
 
         runCommandLine(argumentsBuilder.getArgsList());
     }
@@ -97,13 +109,27 @@ public final class PostprocessGermlineCNVCallsIntegrationTest extends CommandLin
                                         final List<String> modelShards) throws IOException {
         final File actualIntervalsOutputVCF = createTempFile("intervals-output-vcf-" + sampleIndex, ".vcf");
         final File actualSegmentsOutputVCF = createTempFile("segments-output-vcf-" + sampleIndex, ".vcf");
+        final File intervalsIndex = new File(actualIntervalsOutputVCF.getAbsolutePath() + FileExtensions.TRIBBLE_INDEX);
+        Assert.assertFalse(intervalsIndex.exists());
+        final File segmentsIndex = new File(actualIntervalsOutputVCF.getAbsolutePath() + FileExtensions.TRIBBLE_INDEX);
+        Assert.assertFalse(segmentsIndex.exists());
+        final File actualDenoisedCopyRatiosOutput = createTempFile("denoised-copy-ratios-output-" + sampleIndex, ".tsv");
         final File expectedIntervalsOutputVCF = INTERVALS_VCF_CORRECT_OUTPUTS.get(sampleIndex);
         final File expectedSegmentsOutputVCF = SEGMENTS_VCF_CORRECT_OUTPUTS.get(sampleIndex);
+        final File expectedDenoisedCopyRatiosOutput = DENOISED_COPY_RATIOS_OUTPUTS.get(sampleIndex);
         runToolForSingleSample(callShards, modelShards, sampleIndex,
-                actualIntervalsOutputVCF, actualSegmentsOutputVCF,
+                actualIntervalsOutputVCF, actualSegmentsOutputVCF, actualDenoisedCopyRatiosOutput,
                 ALLOSOMAL_CONTIGS, AUTOSOMAL_REF_COPY_NUMBER);
+
+        Assert.assertTrue(intervalsIndex.exists());
+        Assert.assertTrue(segmentsIndex.exists());
         IntegrationTestSpec.assertEqualTextFiles(actualIntervalsOutputVCF, expectedIntervalsOutputVCF, "##");
+        final VCFHeader intervalsHeader = VariantContextTestUtils.getVCFHeader(actualIntervalsOutputVCF.getAbsolutePath());
+        Assert.assertTrue(intervalsHeader.getContigLines().size() > 0);
         IntegrationTestSpec.assertEqualTextFiles(actualSegmentsOutputVCF, expectedSegmentsOutputVCF, "##");
+        final VCFHeader segmentsHeader = VariantContextTestUtils.getVCFHeader(actualIntervalsOutputVCF.getAbsolutePath());
+        Assert.assertTrue(segmentsHeader.getContigLines().size() > 0);
+        IntegrationTestSpec.assertEqualTextFiles(actualDenoisedCopyRatiosOutput, expectedDenoisedCopyRatiosOutput, "##");
     }
 
     @Test(dataProvider = "differentInvalidInput", expectedExceptions = IllegalArgumentException.class, groups = {"python"})
@@ -113,6 +139,7 @@ public final class PostprocessGermlineCNVCallsIntegrationTest extends CommandLin
         runToolForSingleSample(callShards, modelShards, sampleIndex,
                 createTempFile("intervals-output-vcf", ".vcf"),
                 createTempFile("segments-output-vcf", ".vcf"),
+                createTempFile("denoised-copy-ratios-output", ".tsv"),
                 ALLOSOMAL_CONTIGS, AUTOSOMAL_REF_COPY_NUMBER);
     }
 
@@ -121,6 +148,7 @@ public final class PostprocessGermlineCNVCallsIntegrationTest extends CommandLin
         runToolForSingleSample(CALL_SHARDS, MODEL_SHARDS, 0,
                 createTempFile("intervals-output-vcf", ".vcf"),
                 createTempFile("segments-output-vcf", ".vcf"),
+                createTempFile("denoised-copy-ratios-output", ".tsv"),
                 Collections.singletonList("Z"), /* unknown contig */
                 AUTOSOMAL_REF_COPY_NUMBER);
     }

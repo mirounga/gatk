@@ -50,7 +50,7 @@ public final class VariantAnnotatorEngineUnitTest extends GATKBaseTest {
         final List<GATKRead> altReads = Arrays.stream(MQs).mapToObj(mq -> ArtificialAnnotationUtils.makeRead(30, mq)).collect(Collectors.toList());
         final List<GATKRead> refReads = Arrays.stream(MQ2s).mapToObj(mq -> ArtificialAnnotationUtils.makeRead(30, mq)).collect(Collectors.toList());
 
-        final ReadLikelihoods<Allele> likelihoods =
+        final AlleleLikelihoods<GATKRead, Allele> likelihoods =
                 ArtificialAnnotationUtils.makeLikelihoods("sample1", refReads, altReads, -10.0, -9.0, REF, ALT);
 
         final VariantContext vc = ArtificialAnnotationUtils.makeVC();
@@ -58,7 +58,8 @@ public final class VariantAnnotatorEngineUnitTest extends GATKBaseTest {
 
         new AS_RMSMappingQuality().calculateRawData(vc, likelihoods, myData);
         Map<String, List<?>> testAnnotationData = new HashMap<>();
-        testAnnotationData.put(new AS_RMSMappingQuality().getRawKeyName(), Collections.singletonList(myData));
+        AS_RMSMappingQuality annotationClass = new AS_RMSMappingQuality();
+        testAnnotationData.put(annotationClass.getPrimaryRawKey(), Collections.singletonList(myData));
 
         Map<String, Object> value = vae.combineAnnotations(alleles, testAnnotationData);
         Assert.assertEquals(value.get(GATKVCFConstants.AS_RAW_RMS_MAPPING_QUALITY_KEY), "285.00|385.00");
@@ -111,11 +112,11 @@ public final class VariantAnnotatorEngineUnitTest extends GATKBaseTest {
                 .alleles(Arrays.asList(refAllele, altAllele)).chr(loc.getContig()).start(loc.getStart()).stop(loc.getEnd()).genotypes(g).make();
     }
 
-    private ReadLikelihoods<Allele> makeReadLikelihoods(final int ref, final int alt, final Allele refAllele, final Allele altAllele) {
+    private AlleleLikelihoods<GATKRead, Allele> makeReadLikelihoods(final int ref, final int alt, final Allele refAllele, final Allele altAllele) {
         return makeReadLikelihoods(ref, alt, refAllele, altAllele, "1", 10000);
     }
 
-    private ReadLikelihoods<Allele> makeReadLikelihoods(final int ref,
+    private AlleleLikelihoods<GATKRead, Allele> makeReadLikelihoods(final int ref,
                                                         final int alt,
                                                         final Allele refAllele,
                                                         final Allele altAllele,
@@ -136,10 +137,10 @@ public final class VariantAnnotatorEngineUnitTest extends GATKBaseTest {
         final Map<String, List<GATKRead>> readsBySample = ImmutableMap.of("sample1", reads);
         final org.broadinstitute.hellbender.utils.genotyper.SampleList sampleList = new IndexedSampleList(Arrays.asList("sample1"));
         final AlleleList<Allele> alleleList = new IndexedAlleleList<>(Arrays.asList(refAllele, altAllele));
-        final ReadLikelihoods<Allele> likelihoods = new ReadLikelihoods<>(sampleList, alleleList, readsBySample);
+        final AlleleLikelihoods<GATKRead, Allele> likelihoods = new AlleleLikelihoods<>(sampleList, alleleList, readsBySample);
 
         // modify likelihoods in-place
-        final LikelihoodMatrix<Allele> matrix = likelihoods.sampleMatrix(0);
+        final LikelihoodMatrix<GATKRead, Allele> matrix = likelihoods.sampleMatrix(0);
 
         int n = 0;
         for (int i = 0; i < alt; i++) {
@@ -172,7 +173,7 @@ public final class VariantAnnotatorEngineUnitTest extends GATKBaseTest {
         final Allele refAllele = Allele.create("A", true);
         final Allele altAllele = Allele.create("T");
 
-        final ReadLikelihoods<Allele> likelihoods = makeReadLikelihoods(ref, alt, refAllele, altAllele);
+        final AlleleLikelihoods<GATKRead, Allele> likelihoods = makeReadLikelihoods(ref, alt, refAllele, altAllele);
         final VariantContext resultVC = vae.annotateContext(makeVC(refAllele, altAllele), new FeatureContext(), null, likelihoods, a->true);
         Assert.assertEquals(resultVC.getCommonInfo().getAttribute(VCFConstants.DEPTH_KEY), String.valueOf(ref+alt));
         Assert.assertEquals(resultVC.getCommonInfo().getAttribute(VCFConstants.ALLELE_COUNT_KEY), 1);
@@ -180,7 +181,7 @@ public final class VariantAnnotatorEngineUnitTest extends GATKBaseTest {
         Assert.assertEquals(resultVC.getCommonInfo().getAttribute(VCFConstants.ALLELE_NUMBER_KEY), 2);
         Assert.assertEquals(resultVC.getCommonInfo().getAttribute(GATKVCFConstants.FISHER_STRAND_KEY), FisherStrand.makeValueObjectForAnnotation(new int[][]{{ref,0},{alt,0}}));
         Assert.assertEquals(resultVC.getCommonInfo().getAttribute(GATKVCFConstants.NOCALL_CHROM_KEY), 0);
-        Assert.assertNull(resultVC.getCommonInfo().getAttribute(GATKVCFConstants.RAW_RMS_MAPPING_QUALITY_KEY));
+        Assert.assertNull(resultVC.getCommonInfo().getAttribute(GATKVCFConstants.RAW_RMS_MAPPING_QUALITY_DEPRECATED));
         Assert.assertEquals(resultVC.getCommonInfo().getAttribute(VCFConstants.RMS_MAPPING_QUALITY_KEY), RMSMappingQuality.formattedValue(0.0));
         Assert.assertEquals(resultVC.getCommonInfo().getAttribute(VCFConstants.MAPPING_QUALITY_ZERO_KEY), MappingQualityZero.formattedValue(8));
         Assert.assertEquals(resultVC.getCommonInfo().getAttribute(GATKVCFConstants.SAMPLE_LIST_KEY), "sample1");
@@ -199,7 +200,7 @@ public final class VariantAnnotatorEngineUnitTest extends GATKBaseTest {
         final Allele refAllele = Allele.create("A", true);
         final Allele altAllele = Allele.create("T");
 
-        final ReadLikelihoods<Allele> likelihoods = makeReadLikelihoods(ref, alt, refAllele, altAllele);
+        final AlleleLikelihoods<GATKRead, Allele> likelihoods = makeReadLikelihoods(ref, alt, refAllele, altAllele);
         final VariantContext resultVC = vae.annotateContext(makeVC(refAllele, altAllele), new FeatureContext(), null, likelihoods, a->true);
         Assert.assertEquals(resultVC.getCommonInfo().getAttribute(VCFConstants.DEPTH_KEY), String.valueOf(ref+alt));
         Assert.assertEquals(resultVC.getCommonInfo().getAttribute(GATKVCFConstants.FISHER_STRAND_KEY), FisherStrand.makeValueObjectForAnnotation(new int[][]{{ref,0},{alt,0}}));
@@ -235,7 +236,7 @@ public final class VariantAnnotatorEngineUnitTest extends GATKBaseTest {
         final Allele altAllele = vcRS.getAlternateAllele(0);
 
         final VariantContext vcToAnnotate = makeVC(refAllele, altAllele, loc);
-        final ReadLikelihoods<Allele> likelihoods = makeReadLikelihoods(ref, alt, refAllele, altAllele, loc.getContig(), loc.getStart() - 5);
+        final AlleleLikelihoods<GATKRead, Allele> likelihoods = makeReadLikelihoods(ref, alt, refAllele, altAllele, loc.getContig(), loc.getStart() - 5);
 
         final FeatureContext featureContext= when(mock(FeatureContext.class).getValues(dbSNPBinding, loc.getStart())).thenReturn(Arrays.<VariantContext>asList(vcRS)).getMock();
         final VariantContext resultVC = vae.annotateContext(vcToAnnotate, featureContext, null, likelihoods, a->true);
@@ -270,7 +271,7 @@ public final class VariantAnnotatorEngineUnitTest extends GATKBaseTest {
         final Allele altAllele = vcRS.getAlternateAllele(0);
 
         final VariantContext vcToAnnotate = makeVC(refAllele, altAllele, loc);
-        final ReadLikelihoods<Allele> likelihoods = makeReadLikelihoods(ref, alt, refAllele, altAllele, loc.getContig(), loc.getStart() - 5);
+        final AlleleLikelihoods<GATKRead, Allele> likelihoods = makeReadLikelihoods(ref, alt, refAllele, altAllele, loc.getContig(), loc.getStart() - 5);
 
         final FeatureContext featureContext = when(mock(FeatureContext.class).getValues(fredInput, loc.getStart())).thenReturn(Arrays.<VariantContext>asList(vcRS)).getMock();
 
@@ -313,7 +314,7 @@ public final class VariantAnnotatorEngineUnitTest extends GATKBaseTest {
         final Allele altAllele = vcDbSNP.getAlternateAllele(0);
 
         final VariantContext vcToAnnotate = makeVC(refAllele, altAllele, loc);
-        final ReadLikelihoods<Allele> likelihoods = makeReadLikelihoods(ref, alt, refAllele, altAllele, loc.getContig(), loc.getStart() - 5);
+        final AlleleLikelihoods<GATKRead, Allele> likelihoods = makeReadLikelihoods(ref, alt, refAllele, altAllele, loc.getContig(), loc.getStart() - 5);
 
         //both features
         final FeatureContext featureContext0 = when(mock(FeatureContext.class).getValues(dbSNPBinding, loc.getStart())).thenReturn(Arrays.<VariantContext>asList(vcDbSNP)).getMock();
@@ -357,7 +358,7 @@ public final class VariantAnnotatorEngineUnitTest extends GATKBaseTest {
         final Allele refAllele = Allele.create("A", true);
         final Allele altAllele = Allele.create("T");
 
-        final ReadLikelihoods<Allele> likelihoods = makeReadLikelihoods(ref, alt, refAllele, altAllele);
+        final AlleleLikelihoods<GATKRead, Allele> likelihoods = makeReadLikelihoods(ref, alt, refAllele, altAllele);
         final VariantContext resultVC = vae.annotateContext(makeVC(refAllele, altAllele), new FeatureContext(), null, likelihoods,
                 ann -> ann instanceof Coverage || ann instanceof DepthPerAlleleBySample);
         Assert.assertEquals(resultVC.getCommonInfo().getAttribute(VCFConstants.DEPTH_KEY), String.valueOf(ref+alt));

@@ -6,9 +6,11 @@ import htsjdk.samtools.CigarOperator;
 import htsjdk.samtools.util.Locatable;
 import htsjdk.variant.variantcontext.Allele;
 import org.apache.commons.lang3.ArrayUtils;
+import org.apache.commons.lang3.tuple.Pair;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.read.AlignmentUtils;
+import org.broadinstitute.hellbender.utils.read.CigarBuilder;
 import org.broadinstitute.hellbender.utils.read.ReadUtils;
 
 import java.util.Arrays;
@@ -90,17 +92,32 @@ public final class Haplotype extends Allele {
 
         final int newStart = loc.getStart() - this.genomeLocation.getStart();
         final int newStop = newStart + loc.getEnd() - loc.getStart();
-        final byte[] newBases = AlignmentUtils.getBasesCoveringRefInterval(newStart, newStop, getBases(), 0, getCigar());
-        final Cigar newCigar = AlignmentUtils.trimCigarByReference(getCigar(), newStart, newStop);
 
-        if ( newBases == null || AlignmentUtils.startsOrEndsWithInsertionOrDeletion(newCigar) )
-            // we cannot meaningfully chop down the haplotype, so return null
-        {
+        // note: the following returns null if the bases covering the ref interval start or end in a deletion.
+        final byte[] newBases = AlignmentUtils.getBasesCoveringRefInterval(newStart, newStop, getBases(), 0, getCigar());
+
+        if ( newBases == null || newBases.length == 0 ) { // we cannot meaningfully chop down the haplotype, so return null
             return null;
         }
 
+        // note: trimCigarByReference does not remove leading or trailing indels, while getBasesCoveringRefInterval does remove bases
+        // of leading and trailing insertions.  We must remove leading and trailing insertions from the Cigar manually.
+        // we keep leading and trailing deletions because these are necessary for haplotypes to maintain consistent reference coordinates
+        final Cigar newCigar = AlignmentUtils.trimCigarByReference(getCigar(), newStart, newStop).getCigar();
+        final boolean leadingInsertion = !newCigar.getFirstCigarElement().getOperator().consumesReferenceBases();
+        final boolean trailingInsertion = !newCigar.getLastCigarElement().getOperator().consumesReferenceBases();
+        final int firstIndexToKeepInclusive = leadingInsertion ? 1 : 0;
+        final int lastIndexToKeepExclusive = newCigar.numCigarElements() - (trailingInsertion ? 1 : 0);
+
+        if (lastIndexToKeepExclusive <= firstIndexToKeepInclusive) {    // edge case of entire cigar is insertion
+            return null;
+        }
+
+        final Cigar leadingIndelTrimmedNewCigar = !(leadingInsertion || trailingInsertion)  ? newCigar :
+                new CigarBuilder(false).addAll(newCigar.getCigarElements().subList(firstIndexToKeepInclusive, lastIndexToKeepExclusive)).make();
+
         final Haplotype ret = new Haplotype(newBases, isReference());
-        ret.setCigar(newCigar);
+        ret.setCigar(leadingIndelTrimmedNewCigar);
         ret.setGenomeLocation(loc);
         ret.setScore(score);
         ret.setAlignmentStartHapwrtRef(newStart + getAlignmentStartHapwrtRef());
@@ -175,30 +192,35 @@ public final class Haplotype extends Allele {
      */
     public Cigar getConsolidatedPaddedCigar(final int padSize) {
         Utils.validateArg( padSize >= 0, () -> "padSize must be >= 0 but got " + padSize);
-        final Cigar extendedHaplotypeCigar = new Cigar(getCigar().getCigarElements());
-        if ( padSize > 0 ) {
-            extendedHaplotypeCigar.add(new CigarElement(padSize, CigarOperator.M));
-        }
-        return AlignmentUtils.consolidateCigar(extendedHaplotypeCigar);
+        return new CigarBuilder().addAll(getCigar()).add(new CigarElement(padSize, CigarOperator.M)).make();
     }
 
     /**
      * Set the cigar of this haplotype to cigar.
      *
-     * Note that this function consolidates the cigar, so that 1M1M1I1M1M => 2M1I2M
+     * This method consolidates the cigar, so that 1M1M1I1M1M => 2M1I2M.  It does not remove leading or trailing deletions
+     * because haplotypes, unlike reads, are pegged to a specific reference start and end.
      *
      * @param cigar a cigar whose readLength == length()
      */
     public void setCigar( final Cigar cigar ) {
-        this.cigar = AlignmentUtils.consolidateCigar(cigar);
+        this.cigar = new CigarBuilder(false).addAll(cigar).make();
         Utils.validateArg( this.cigar.getReadLength() == length(), () -> "Read length " + length() + " not equal to the read length of the cigar " + cigar.getReadLength() + " " + this.cigar);
     }
 
     public Haplotype insertAllele( final Allele refAllele, final Allele altAllele, final int refInsertLocation, final int genomicInsertLocation ) {
         // refInsertLocation is in ref haplotype offset coordinates NOT genomic coordinates
-        final int haplotypeInsertLocation = ReadUtils.getReadCoordinateForReferenceCoordinate(alignmentStartHapwrtRef, cigar, refInsertLocation, ReadUtils.ClippingTail.RIGHT_TAIL, true);
-        final byte[] myBases = this.getBases();
-        if( haplotypeInsertLocation == -1 || haplotypeInsertLocation + refAllele.length() >= myBases.length ) { // desired change falls inside deletion so don't bother creating a new haplotype
+        final Pair<Integer, CigarOperator> haplotypeInsertLocationAndOperator = ReadUtils.getReadIndexForReferenceCoordinate(alignmentStartHapwrtRef, cigar, refInsertLocation);
+
+        // can't insert outside the haplotype or into a deletion
+        if( haplotypeInsertLocationAndOperator.getLeft() == ReadUtils.READ_INDEX_NOT_FOUND || !haplotypeInsertLocationAndOperator.getRight().consumesReadBases() ) {
+            return null;
+        }
+        final int haplotypeInsertLocation = haplotypeInsertLocationAndOperator.getLeft();
+        final byte[] myBases = getBases();
+
+        // can't insert if we don't have any sequence after the inserted alt allele to span the new variant
+        if (haplotypeInsertLocation + refAllele.length() >= myBases.length) {
             return null;
         }
 

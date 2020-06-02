@@ -8,7 +8,9 @@ import htsjdk.samtools.util.Locatable;
 import org.apache.commons.lang3.tuple.Pair;
 import org.broadinstitute.hellbender.engine.AssemblyRegion;
 import org.broadinstitute.hellbender.testutils.VariantContextTestUtils;
+import org.broadinstitute.hellbender.utils.BaseUtils;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
+import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.genotyper.*;
 import org.broadinstitute.hellbender.utils.haplotype.EventMap;
 import org.broadinstitute.hellbender.utils.haplotype.Haplotype;
@@ -140,11 +142,11 @@ public class AssemblyBasedCallerUtilsUnitTest extends GATKBaseTest {
         final AlleleList<Haplotype> haplotypes = new IndexedAlleleList<>(haplotypesList);
         final SampleList samples = new IndexedSampleList("sample1");
 
-        final ReadLikelihoods<Haplotype> readLikelihoods = new ReadLikelihoods<>(samples, haplotypes, sampleReadMap);
-        LikelihoodMatrix<Haplotype> sampleMatrix = readLikelihoods.sampleMatrix(0);
+        final AlleleLikelihoods<GATKRead, Haplotype> readLikelihoods = new AlleleLikelihoods<>(samples, haplotypes, sampleReadMap);
+        LikelihoodMatrix<GATKRead, Haplotype> sampleMatrix = readLikelihoods.sampleMatrix(0);
         for (GATKRead read : reads) {
             //set likelihoods, -1.0 for haplotype read assigned to, -8.0 for all other haplotypes
-            final int readIndex = sampleMatrix.indexOfRead(read);
+            final int readIndex = sampleMatrix.indexOfEvidence(read);
             for (Haplotype haplotype : haplotypesList) {
                 final int haplotypeIndex = sampleMatrix.indexOfAllele(haplotype);
                 if (readHaplotypeMap.get(read) == haplotype) {
@@ -211,9 +213,9 @@ public class AssemblyBasedCallerUtilsUnitTest extends GATKBaseTest {
     }
 
     @Test(dataProvider = "testAnnotateReadLikelihoodsWithRegionsDataProvider")
-    public void testAnnotateReadLikelihoodsWithRegions(ReadLikelihoods<Haplotype> readLikelihoods, final Locatable loc, final Locatable callableLoc) {
+    public void testAnnotateReadLikelihoodsWithRegions(AlleleLikelihoods<GATKRead, Haplotype> readLikelihoods, final Locatable loc, final Locatable callableLoc) {
         AssemblyBasedCallerUtils.annotateReadLikelihoodsWithRegions(readLikelihoods, callableLoc);
-        for (GATKRead read : readLikelihoods.sampleReads(0)) {
+        for (GATKRead read : readLikelihoods.sampleEvidence(0)) {
             Assert.assertEquals(read.getAttributeAsString(AssemblyBasedCallerUtils.ALIGNMENT_REGION_TAG), loc.toString());
             Assert.assertEquals(read.getAttributeAsString(AssemblyBasedCallerUtils.CALLABLE_REGION_TAG), callableLoc.toString());
         }
@@ -274,18 +276,18 @@ public class AssemblyBasedCallerUtilsUnitTest extends GATKBaseTest {
                 }
             }
         }
-        List<ReadLikelihoods<Allele>> readLikelihoodsList = new ArrayList<>();
+        List<AlleleLikelihoods<GATKRead, Allele>> readLikelihoodsList = new ArrayList<>();
         List<List<String>> readAttributeListList = new ArrayList<>();
         for (VariantContext vc : vcs) {
             Map<String, List<GATKRead>> sampleReadMap = new HashMap<>();
             sampleReadMap.put("sample1", vcReadsMap.get(vc));
             final SampleList samples = new IndexedSampleList("sample1");
             final AlleleList<Allele> alleles = new IndexedAlleleList<>(vc.getAlleles());
-            final ReadLikelihoods<Allele> readLikelihoods = new ReadLikelihoods<>(samples, alleles, sampleReadMap);
-            LikelihoodMatrix<Allele> sampleMatrix = readLikelihoods.sampleMatrix(0);
+            final AlleleLikelihoods<GATKRead, Allele> readLikelihoods = new AlleleLikelihoods<>(samples, alleles, sampleReadMap);
+            LikelihoodMatrix<GATKRead, Allele> sampleMatrix = readLikelihoods.sampleMatrix(0);
             List<String> readAttributeList = new ArrayList<>();
             for (GATKRead read : vcReadsMap.get(vc)) {
-                final int readIndex = sampleMatrix.indexOfRead(read);
+                final int readIndex = sampleMatrix.indexOfEvidence(read);
                 String attribute = contig + ":" + vc.getStart() + "=";
                 if (vc == vcs.get(1)) {
                     attribute += supportedAlleleMap.get(read);
@@ -328,20 +330,20 @@ public class AssemblyBasedCallerUtilsUnitTest extends GATKBaseTest {
     }
 
     @Test(dataProvider = "testAnnotateReadLikelihoodsWithSupportedAllelesDataProvider")
-    public void testAnnotateReadLikelihoodsWithSupportedAlleles(List<ReadLikelihoods<Allele>> readLikelihoodsList, final List<VariantContext> vcs, final List<List<String>> readAttributeListList) {
+    public void testAnnotateReadLikelihoodsWithSupportedAlleles(List<AlleleLikelihoods<GATKRead, Allele>> readLikelihoodsList, final List<VariantContext> vcs, final List<List<String>> readAttributeListList) {
         for (int i = 0; i < readLikelihoodsList.size(); i++) {
-            ReadLikelihoods<Allele> readLikelihoods = readLikelihoodsList.get(i);
+            AlleleLikelihoods<GATKRead, Allele> readLikelihoods = readLikelihoodsList.get(i);
             VariantContext vc = vcs.get(i);
             List<String> readAttributeList = readAttributeListList.get(i);
 
 
             List<String> initReadAttributes = new ArrayList<>();
-            for (GATKRead read : readLikelihoods.sampleReads(0)) {
+            for (GATKRead read : readLikelihoods.sampleEvidence(0)) {
                 initReadAttributes.add(read.getAttributeAsString(AssemblyBasedCallerUtils.SUPPORTED_ALLELES_TAG));
             }
             AssemblyBasedCallerUtils.annotateReadLikelihoodsWithSupportedAlleles(vc, readLikelihoods);
-            for (int j = 0; j < readLikelihoods.sampleReadCount(0); j++) {
-                GATKRead read = readLikelihoods.sampleReads(0).get(j);
+            for (int j = 0; j < readLikelihoods.sampleEvidenceCount(0); j++) {
+                GATKRead read = readLikelihoods.sampleEvidence(0).get(j);
 
                 String expectedAttribute = (initReadAttributes.get(j) != null ? initReadAttributes.get(j) + ", " : "") + readAttributeList.get(j);
                 Assert.assertEquals(read.getAttributeAsString(AssemblyBasedCallerUtils.SUPPORTED_ALLELES_TAG), expectedAttribute);
@@ -357,7 +359,7 @@ public class AssemblyBasedCallerUtilsUnitTest extends GATKBaseTest {
         final List<VariantContext> vcsAtThisPosition = AssemblyBasedCallerUtils.getVariantContextsFromGivenAlleles(loc, activeAllelesToGenotype, true);
         Assert.assertEquals(vcsAtThisPosition.size(), expectedVcsAtThisLocation.size());
         for (int i = 0; i < expectedVcsAtThisLocation.size(); i++) {
-            VariantContextTestUtils.assertVariantContextsAreEqual(vcsAtThisPosition.get(i), expectedVcsAtThisLocation.get(i), new ArrayList<>());
+            VariantContextTestUtils.assertVariantContextsAreEqual(vcsAtThisPosition.get(i), expectedVcsAtThisLocation.get(i), new ArrayList<>(), Collections.emptyList());
             Assert.assertEquals(vcsAtThisPosition.get(i).getSource(), expectedVcsAtThisLocation.get(i).getSource());
         }
     }
@@ -519,7 +521,7 @@ public class AssemblyBasedCallerUtilsUnitTest extends GATKBaseTest {
         final List<VariantContext> vcsAtThisPosition = AssemblyBasedCallerUtils.getVariantContextsFromActiveHaplotypes(loc, haplotypes, true);
         Assert.assertEquals(vcsAtThisPosition.size(), expectedVcsAtThisLocation.size());
         for (int i = 0; i < expectedVcsAtThisLocation.size(); i++) {
-            VariantContextTestUtils.assertVariantContextsAreEqual(vcsAtThisPosition.get(i), expectedVcsAtThisLocation.get(i), new ArrayList<>());
+            VariantContextTestUtils.assertVariantContextsAreEqual(vcsAtThisPosition.get(i), expectedVcsAtThisLocation.get(i), new ArrayList<>(), Collections.emptyList());
             Assert.assertEquals(vcsAtThisPosition.get(i).getSource(), expectedVcsAtThisLocation.get(i).getSource());
         }
     }
@@ -588,7 +590,6 @@ public class AssemblyBasedCallerUtilsUnitTest extends GATKBaseTest {
                 snpVc,
                 snpVc.getStart(),
                 Arrays.asList(snpHaplotype, refHaplotype),
-                emptyGivenAllelesList,
                 Maps.asMap(new HashSet<>(snpAlleles),
                         (key) -> {
                             if (snpAlleles.get(1).equals(key)) return Arrays.asList(snpHaplotype);
@@ -599,7 +600,6 @@ public class AssemblyBasedCallerUtilsUnitTest extends GATKBaseTest {
                 mergedSnpAndDelVC,
                 mergedSnpAndDelVC.getStart(),
                 Arrays.asList(snpHaplotype, refHaplotype, deletionHaplotype),
-                emptyGivenAllelesList,
                 Maps.asMap(new HashSet<>(mergedSnpAndDelVC.getAlleles()),
                         (key) -> {
                             if (snpAlleles.get(1).equals(key)) return Arrays.asList(snpHaplotype);
@@ -612,7 +612,6 @@ public class AssemblyBasedCallerUtilsUnitTest extends GATKBaseTest {
                 snpVc,
                 snpVc.getStart(),
                 Arrays.asList(snpHaplotype, refHaplotype, snpHaplotypeNotPresentInEventsAtThisLoc),
-                Arrays.asList(snpVc),
                 Maps.asMap(new HashSet<>(snpVc.getAlleles()),
                         (key) -> {
                             if (snpAlleles.get(1).equals(key)) return Arrays.asList(snpHaplotype);
@@ -625,7 +624,6 @@ public class AssemblyBasedCallerUtilsUnitTest extends GATKBaseTest {
                 mergedSnpAndDelVC,
                 snpVc.getStart(),
                 Arrays.asList(snpHaplotype, refHaplotype, deletionHaplotype, deletionHaplotype2),
-                emptyGivenAllelesList,
                 Maps.asMap(new HashSet<>(mergedSnpAndDelVC.getAlleles()),
                         (key) -> {
                             if (snpAlleles.get(1).equals(key)) return Arrays.asList(snpHaplotype);
@@ -634,16 +632,15 @@ public class AssemblyBasedCallerUtilsUnitTest extends GATKBaseTest {
                         })
         });
 
-        // two spanning deletions, one in given alleles -> only the matching deletion should be in the event map for the span del
+        // two spanning deletions, one in given alleles
         tests.add(new Object[]{
                 mergedSnpAndDelVC,
                 snpVc.getStart(),
                 Arrays.asList(snpHaplotype, refHaplotype, deletionHaplotype, deletionHaplotype2),
-                Arrays.asList(snpVc, deletionVc2),
                 Maps.asMap(new HashSet<>(mergedSnpAndDelVC.getAlleles()),
                         (key) -> {
                             if (snpAlleles.get(1).equals(key)) return Arrays.asList(snpHaplotype);
-                            if (Allele.SPAN_DEL.equals(key)) return Arrays.asList(deletionHaplotype2);
+                            if (Allele.SPAN_DEL.equals(key)) return Arrays.asList(deletionHaplotype, deletionHaplotype2);
                             return Arrays.asList(refHaplotype);
                         })
         });
@@ -653,7 +650,6 @@ public class AssemblyBasedCallerUtilsUnitTest extends GATKBaseTest {
                 deletionStartingAtLocVc,
                 deletionStartingAtLocVc.getStart(),
                 Arrays.asList(snpHaplotype, refHaplotype, deletionStartingAtLocHaplotype),
-                Arrays.asList(deletionStartingAtLocVc),
                 Maps.asMap(new HashSet<>(deletionStartingAtLocVc.getAlleles()),
                         (key) -> {
                             if (deletionStartingAtLocAlleles.get(1).equals(key)) return Arrays.asList(deletionStartingAtLocHaplotype);
@@ -666,7 +662,6 @@ public class AssemblyBasedCallerUtilsUnitTest extends GATKBaseTest {
                 snpVc,
                 snpVc.getStart(),
                 Arrays.asList(snpHaplotype, refHaplotype, deletionStartingAtLocHaplotype),
-                Arrays.asList(snpVc),
                 Maps.asMap(new HashSet<>(snpVc.getAlleles()),
                         (key) -> {
                             if (snpAlleles.get(1).equals(key)) return Arrays.asList(snpHaplotype);
@@ -679,7 +674,6 @@ public class AssemblyBasedCallerUtilsUnitTest extends GATKBaseTest {
                 mergedSnpAndDelStartingAtLocVC,
                 snpVc.getStart(),
                 Arrays.asList(snpHaplotype, refHaplotype, deletionStartingAtLocHaplotype),
-                Arrays.asList(deletionStartingAtLocVc, snpVc),
                 Maps.asMap(new HashSet<>(mergedSnpAndDelStartingAtLocVC.getAlleles()),
                         (key) -> {
                             if (deletionStartingAtLocAlleles.get(1).equals(key)) return Arrays.asList(deletionStartingAtLocHaplotype);
@@ -696,9 +690,8 @@ public class AssemblyBasedCallerUtilsUnitTest extends GATKBaseTest {
     public void testGetEventMapper(final VariantContext mergedVc,
                                    final int loc,
                                    final List<Haplotype> haplotypes,
-                                   final List<VariantContext> activeAllelesToGenotype,
                                    final Map<Allele, List<Haplotype>> expectedEventMap) {
-        final Map<Allele, List<Haplotype>> actualEventMap = AssemblyBasedCallerUtils.createAlleleMapper(mergedVc, loc, haplotypes, activeAllelesToGenotype);
+        final Map<Allele, List<Haplotype>> actualEventMap = AssemblyBasedCallerUtils.createAlleleMapper(mergedVc, loc, haplotypes);
         Assert.assertEquals(actualEventMap.size(), expectedEventMap.size());
         for (final Allele key : actualEventMap.keySet()) {
             Assert.assertTrue(expectedEventMap.containsKey(key), "Got unexpected allele " + key + " with values " + actualEventMap.get(key));
@@ -1070,5 +1063,36 @@ public class AssemblyBasedCallerUtilsUnitTest extends GATKBaseTest {
         Assert.assertEquals(assemblyResultSet.getHaplotypeCount(), 3);
         Assert.assertEquals(assemblyResultSet.getHaplotypeList().get(1).getBaseString(), "ACAACCCCGGGGTTTT");
         Assert.assertEquals(assemblyResultSet.getHaplotypeList().get(2).getBaseString(), "ATAACCCCGGGGTTTT");
+    }
+
+    @Test
+    public void testGivenAllelesHugeInsertion() {
+        final int assemblyRegionStart = 1;
+        final int maxMnpDistance = 0;
+        final SmithWatermanAligner aligner = SmithWatermanAligner.getAligner(SmithWatermanAligner.Implementation.FASTEST_AVAILABLE);
+        final AssemblyResultSet assemblyResultSet = new AssemblyResultSet();
+
+        final Haplotype refHaplotype = new Haplotype("AAAACCCCGGGGTTTT".getBytes(), true);
+        final byte[] fullReferenceWithPadding = ("A" + refHaplotype.getBaseString()).getBytes();
+        refHaplotype.setAlignmentStartHapwrtRef(assemblyRegionStart);
+        refHaplotype.setCigar(new Cigar(Collections.singletonList(new CigarElement(refHaplotype.length(), CigarOperator.M))));
+        refHaplotype.setGenomeLocation(new SimpleInterval("chr", assemblyRegionStart, assemblyRegionStart + refHaplotype.length()));
+        assemblyResultSet.setPaddedReferenceLoc(new SimpleInterval("chr", 1, assemblyRegionStart + refHaplotype.length()));
+        assemblyResultSet.add(refHaplotype);
+        assemblyResultSet.setFullReferenceWithPadding(fullReferenceWithPadding);
+
+        Utils.resetRandomGenerator();
+        final byte[] insertedBases = new byte[200];
+        BaseUtils.fillWithRandomBases(insertedBases, 0, insertedBases.length);
+
+
+        // add huge insertion
+        final VariantContext givenVC = new VariantContextBuilder("test", "chr", 2, 2,
+                Arrays.asList(Allele.create((byte) 'A', true), Allele.create('A' + new String(insertedBases), false))).make();
+
+        AssemblyBasedCallerUtils.addGivenAlleles(assemblyRegionStart, Collections.singletonList(givenVC), maxMnpDistance,
+                aligner, refHaplotype, assemblyResultSet);
+        Assert.assertEquals(assemblyResultSet.getHaplotypeCount(), 2);
+        Assert.assertEquals(assemblyResultSet.getHaplotypeList().get(1).getBaseString(), "AA" + new String(insertedBases) + "AACCCCGGGGTTTT");
     }
 }

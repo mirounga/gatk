@@ -3,10 +3,10 @@ package org.broadinstitute.hellbender.tools.walkers.mutect.filtering;
 import htsjdk.variant.variantcontext.VariantContext;
 import org.apache.commons.math3.distribution.BinomialDistribution;
 import org.broadinstitute.hellbender.engine.ReferenceContext;
-import org.broadinstitute.hellbender.utils.GATKProtectedVariantContextUtils;
 import org.broadinstitute.hellbender.utils.MathUtils;
 import org.broadinstitute.hellbender.utils.QualityUtils;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
+import org.broadinstitute.hellbender.utils.variant.VariantContextGetters;
 
 import java.util.Arrays;
 import java.util.List;
@@ -15,6 +15,11 @@ import java.util.Optional;
 public class NormalArtifactFilter extends Mutect2VariantFilter {
     private static final double MIN_NORMAL_ARTIFACT_RATIO = 0.1;    // don't call normal artifact if allele fraction in normal is much smaller than allele fraction in tumor
     private static final int IMPUTED_NORMAL_BASE_QUALITY = 30;  // only used if normal base quality annotation fails somehow
+
+    private final double normalPileupPValueThreshold;
+    public NormalArtifactFilter(final double normalPileupPValueThreshold) {
+        this.normalPileupPValueThreshold = normalPileupPValueThreshold;
+    }
 
     @Override
     public ErrorType errorType() { return ErrorType.ARTIFACT; }
@@ -40,7 +45,7 @@ public class NormalArtifactFilter extends Mutect2VariantFilter {
             return 0.0;
         }
 
-        final double[] normalArtifactNegativeLogOdds = MathUtils.applyToArrayInPlace(GATKProtectedVariantContextUtils.getAttributeAsDoubleArray(vc, GATKVCFConstants.NORMAL_ARTIFACT_LOG_10_ODDS_KEY), MathUtils::log10ToLog);
+        final double[] normalArtifactNegativeLogOdds = MathUtils.applyToArrayInPlace(VariantContextGetters.getAttributeAsDoubleArray(vc, GATKVCFConstants.NORMAL_ARTIFACT_LOG_10_ODDS_KEY), MathUtils::log10ToLog);
         final double normalArtifactProbability = filteringEngine.posteriorProbabilityOfNormalArtifact(normalArtifactNegativeLogOdds[indexOfMaxTumorLod]);
 
         // the normal artifact log odds misses artifacts whose support in the normal consists entirely of low base quality reads
@@ -50,7 +55,7 @@ public class NormalArtifactFilter extends Mutect2VariantFilter {
         final double normalPValue = 1 - new BinomialDistribution(null, normalDepth, QualityUtils.qualToErrorProb(medianRefBaseQuality))
                 .cumulativeProbability(normalAltDepth - 1);
 
-        return normalPValue < M2FiltersArgumentCollection.normalPileupPValueThreshold ? 1.0 : normalArtifactProbability;
+        return normalPValue < normalPileupPValueThreshold ? 1.0 : normalArtifactProbability;
     }
 
     @Override
@@ -64,7 +69,7 @@ public class NormalArtifactFilter extends Mutect2VariantFilter {
     }
 
     @Override
-    protected List<String> requiredAnnotations() {
+    protected List<String> requiredInfoAnnotations() {
         return Arrays.asList(GATKVCFConstants.NORMAL_ARTIFACT_LOG_10_ODDS_KEY, GATKVCFConstants.TUMOR_LOG_10_ODDS_KEY);
     }
 }

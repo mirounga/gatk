@@ -435,6 +435,16 @@ public final class GATKReportTable {
     }
 
     /**
+     * Get entire row from the given row index in the table
+     *
+     * @param rowIndex the  index of the column
+     * @return the entire row at the specified index
+     */
+    public Object[] getRow(final int rowIndex) {
+        return underlyingData.get(rowIndex);
+    }
+
+    /**
      * Get a value from the given position in the table
      *
      * @param rowIndex       the row ID
@@ -549,8 +559,13 @@ public final class GATKReportTable {
                 value = "null";
             else if ( info.getDataType().equals(GATKReportDataType.Unknown) && (obj instanceof Double || obj instanceof Float) )
                 value = String.format("%.8f", obj);
-            else
-                value = String.format(info.getFormat(), obj);
+            else {
+                if (obj instanceof Double || obj instanceof Float) {
+                    value = Double.isFinite(Double.parseDouble(obj.toString())) ? String.format(info.getFormat(), obj) : obj.toString();
+                } else {
+                    value = String.format(info.getFormat(), obj);
+                }
+            }
 
             out.printf(info.getColumnFormat().getValueFormat(), value);
         }

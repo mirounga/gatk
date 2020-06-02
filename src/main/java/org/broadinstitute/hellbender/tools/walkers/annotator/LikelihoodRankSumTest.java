@@ -1,15 +1,13 @@
 package org.broadinstitute.hellbender.tools.walkers.annotator;
 
 import htsjdk.variant.variantcontext.Allele;
-import htsjdk.variant.vcf.VCFInfoHeaderLine;
+import htsjdk.variant.variantcontext.VariantContext;
 import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.utils.Utils;
-import org.broadinstitute.hellbender.utils.genotyper.ReadLikelihoods;
+import org.broadinstitute.hellbender.utils.genotyper.AlleleLikelihoods;
 import org.broadinstitute.hellbender.utils.help.HelpConstants;
-import org.broadinstitute.hellbender.utils.pileup.PileupElement;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
-import org.broadinstitute.hellbender.utils.variant.GATKVCFHeaderLines;
 
 import java.util.Collections;
 import java.util.List;
@@ -34,7 +32,7 @@ public final class LikelihoodRankSumTest extends RankSumTest {
     public List<String> getKeyNames() { return Collections.singletonList(GATKVCFConstants.LIKELIHOOD_RANK_SUM_KEY); }
 
     @Override
-    protected OptionalDouble getElementForRead(final GATKRead read, final int refLoc, final ReadLikelihoods<Allele>.BestAllele bestAllele) {
+    protected OptionalDouble getElementForRead(final GATKRead read, final VariantContext vc, final AlleleLikelihoods<GATKRead, Allele>.BestAllele bestAllele) {
         Utils.nonNull(read, "read is null");
         Utils.nonNull(bestAllele, "mostLikelyAllele is null");
         if ( ! bestAllele.isInformative() ) {
@@ -44,14 +42,9 @@ public final class LikelihoodRankSumTest extends RankSumTest {
     }
     
     @Override
-    protected OptionalDouble getElementForRead(final GATKRead read, final int refLoc) {
+    protected OptionalDouble getElementForRead(final GATKRead read, final VariantContext vc) {
         // todo its possible this should throw, as This method should never have been called as getElementForRead(read,refloc,mostLikelyAllele) was overriden
         return OptionalDouble.empty();
     }
 
-    @Override
-    protected OptionalDouble getElementForPileupElement(final PileupElement p, final int refLoc) {
-        // todo its possible this should throw, as This method should never have been called as getElementForRead(read,refloc,mostLikelyAllele) was overriden
-        return OptionalDouble.empty();
-    }
 }

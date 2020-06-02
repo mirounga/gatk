@@ -1,6 +1,7 @@
 package org.broadinstitute.hellbender.engine;
 
 import com.google.common.annotations.VisibleForTesting;
+import htsjdk.samtools.util.Locatable;
 import htsjdk.tribble.Feature;
 import org.broadinstitute.hellbender.cmdline.CommandLineProgram;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
@@ -165,7 +166,7 @@ public class FeatureContext {
      *         this FeatureContext's query interval as expanded by the specified number of leading/trailing bases.
      *         Empty List if there is no backing data source and/or interval.
      */
-    public <T extends Feature> List<T> getValues(final FeatureInput<T> featureDescriptor, final SimpleInterval queryInterval) {
+    public <T extends Feature> List<T> getValues(final FeatureInput<T> featureDescriptor, final Locatable queryInterval) {
         if (featureManager == null || queryInterval == null || featureDescriptor == null) {
             return Collections.emptyList();
         }
@@ -310,9 +311,9 @@ public class FeatureContext {
      * @param interval genomic interval for the result.  Typically, this would be the interval of the variant.  Never {@link null}.
      * @param featureQueryLookahead When querying FeatureDataSources, cache this many extra bases of context beyond
      *                              the end of query intervals in anticipation of future queries. Must be >= 0.  If uncertain, use zero.
-     * @param cloudPrefetchBuffer See {@link FeatureManager#FeatureManager(CommandLineProgram, int, int, int, Path)}  If uncertain, use zero.
-     * @param cloudIndexPrefetchBuffer See {@link FeatureManager#FeatureManager(CommandLineProgram, int, int, int, Path)}  If uncertain, use zero.
-     * @param reference See {@link FeatureManager#FeatureManager(CommandLineProgram, int, int, int, Path)}  If uncertain, use {@code null}.
+     * @param cloudPrefetchBuffer See {@link FeatureManager#FeatureManager(CommandLineProgram, int, int, int, org.broadinstitute.hellbender.tools.genomicsdb.GenomicsDBOptions)}  If uncertain, use zero.
+     * @param cloudIndexPrefetchBuffer See {@link FeatureManager#FeatureManager(CommandLineProgram, int, int, int, org.broadinstitute.hellbender.tools.genomicsdb.GenomicsDBOptions)}  If uncertain, use zero.
+     * @param reference See {@link FeatureManager#FeatureManager(CommandLineProgram, int, int, int, org.broadinstitute.hellbender.tools.genomicsdb.GenomicsDBOptions)}  If uncertain, use {@code null}.
      */
     @VisibleForTesting
     public static FeatureContext createFeatureContextForTesting(final Map<FeatureInput<? extends Feature>, Class<? extends Feature>> featureInputsWithType, final String dummyToolInstanceName,
