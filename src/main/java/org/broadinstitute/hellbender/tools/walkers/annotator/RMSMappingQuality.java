@@ -8,8 +8,7 @@ import htsjdk.variant.variantcontext.VariantContextBuilder;
 import htsjdk.variant.vcf.VCFConstants;
 import htsjdk.variant.vcf.VCFInfoHeaderLine;
 import htsjdk.variant.vcf.VCFStandardHeaderLines;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.engine.ReferenceContext;
 import org.broadinstitute.hellbender.exceptions.UserException;
@@ -17,19 +16,15 @@ import org.broadinstitute.hellbender.tools.walkers.annotator.allelespecific.Redu
 import org.broadinstitute.hellbender.tools.walkers.annotator.allelespecific.ReducibleAnnotationData;
 import org.broadinstitute.hellbender.utils.QualityUtils;
 import org.broadinstitute.hellbender.utils.Utils;
-import org.broadinstitute.hellbender.utils.genotyper.ReadLikelihoods;
+import org.broadinstitute.hellbender.utils.genotyper.AlleleLikelihoods;
 import org.broadinstitute.hellbender.utils.help.HelpConstants;
 import org.broadinstitute.hellbender.utils.logging.OneShotLogger;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFHeaderLines;
+import org.broadinstitute.hellbender.utils.variant.VariantContextGetters;
 
 import java.util.*;
-import java.util.stream.Collectors;
-import java.util.stream.IntStream;
-
-import static org.broadinstitute.hellbender.utils.GATKProtectedVariantContextUtils.getAttributeAsLong;
-import static org.broadinstitute.hellbender.utils.GATKProtectedVariantContextUtils.getAttributeAsLongList;
 
 
 /**
@@ -52,18 +47,44 @@ import static org.broadinstitute.hellbender.utils.GATKProtectedVariantContextUti
 public final class RMSMappingQuality extends InfoFieldAnnotation implements StandardAnnotation, ReducibleAnnotation {
     private static final OneShotLogger logger = new OneShotLogger(RMSMappingQuality.class);
     private static final RMSMappingQuality instance = new RMSMappingQuality();
-    public static final int NUM_LIST_ENTRIES = 2;
-    public static final int SUM_OF_SQUARES_INDEX = 0;
-    public static final int TOTAL_DEPTH_INDEX = 1;
+    private static final int NUM_LIST_ENTRIES = 2;
+    private static final int SUM_OF_SQUARES_INDEX = 0;
+    private static final int TOTAL_DEPTH_INDEX = 1;
+    private static final String OUTPUT_PRECISION = "%.2f";
+    public static final String RMS_MAPPING_QUALITY_OLD_BEHAVIOR_OVERRIDE_ARGUMENT = "allow-old-rms-mapping-quality-annotation-data";
+
+    @Argument(fullName = RMS_MAPPING_QUALITY_OLD_BEHAVIOR_OVERRIDE_ARGUMENT, doc="Override to allow old RMSMappingQuality annotated VCFs to function", optional=true)
+    public boolean allowOlderRawKeyValues = false;
 
     @Override
-    public String getRawKeyName() { return GATKVCFConstants.RAW_MAPPING_QUALITY_WITH_DEPTH_KEY;}   //new key for the two-value MQ data to prevent version mismatch catastrophes
+    public String getPrimaryRawKey() { return GATKVCFConstants.RAW_MAPPING_QUALITY_WITH_DEPTH_KEY; }  //new key for the two-value MQ data to prevent version mismatch catastrophes
 
-    public static String getDeprecatedRawKeyName() { return GATKVCFConstants.RAW_RMS_MAPPING_QUALITY_KEY;}   //new key for the two-value MQ data to prevent version mismatch catastrophes
+    /**
+     * @return true if annotation has secondary raw keys
+     */
+    @Override
+    public boolean hasSecondaryRawKeys() {
+        return false;
+    }
+
+    /**
+     * Get additional raw key strings that are not the primary key
+     *
+     * @return may be null
+     */
+    @Override
+    public List<String> getSecondaryRawKeys() {
+        return null;
+    }
+
+    public static String getDeprecatedRawKeyName() { return GATKVCFConstants.RAW_RMS_MAPPING_QUALITY_DEPRECATED;}   //old key that used the janky depth estimation method
 
     @Override
     public List<String> getKeyNames() {
-        return Arrays.asList(VCFConstants.RMS_MAPPING_QUALITY_KEY, getRawKeyName());
+        final List<String> allKeys = new ArrayList<>();
+        allKeys.add(VCFConstants.RMS_MAPPING_QUALITY_KEY);
+        allKeys.addAll(getRawKeyNames());
+        return allKeys;
     }
 
     @Override
@@ -73,7 +94,11 @@ public final class RMSMappingQuality extends InfoFieldAnnotation implements Stan
 
     @Override
     public List<VCFInfoHeaderLine> getRawDescriptions() {
-        return Arrays.asList(GATKVCFHeaderLines.getInfoLine(getRawKeyName()));
+        final List<VCFInfoHeaderLine> lines = new ArrayList<>(1);
+        for (final String rawKey : getRawKeyNames()) {
+            lines.add(GATKVCFHeaderLines.getInfoLine(rawKey));
+        }
+        return lines;
     }
 
     /**
@@ -82,9 +107,9 @@ public final class RMSMappingQuality extends InfoFieldAnnotation implements Stan
     @Override
     public Map<String, Object> annotateRawData(final ReferenceContext ref,
                                                final VariantContext vc,
-                                               final ReadLikelihoods<Allele> likelihoods){
+                                               final AlleleLikelihoods<GATKRead, Allele> likelihoods){
         Utils.nonNull(vc);
-        if (likelihoods == null || likelihoods.readCount() == 0) {
+        if (likelihoods == null || likelihoods.evidenceCount() == 0) {
             return Collections.emptyMap();
         }
 
@@ -92,7 +117,7 @@ public final class RMSMappingQuality extends InfoFieldAnnotation implements Stan
         final ReducibleAnnotationData<List<Long>> myData = new ReducibleAnnotationData<>(null);
         calculateRawData(vc, likelihoods, myData);
         final String annotationString = makeRawAnnotationString(vc.getAlleles(), myData.getAttributeMap());
-        annotations.put(getRawKeyName(), annotationString);
+        annotations.put(getPrimaryRawKey(), annotationString);
         return annotations;
     }
 
@@ -108,7 +133,7 @@ public final class RMSMappingQuality extends InfoFieldAnnotation implements Stan
         }
         final Map<String, Object> annotations = new HashMap<>();
         String annotationString = makeRawAnnotationString(vcAlleles, combinedData.getAttributeMap());
-        annotations.put(getRawKeyName(), annotationString);
+        annotations.put(getPrimaryRawKey(), annotationString);
         return annotations;
     }
 
@@ -120,16 +145,24 @@ public final class RMSMappingQuality extends InfoFieldAnnotation implements Stan
     @SuppressWarnings({"unchecked", "rawtypes"})//FIXME generics here blow up
     public Map<String, Object> finalizeRawData(final VariantContext vc, final VariantContext originalVC) {
         String rawMQdata;
-        if (vc.hasAttribute(getRawKeyName())) {
-            rawMQdata = vc.getAttributeAsString(getRawKeyName(), null);
+        if (vc.hasAttribute(getPrimaryRawKey())) {
+            rawMQdata = vc.getAttributeAsString(getPrimaryRawKey(), null);
         }
         else if (vc.hasAttribute(getDeprecatedRawKeyName())) {
+            if (!allowOlderRawKeyValues) {
+                throw new UserException.BadInput("Presence of '-"+getDeprecatedRawKeyName()+"' annotation is detected. This GATK version expects key "
+                        + getPrimaryRawKey() + " with a tuple of sum of squared MQ values and total reads over variant "
+                        + "genotypes as the value. This could indicate that the provided input was produced with an older version of GATK. " +
+                        "Use the argument '--"+RMS_MAPPING_QUALITY_OLD_BEHAVIOR_OVERRIDE_ARGUMENT+"' to override and attempt the deprecated MQ calculation. There " +
+                        "may be differences in how newer GATK versions calculate DP and MQ that may result in worse MQ results. Use at your own risk.");
+            }
+
             rawMQdata = vc.getAttributeAsString(getDeprecatedRawKeyName(), null);
             //the original version of ReblockGVCF produces a different MQ format -- try to handle that gracefully here just in case those files go through GenotypeGVCFs
-            if (vc.hasAttribute("MQ_DP")) {
-                logger.warn("Presence of MQ_DP key indicates that this tool may be running on an older output of ReblockGVCF " +
+            if (vc.hasAttribute(GATKVCFConstants.MAPPING_QUALITY_DEPTH_DEPRECATED)) {
+                logger.warn("Presence of " + GATKVCFConstants.MAPPING_QUALITY_DEPTH_DEPRECATED + " key indicates that this tool may be running on an older output of ReblockGVCF " +
                         "that may not have compatible annotations with this GATK version. Attempting to reformat MQ data.");
-                final String rawMQdepth = vc.getAttributeAsString("MQ_DP",null);
+                final String rawMQdepth = vc.getAttributeAsString(GATKVCFConstants.MAPPING_QUALITY_DEPTH_DEPRECATED,null);
                 if (rawMQdepth == null) {
                     throw new UserException.BadInput("MQ annotation data is not properly formatted. This version expects a " +
                             "long tuple of sum of squared MQ values and total reads over variant genotypes.");
@@ -138,7 +171,7 @@ public final class RMSMappingQuality extends InfoFieldAnnotation implements Stan
             }
             else {
                 logger.warn("MQ annotation data is not properly formatted. This GATK version expects key "
-                        + getRawKeyName() + " with an long tuple of sum of squared MQ values and total reads over variant "
+                        + getPrimaryRawKey() + " with a tuple of sum of squared MQ values and total reads over variant "
                         + "genotypes as the value. Attempting to use deprecated MQ calculation.");
                 final long numOfReads = getNumOfReads(vc, null);
                 rawMQdata = Math.round(Double.parseDouble(rawMQdata)) + "," + numOfReads;   //deprecated format was double so it needs to be converted to long
@@ -159,7 +192,7 @@ public final class RMSMappingQuality extends InfoFieldAnnotation implements Stan
     }
 
     private String makeFinalizedAnnotationString(final long numOfReads, final long sumOfSquaredMQs) {
-        return String.format("%.2f", Math.sqrt(sumOfSquaredMQs/(double)numOfReads));
+        return String.format(OUTPUT_PRECISION, Math.sqrt(sumOfSquaredMQs/(double)numOfReads));
     }
 
 
@@ -180,13 +213,13 @@ public final class RMSMappingQuality extends InfoFieldAnnotation implements Stan
 
     @SuppressWarnings({"unchecked", "rawtypes"})//FIXME
     private void calculateRawData(final VariantContext vc,
-                                 final ReadLikelihoods<Allele> likelihoods,
+                                 final AlleleLikelihoods<GATKRead, Allele> likelihoods,
                                  final ReducibleAnnotationData rawAnnotations){
         //GATK3.5 had a double, but change this to an long for the tuple representation (square sum, read count)
         long squareSum = 0;
         long numReadsUsed = 0;
         for (int i = 0; i < likelihoods.numberOfSamples(); i++) {
-            for (final GATKRead read : likelihoods.sampleReads(i)) {
+            for (final GATKRead read : likelihoods.sampleEvidence(i)) {
                 long mq = read.getMappingQuality();
                 if (mq != QualityUtils.MAPPING_QUALITY_UNAVAILABLE) {
                     squareSum += mq * mq;
@@ -200,9 +233,9 @@ public final class RMSMappingQuality extends InfoFieldAnnotation implements Stan
     @Override
     public Map<String, Object> annotate(final ReferenceContext ref,
                                         final VariantContext vc,
-                                        final ReadLikelihoods<Allele> likelihoods) {
+                                        final AlleleLikelihoods<GATKRead, Allele> likelihoods) {
         Utils.nonNull(vc);
-        if (likelihoods == null || likelihoods.readCount() < 1 ) {
+        if (likelihoods == null || likelihoods.evidenceCount() < 1 ) {
             return new HashMap<>();
         }
 
@@ -216,29 +249,46 @@ public final class RMSMappingQuality extends InfoFieldAnnotation implements Stan
 
     @VisibleForTesting
     static String formattedValue(double rms) {
-        return String.format("%.2f", rms);
+        return String.format(OUTPUT_PRECISION, rms);
     }
 
     /**
      * converts {@link GATKVCFConstants#RAW_MAPPING_QUALITY_WITH_DEPTH_KEY} into  {@link VCFConstants#RMS_MAPPING_QUALITY_KEY}  annotation if present
-     * NOTE: this is currently only used by HaplotypeCaller in VCF mode
+     * NOTE: this is currently only used by HaplotypeCaller in VCF mode and GnarlyGenotyper
      * @param vc which potentially contains rawMQ
      * @return if vc contained {@link GATKVCFConstants#RAW_MAPPING_QUALITY_WITH_DEPTH_KEY} it will be replaced with {@link VCFConstants#RMS_MAPPING_QUALITY_KEY}
      * otherwise return the original vc
      */
     public VariantContext finalizeRawMQ(final VariantContext vc) {
-        final String rawMQdata = vc.getAttributeAsString(getRawKeyName(), null);
+        final String rawMQdata = vc.getAttributeAsString(getPrimaryRawKey(), null);
         if (rawMQdata == null) {
-            return vc;
+            if (!vc.hasAttribute(GATKVCFConstants.MAPPING_QUALITY_DEPTH_DEPRECATED)) {
+                return vc;
+            }
+            if (vc.hasAttribute(GATKVCFConstants.MAPPING_QUALITY_DEPTH_DEPRECATED)) {
+                final int numOfReads = vc.getAttributeAsInt(GATKVCFConstants.MAPPING_QUALITY_DEPTH_DEPRECATED, getNumOfReads(vc));  //MQ_DP is an undocumented hack for the Gnarly Pipeline -- improved version uses RAW_MQ_and_DP tuple format (see #4969)
+                final String deprecatedRawMQdata = vc.getAttributeAsString(getDeprecatedRawKeyName(), null);
+                final double squareSum = parseDeprecatedRawDataString(deprecatedRawMQdata);
+                final double rms = Math.sqrt(squareSum / (double)numOfReads);
+                final String finalizedRMSMAppingQuality = formattedValue(rms);
+                return new VariantContextBuilder(vc)
+                        .rmAttribute(getDeprecatedRawKeyName())  //some old GVCFs that were reblocked for gnomAD have both
+                        .rmAttributes(getRawKeyNames())
+                        .attribute(getKeyNames().get(0), finalizedRMSMAppingQuality)
+                        .make();
+            }
+
         } else {
             final List<Long> SSQMQandDP = parseRawDataString(rawMQdata);
             final double rms = Math.sqrt(SSQMQandDP.get(SUM_OF_SQUARES_INDEX) / (double)SSQMQandDP.get(TOTAL_DEPTH_INDEX));
             final String finalizedRMSMAppingQuality = formattedValue(rms);
             return new VariantContextBuilder(vc)
-                    .rmAttribute(getRawKeyName())
+                    .rmAttribute(getDeprecatedRawKeyName())   //some old GVCFs that were reblocked for gnomAD have both
+                    .rmAttributes(getRawKeyNames())
                     .attribute(getKeyNames().get(0), finalizedRMSMAppingQuality)
                     .make();
         }
+        return vc;
     }
 
     private void parseRawDataString(ReducibleAnnotationData<List<Long>> myData) {
@@ -248,7 +298,7 @@ public final class RMSMappingQuality extends InfoFieldAnnotation implements Stan
     //TODO once the AS annotations have been added genotype gvcfs this can be removed for a more generic approach
     private static List<Long> parseRawDataString(String rawDataString) {
         try {
-            final String[] parsed = rawDataString.split(",");
+            final String[] parsed = rawDataString.trim().replaceAll(AnnotationUtils.BRACKET_REGEX, "").split(", *");
             if (parsed.length != NUM_LIST_ENTRIES) {
                 throw new UserException.BadInput("Raw value for annotation has " + parsed.length + " values, expected " + NUM_LIST_ENTRIES);
             }
@@ -256,8 +306,75 @@ public final class RMSMappingQuality extends InfoFieldAnnotation implements Stan
             final long totalDP = Long.parseLong(parsed[TOTAL_DEPTH_INDEX]);
             return Arrays.asList(squareSum,totalDP);
         } catch (final NumberFormatException e) {
-            throw new UserException.BadInput("malformed " + GATKVCFConstants.RAW_RMS_MAPPING_QUALITY_KEY + " annotation: " + rawDataString);
+            throw new UserException.BadInput("malformed " + GATKVCFConstants.RAW_MAPPING_QUALITY_WITH_DEPTH_KEY + " annotation: " + rawDataString);
         }
+    }
+
+    //Maintain some semblance of backward compatability by keeping the ability to use the old annotation key and format
+    private static double parseDeprecatedRawDataString(String rawDataString) {
+        try {
+            /*
+             * TODO: this is copied from gatk3 where it ignored all but the first value, we should figure out if this is
+             * the right thing to do or if it should just convert the string without trying to split it and fail if
+             * there is more than one value
+             */
+            final double squareSum = Double.parseDouble(rawDataString.split(",")[0]);
+            return squareSum;
+        } catch (final NumberFormatException e) {
+            throw new UserException.BadInput("malformed " + getDeprecatedRawKeyName() + " annotation: " + rawDataString);
+        }
+    }
+
+    /**
+     *
+     * @return the number of reads at the given site, calculated as InfoField {@link VCFConstants#DEPTH_KEY} minus the
+     * format field {@link GATKVCFConstants#MIN_DP_FORMAT_KEY} or DP of each of the HomRef genotypes at that site
+     * @throws UserException.BadInput if the {@link VCFConstants#DEPTH_KEY} is missing or if the calculated depth is <= 0
+     */
+    @VisibleForTesting
+    private static int getNumOfReads(final VariantContext vc) {
+        if(vc.hasAttribute(GATKVCFConstants.MAPPING_QUALITY_DEPTH_DEPRECATED)) {
+            int mqDP = vc.getAttributeAsInt(GATKVCFConstants.MAPPING_QUALITY_DEPTH_DEPRECATED, 0);
+            if (mqDP > 0) {
+                return mqDP;
+            }
+        }
+
+        //don't use the full depth because we don't calculate MQ for reference blocks
+        //don't count spanning deletion calls towards number of reads
+        int numOfReads = vc.getAttributeAsInt(VCFConstants.DEPTH_KEY, -1);
+        if(vc.hasGenotypes()) {
+            for(final Genotype gt : vc.getGenotypes()) {
+               if(hasReferenceDepth(gt)) {
+                    //site-level DP contribution will come from MIN_DP for gVCF-called reference variants or DP for BP resolution
+                    if (gt.hasExtendedAttribute(GATKVCFConstants.MIN_DP_FORMAT_KEY)) {
+                        numOfReads -= Integer.parseInt(gt.getExtendedAttribute(GATKVCFConstants.MIN_DP_FORMAT_KEY).toString());
+                    } else if (gt.hasDP()) {
+                        numOfReads -= gt.getDP();
+                    }
+                }
+                else if(hasSpanningDeletionAllele(gt)) {
+                    //site-level DP contribution will come from MIN_DP for gVCF-called reference variants or DP for BP resolution
+                    if (gt.hasExtendedAttribute(GATKVCFConstants.MIN_DP_FORMAT_KEY)) {
+                        numOfReads -= Integer.parseInt(gt.getExtendedAttribute(GATKVCFConstants.MIN_DP_FORMAT_KEY).toString());
+                    } else if (gt.hasDP()) {
+                        numOfReads -= gt.getDP();
+                    }
+                }
+            }
+        }
+        if (numOfReads <= 0){
+            numOfReads = -1;  //return -1 to result in a NaN
+        }
+        return numOfReads;
+    }
+
+    //In the new reducible framework only samples that get annotated at the GVCF level contribute to MQ
+    //The problem is that DP includes those samples plus the min_DP of the homRef blocks, which don't contribute MQ
+    //The fix is to pull out reference blocks, whether or not they have a called GT, but don't subtract depth from PL=[0,0,0] sites because they're still "variant"
+    //This is still inaccurate if there's an annotated homRef in the GVCF, which does happen for really low evidence alleles, but we won't know after the samples are merged
+    private static boolean hasReferenceDepth(Genotype gt) {
+        return gt.isHomRef() || (gt.isNoCall() && gt.hasPL() && gt.getPL()[0] == 0 && gt.getPL()[1] != 0);
     }
 
     /**
@@ -265,22 +382,22 @@ public final class RMSMappingQuality extends InfoFieldAnnotation implements Stan
      * @return the number of reads at the given site, trying first {@Link GATKVCFConstants.RAW_MAPPING_QUALITY_WITH_DEPTH_KEY},
      * falling back to calculating the value as InfoField {@link VCFConstants#DEPTH_KEY} minus the
      * format field {@link GATKVCFConstants#MIN_DP_FORMAT_KEY} or DP of each of the HomRef genotypes at that site.
-     * If neither of those is possible, will fall back to calculating the reads from the ReadLikelihoods data if provided.
+     * If neither of those is possible, will fall back to calculating the reads from the likelihoods data if provided.
      * @throws UserException.BadInput if the {@link VCFConstants#DEPTH_KEY} is missing or if the calculated depth is <= 0
      */
     @VisibleForTesting
     static long getNumOfReads(final VariantContext vc,
-                             final ReadLikelihoods<Allele> likelihoods) {
+                             final AlleleLikelihoods<GATKRead, Allele> likelihoods) {
         if(vc.hasAttribute(GATKVCFConstants.RAW_MAPPING_QUALITY_WITH_DEPTH_KEY)) {
-            List<Long> MQtuple = getAttributeAsLongList(vc, GATKVCFConstants.RAW_MAPPING_QUALITY_WITH_DEPTH_KEY,0L);
-            if (MQtuple.get(TOTAL_DEPTH_INDEX) > 0) {
-                return MQtuple.get(TOTAL_DEPTH_INDEX);
+            List<Long> mqTuple = VariantContextGetters.getAttributeAsLongList(vc, GATKVCFConstants.RAW_MAPPING_QUALITY_WITH_DEPTH_KEY,0L);
+            if (mqTuple.get(TOTAL_DEPTH_INDEX) > 0) {
+                return mqTuple.get(TOTAL_DEPTH_INDEX);
             }
         }
 
         long numOfReads = 0;
         if (vc.hasAttribute(VCFConstants.DEPTH_KEY)) {
-            numOfReads = getAttributeAsLong(vc, VCFConstants.DEPTH_KEY, -1L);
+            numOfReads = VariantContextGetters.getAttributeAsLong(vc, VCFConstants.DEPTH_KEY, -1L);
             if(vc.hasGenotypes()) {
                 for(final Genotype gt : vc.getGenotypes()) {
                     if(gt.isHomRef()) {
@@ -297,7 +414,7 @@ public final class RMSMappingQuality extends InfoFieldAnnotation implements Stan
         // If there is no depth key, try to compute from the likelihoods
         } else if (likelihoods != null && likelihoods.numberOfAlleles() != 0) {
             for (int i = 0; i < likelihoods.numberOfSamples(); i++) {
-                for (GATKRead read : likelihoods.sampleReads(i)) {
+                for (GATKRead read : likelihoods.sampleEvidence(i)) {
                     if (read.getMappingQuality() != QualityUtils.MAPPING_QUALITY_UNAVAILABLE) {
                         numOfReads++;
                     }
@@ -308,6 +425,16 @@ public final class RMSMappingQuality extends InfoFieldAnnotation implements Stan
             numOfReads = -1;  //return -1 to result in a NaN
         }
         return numOfReads;
+    }
+
+    private static boolean hasSpanningDeletionAllele(final Genotype gt) {
+        for(final Allele a : gt.getAlleles()) {
+            boolean hasSpanningDeletion = GATKVCFConstants.isSpanningDeletion(a);
+            if(hasSpanningDeletion) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public static RMSMappingQuality getInstance() {

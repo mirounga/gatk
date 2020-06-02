@@ -17,6 +17,8 @@ public class FuncotatorTestConstants {
     public static final String REFERENCE_VERSION_HG19 = "hg19";
     public static final String REFERENCE_VERSION_HG38 = "hg38";
 
+    public static final String REFERENCE_VERSION_ECOLI = "ASM584v2";
+
     // ----------------------------------------------------------------------
     // Data source variables:
 
@@ -82,6 +84,9 @@ public class FuncotatorTestConstants {
     public static final String HG19_3_REFERENCE_FILE_NAME     = FUNCOTATOR_LARGE_FILES_DIR + "b37.3.tar.gz";
     public static final String HG38_3_REFERENCE_FILE_NAME     = FUNCOTATOR_LARGE_FILES_DIR + "hg38.3.tar.gz";
     public static final String HG19_2_REFERENCE_FILE_NAME     = FUNCOTATOR_LARGE_FILES_DIR + "b37.2.tar.gz";
+
+    public static final String ECOLI_REFERENCE_FILE_NAME = FUNCOTATOR_LARGE_FILES_DIR + "e.coli_K12_MG1655.NC_000913.3.fasta";
+    public static final String ECOLI_VCF_FILE_NAME = FUNCOTATOR_LARGE_FILES_DIR + "e_coli_K12_MG1655.vcf";
 
     // A MUC16-only datasource that contains all transcripts:
     public static final String MUC16_ALL_TRANSCRIPTS_GENCODE_ANNOTATIONS_FILE_NAME = FUNCOTATOR_LARGE_FILES_DIR + "pik3ca_muc16_all_transcripts_ds" + File.separator + "gencode_muc16" + File.separator + "hg19" + File.separator + "gencode.v19.MUC16.gtf";
@@ -154,6 +159,8 @@ public class FuncotatorTestConstants {
     public static final String NON_TRIVIAL_DATA_VALIDATION_TEST_HG19_DATA_SET_1                     = VALIDATION_TEST_DATA_DIR + "regressionTestVariantSet1.vcf";
     public static final String NON_TRIVIAL_DATA_VALIDATION_TEST_HG19_DATA_SET_1_EXPECTED_OUTPUT     = VALIDATION_TEST_DATA_DIR + "regressionTestVariantSet1_expected.vcf";
     public static final String NON_TRIVIAL_DATA_VALIDATION_TEST_HG19_DATA_SET_2                     = VALIDATION_TEST_DATA_DIR + "regressionTestVariantSet2.vcf";
+    public static final String SINGLE_LINE                                                          = VALIDATION_TEST_DATA_DIR + "hashSetOrderingIssue.vcf";
+    public static final String SINGLE_LINE_EXPECTED                                                 = VALIDATION_TEST_DATA_DIR + "hashSetOrderingIssue_expected.vcf";
     public static final String NON_TRIVIAL_DATA_VALIDATION_TEST_HG19_DATA_SET_2_EXPECTED_OUTPUT     = VALIDATION_TEST_DATA_DIR + "regressionTestVariantSet2_expected.vcf";
     public static final String NON_TRIVIAL_DATA_VALIDATION_TEST_HG38                                = VALIDATION_TEST_DATA_DIR + "regressionTestVariantSetHG38.vcf";
     public static final String NON_TRIVIAL_DATA_VALIDATION_TEST_EXPECTED_OUTPUT                     = VALIDATION_TEST_DATA_DIR + "regressionTestVariantSetHG38_expected.vcf";

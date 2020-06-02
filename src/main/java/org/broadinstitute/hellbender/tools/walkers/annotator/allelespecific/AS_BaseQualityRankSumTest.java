@@ -1,10 +1,10 @@
 package org.broadinstitute.hellbender.tools.walkers.annotator.allelespecific;
 
+import htsjdk.variant.variantcontext.VariantContext;
 import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.tools.walkers.annotator.BaseQualityRankSumTest;
 import org.broadinstitute.hellbender.utils.help.HelpConstants;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
-import org.broadinstitute.hellbender.utils.read.ReadUtils;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
 
 import java.util.Arrays;
@@ -42,19 +42,45 @@ public class AS_BaseQualityRankSumTest extends AS_RankSumTest implements AS_Stan
         return Arrays.asList(GATKVCFConstants.AS_BASE_QUAL_RANK_SUM_KEY);
     }
 
+
+    /**
+     * Get the string that's used to combine data for this annotation
+     *
+     * @return never null
+     */
     @Override
-    public String getRawKeyName() { return GATKVCFConstants.AS_RAW_BASE_QUAL_RANK_SUM_KEY;}
+    public String getPrimaryRawKey() {
+        return GATKVCFConstants.AS_RAW_BASE_QUAL_RANK_SUM_KEY;
+    }
+
+    /**
+     * @return true if annotation has secondary raw keys
+     */
+    @Override
+    public boolean hasSecondaryRawKeys() {
+        return false;
+    }
+
+    /**
+     * Get additional raw key strings that are not the primary key
+     *
+     * @return may be null
+     */
+    @Override
+    public List<String> getSecondaryRawKeys() {
+        return null;
+    }
 
     /**
      * Get the element for the given read at the given reference position
      *
      * @param read     the read
-     * @param refLoc   the reference position
+     * @param vc        the variant to be annotated
      * @return a Double representing the element to be used in the rank sum test, or null if it should not be used
      */
     @Override
-    protected OptionalDouble getElementForRead(final GATKRead read, final int refLoc) {
-        return BaseQualityRankSumTest.getReadBaseQuality(read, refLoc);
+    protected OptionalDouble getElementForRead(final GATKRead read, final VariantContext vc) {
+        return BaseQualityRankSumTest.getReadBaseQuality(read, vc);
     }
 
 }

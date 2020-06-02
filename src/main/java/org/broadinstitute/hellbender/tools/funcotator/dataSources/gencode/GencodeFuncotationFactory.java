@@ -27,10 +27,9 @@ import org.broadinstitute.hellbender.tools.funcotator.metadata.FuncotationMetada
 import org.broadinstitute.hellbender.tools.funcotator.metadata.FuncotationMetadataUtils;
 import org.broadinstitute.hellbender.tools.funcotator.metadata.VcfFuncotationMetadata;
 import org.broadinstitute.hellbender.utils.BaseUtils;
-import org.broadinstitute.hellbender.utils.GATKProtectedVariantContextUtils;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
-import org.broadinstitute.hellbender.utils.codecs.gencode.*;
+import org.broadinstitute.hellbender.utils.codecs.gtf.*;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
 import org.broadinstitute.hellbender.utils.nio.NioFileCopierWithProgressMeter;
 import org.broadinstitute.hellbender.utils.param.ParamUtils;
@@ -47,7 +46,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
-import static org.broadinstitute.hellbender.utils.codecs.gencode.GencodeGtfFeature.FeatureTag.*;
+import static org.broadinstitute.hellbender.utils.codecs.gtf.GencodeGtfFeature.FeatureTag.*;
 
 /**
  * A factory to create {@link GencodeFuncotation}s.
@@ -319,9 +318,43 @@ public class GencodeFuncotationFactory extends DataSourceFuncotationFactory {
                                      final FeatureInput<? extends Feature> mainFeatureInput,
                                      final FlankSettings flankSettings,
                                      final boolean isDataSourceB37,
-                                     final String ncbiBuildVersion, final boolean isSegmentFuncotationEnabled) {
+                                     final String ncbiBuildVersion,
+                                     final boolean isSegmentFuncotationEnabled) {
+        this(gencodeTranscriptFastaFilePath, version, name,
+                transcriptSelectionMode, userRequestedTranscripts, annotationOverrides, mainFeatureInput,
+                flankSettings, isDataSourceB37, ncbiBuildVersion, isSegmentFuncotationEnabled,
+                FuncotatorUtils.DEFAULT_MIN_NUM_BASES_FOR_VALID_SEGMENT);
+    }
 
-        super(mainFeatureInput);
+        /**
+         * Create a {@link GencodeFuncotationFactory}.
+         *
+         * @param gencodeTranscriptFastaFilePath {@link Path} to the FASTA file containing the sequences of all transcripts in the Gencode data source.
+         * @param version The version {@link String} of Gencode from which {@link Funcotation}s will be made.
+         * @param name A {@link String} containing the name of this {@link GencodeFuncotationFactory}.
+         * @param transcriptSelectionMode The {@link TranscriptSelectionMode} by which representative/verbose transcripts will be chosen for overlapping variants.
+         * @param userRequestedTranscripts A {@link Set<String>} containing Gencode TranscriptIDs that the user requests to be annotated with priority over all other transcripts for overlapping variants.
+         * @param annotationOverrides A {@link LinkedHashMap<String,String>} containing user-specified overrides for specific {@link Funcotation}s.
+         * @param mainFeatureInput The backing {@link FeatureInput} for this {@link GencodeFuncotationFactory}, from which all {@link Funcotation}s will be created.
+         * @param flankSettings Settings object containing our 5'/3' flank sizes
+         * @param isDataSourceB37 If {@code true}, indicates that the data source behind this {@link GencodeFuncotationFactory} contains B37 data.
+         * @param ncbiBuildVersion The NCBI build version for this {@link GencodeFuncotationFactory} (can be found in the datasource config file)
+         * @param minBasesForValidSegment The minimum number of bases for a segment to be considered valid.
+         */
+    public GencodeFuncotationFactory(final Path gencodeTranscriptFastaFilePath,
+                                     final String version,
+                                     final String name,
+                                     final TranscriptSelectionMode transcriptSelectionMode,
+                                     final Set<String> userRequestedTranscripts,
+                                     final LinkedHashMap<String, String> annotationOverrides,
+                                     final FeatureInput<? extends Feature> mainFeatureInput,
+                                     final FlankSettings flankSettings,
+                                     final boolean isDataSourceB37,
+                                     final String ncbiBuildVersion,
+                                     final boolean isSegmentFuncotationEnabled,
+                                     final int minBasesForValidSegment) {
+
+        super(mainFeatureInput, minBasesForValidSegment);
 
         // Set up our local transcript fasta file.
         // We must localize it (if not on disk) to make read times fast enough to be manageable:
@@ -457,7 +490,8 @@ public class GencodeFuncotationFactory extends DataSourceFuncotationFactory {
 
     @Override
     protected List<Funcotation> createDefaultFuncotationsOnVariant( final VariantContext variant, final ReferenceContext referenceContext ) {
-        if (FuncotatorUtils.isSegmentVariantContext(variant)) {
+
+        if (FuncotatorUtils.isSegmentVariantContext(variant, minBasesForValidSegment)) {
             return createSegmentFuncotations(variant, Collections.emptyList(), null, null, null, null);
         } else {
             // Simply create IGR
@@ -784,9 +818,17 @@ public class GencodeFuncotationFactory extends DataSourceFuncotationFactory {
      */
     private List<GencodeFuncotation> createFuncotationsHelper(final VariantContext variant, final Allele altAllele, final GencodeGtfGeneFeature gtfFeature, final ReferenceContext reference) {
 
-        final List<GencodeGtfTranscriptFeature> basicTranscripts = retrieveBasicTranscripts(gtfFeature);
+        final List<GencodeGtfTranscriptFeature> transcriptList;
 
-        return createFuncotationsHelper(variant, altAllele, reference, basicTranscripts);
+        // Only get basic transcripts if we're using data from Gencode:
+        if ( gtfFeature.getGtfSourceFileType().equals(GencodeGtfCodec.GTF_FILE_TYPE_STRING) ) {
+            transcriptList = retrieveBasicTranscripts(gtfFeature);
+        }
+        else {
+            transcriptList = gtfFeature.getTranscripts();
+        }
+
+        return createFuncotationsHelper(variant, altAllele, reference, transcriptList);
     }
 
     private static List<GencodeGtfTranscriptFeature> retrieveBasicTranscripts(final GencodeGtfGeneFeature gtfFeature) {
@@ -1703,7 +1745,7 @@ public class GencodeFuncotationFactory extends DataSourceFuncotationFactory {
 
         // Adjust the variant interval for the overlap check, specifically to properly test for the indel cases:
         final SimpleInterval changedBasesInterval;
-        if ( GATKProtectedVariantContextUtils.typeOfVariant(variant.getReference(), altAllele).equals(VariantContext.Type.INDEL) ) {
+        if ( GATKVariantContextUtils.typeOfVariant(variant.getReference(), altAllele).equals(VariantContext.Type.INDEL) ) {
 
             final int adjustedStart;
             final int end;
@@ -2173,8 +2215,14 @@ public class GencodeFuncotationFactory extends DataSourceFuncotationFactory {
                  .setAnnotationTranscript(transcript.getTranscriptId());
 
          // Check for the optional non-serialized values for sorting:
-         // NOTE: This is kind of a kludge:
-         gencodeFuncotationBuilder.setLocusLevel( Integer.valueOf(transcript.getLocusLevel().toString()) );
+         // NOTE: For ENSEMBL gtf files, this field is optional.
+         // NOTE 2: This is kind of a kludge:
+         if ( transcript.getLocusLevel() == null ) {
+             gencodeFuncotationBuilder.setLocusLevel(0);
+         }
+         else {
+             gencodeFuncotationBuilder.setLocusLevel(Integer.valueOf(transcript.getLocusLevel().toString()));
+         }
 
         // Check for existence of Appris Rank and set it:
          gencodeFuncotationBuilder.setApprisRank( getApprisRank( transcript ) );
@@ -2651,7 +2699,7 @@ public class GencodeFuncotationFactory extends DataSourceFuncotationFactory {
 
     /**
      * Get the Appris Rank from the given {@link GencodeGtfGeneFeature}.
-     * Appris ranks are specified as annotations using {@link org.broadinstitute.hellbender.utils.codecs.gencode.GencodeGtfFeature.FeatureTag}s.
+     * Appris ranks are specified as annotations using {@link org.broadinstitute.hellbender.utils.codecs.gtf.GencodeGtfFeature.FeatureTag}s.
      * @param gtfFeature The {@link GencodeGtfTranscriptFeature} from which to get the Appris Rank.
      * @return The highest Appris Rank found in the given {@code gtfFeature}; if no Appris Rank exists, {@code null}.
      */
@@ -2679,11 +2727,11 @@ public class GencodeFuncotationFactory extends DataSourceFuncotationFactory {
     }
 
     /**
-     * Converts a given {@link org.broadinstitute.hellbender.utils.codecs.gencode.GencodeGtfFeature.GeneTranscriptType} to a {@link org.broadinstitute.hellbender.tools.funcotator.dataSources.gencode.GencodeFuncotation.VariantClassification}.
+     * Converts a given {@link org.broadinstitute.hellbender.utils.codecs.gtf.GencodeGtfFeature.GeneTranscriptType} to a {@link org.broadinstitute.hellbender.tools.funcotator.dataSources.gencode.GencodeFuncotation.VariantClassification}.
      * Assumes the given {@code type} is not {@link GencodeGtfFeature.GeneTranscriptType#PROTEIN_CODING}.
      * If no type can be assessed, returns {@code null}.
-     * @param type A {@link org.broadinstitute.hellbender.utils.codecs.gencode.GencodeGtfFeature.GeneTranscriptType} to convert to a {@link org.broadinstitute.hellbender.tools.funcotator.dataSources.gencode.GencodeFuncotation.VariantClassification}.
-     * @return A {@link org.broadinstitute.hellbender.tools.funcotator.dataSources.gencode.GencodeFuncotation.VariantClassification} representing the given {@link org.broadinstitute.hellbender.utils.codecs.gencode.GencodeGtfFeature.GeneTranscriptType}, or {@code null}.
+     * @param type A {@link org.broadinstitute.hellbender.utils.codecs.gtf.GencodeGtfFeature.GeneTranscriptType} to convert to a {@link org.broadinstitute.hellbender.tools.funcotator.dataSources.gencode.GencodeFuncotation.VariantClassification}.
+     * @return A {@link org.broadinstitute.hellbender.tools.funcotator.dataSources.gencode.GencodeFuncotation.VariantClassification} representing the given {@link org.broadinstitute.hellbender.utils.codecs.gtf.GencodeGtfFeature.GeneTranscriptType}, or {@code null}.
      */
     private static GencodeFuncotation.VariantClassification convertGeneTranscriptTypeToVariantClassification (final GencodeGtfFeature.GeneTranscriptType type ) {
 

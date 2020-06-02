@@ -100,7 +100,7 @@ public class StructuralVariationDiscoveryPipelineSparkIntegrationTest extends Co
     @Test(dataProvider = "svDiscoverPipelineSparkIntegrationTest", groups = "sv")
     public void testSVDiscoverPipelineRunnableLocal(final StructuralVariationDiscoveryPipelineSparkIntegrationTestArgs params) throws IOException {
 
-        final List<String> args = Arrays.asList( new ArgumentsBuilder().add(params.getCommandLine()).getArgsArray() );
+        final List<String> args = Arrays.asList( new ArgumentsBuilder().addRaw(params.getCommandLine()).getArgsArray() );
         runCommandLine(args);
 
         svDiscoveryVCFEquivalenceTest(
@@ -117,7 +117,7 @@ public class StructuralVariationDiscoveryPipelineSparkIntegrationTest extends Co
 
         MiniClusterUtils.runOnIsolatedMiniCluster(cluster -> {
 
-            final List<String> argsToBeModified = Arrays.asList( new ArgumentsBuilder().add(params.getCommandLine()).getArgsArray() );
+            final List<String> argsToBeModified = Arrays.asList( new ArgumentsBuilder().addRaw(params.getCommandLine()).getArgsArray() );
             final Path workingDirectory = MiniClusterUtils.getWorkingDir(cluster);
 
             int idx = 0;
@@ -205,7 +205,7 @@ public class StructuralVariationDiscoveryPipelineSparkIntegrationTest extends Co
             Assert.assertTrue(actualVcs.isEmpty());
 
         GATKBaseTest.assertCondition(actualVcs, expectedVcs,
-                (a, e) -> VariantContextTestUtils.assertVariantContextsAreEqual(a, e, attributesToIgnore));
+                (a, e) -> VariantContextTestUtils.assertVariantContextsAreEqual(a, e, attributesToIgnore, Collections.emptyList()));
 
         if ( experimentalOutputPathForNonComplex != null ) {
             final java.nio.file.Path path = IOUtils.getPath(experimentalOutputPathForNonComplex);
@@ -216,7 +216,7 @@ public class StructuralVariationDiscoveryPipelineSparkIntegrationTest extends Co
             final List<String> moreAttributesToIgnoreForNow = new ArrayList<>(attributesToIgnore);
             moreAttributesToIgnoreForNow.addAll(Collections.singletonList("EXTERNAL_CNV_CALLS"));
             GATKBaseTest.assertCondition(actualVcs, expectedVcs,
-                    (a, e) -> VariantContextTestUtils.assertVariantContextsAreEqual(a, e, moreAttributesToIgnoreForNow));
+                    (a, e) -> VariantContextTestUtils.assertVariantContextsAreEqual(a, e, moreAttributesToIgnoreForNow, Collections.emptyList()));
         }
     }
 

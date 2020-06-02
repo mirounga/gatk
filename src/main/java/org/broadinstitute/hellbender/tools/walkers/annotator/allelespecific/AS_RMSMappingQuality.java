@@ -6,12 +6,14 @@ import htsjdk.variant.variantcontext.GenotypesContext;
 import htsjdk.variant.variantcontext.VariantContext;
 import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.engine.ReferenceContext;
+import org.broadinstitute.hellbender.tools.walkers.annotator.AnnotationUtils;
 import org.broadinstitute.hellbender.tools.walkers.annotator.InfoFieldAnnotation;
 import org.broadinstitute.hellbender.utils.QualityUtils;
 import org.broadinstitute.hellbender.utils.Utils;
-import org.broadinstitute.hellbender.utils.genotyper.ReadLikelihoods;
+import org.broadinstitute.hellbender.utils.genotyper.AlleleLikelihoods;
 import org.broadinstitute.hellbender.utils.logging.OneShotLogger;
 import org.broadinstitute.hellbender.utils.help.HelpConstants;
+import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
 
 import java.util.*;
@@ -42,20 +44,38 @@ import java.util.*;
  * </ul>
  */
 @DocumentedFeature(groupName=HelpConstants.DOC_CAT_ANNOTATORS, groupSummary=HelpConstants.DOC_CAT_ANNOTATORS_SUMMARY, summary="Allele-specific root-mean-square of the mapping quality of reads across all samples (AS_MQ)")
-public final class AS_RMSMappingQuality extends InfoFieldAnnotation implements AS_StandardAnnotation, ReducibleAnnotation {
+public final class AS_RMSMappingQuality extends InfoFieldAnnotation implements AS_StandardAnnotation, ReducibleAnnotation, AlleleSpecificAnnotation {
 
     private final String printFormat = "%.2f";
 
     private static final OneShotLogger allele_logger = new OneShotLogger(AS_RMSMappingQuality.class);
     private static final OneShotLogger genotype_logger = new OneShotLogger(AS_RMSMappingQuality.class);
-    public static final String SPLIT_DELIM = "\\|"; //String.split takes a regex, so we need to escape the pipe
-    public static final String PRINT_DELIM = "|";
 
+    @Override
+    public String getPrimaryRawKey() { return GATKVCFConstants.AS_RAW_RMS_MAPPING_QUALITY_KEY; }
+
+    /**
+     * @return true if annotation has secondary raw keys
+     */
+    @Override
+    public boolean hasSecondaryRawKeys() {
+        return false;
+    }
+
+    /**
+     * Get additional raw key strings that are not the primary key
+     *
+     * @return may be null
+     */
+    @Override
+    public List<String> getSecondaryRawKeys() {
+        return null;
+    }
 
     @Override
     public Map<String, Object> annotate(final ReferenceContext ref,
                                         final VariantContext vc,
-                                        final ReadLikelihoods<Allele> likelihoods) {
+                                        final AlleleLikelihoods<GATKRead, Allele> likelihoods) {
         Utils.nonNull(vc);
         if ( likelihoods == null) {
             return Collections.emptyMap();
@@ -72,9 +92,9 @@ public final class AS_RMSMappingQuality extends InfoFieldAnnotation implements A
     @Override
     public Map<String, Object> annotateRawData(final ReferenceContext ref,
                                                final VariantContext vc,
-                                               final ReadLikelihoods<Allele> likelihoods ) {
+                                               final AlleleLikelihoods<GATKRead, Allele> likelihoods ) {
         Utils.nonNull(vc);
-        if ( likelihoods == null || !likelihoods.hasFilledLikelihoods()) {
+        if ( likelihoods == null) {
             return Collections.emptyMap();
         }
 
@@ -82,13 +102,13 @@ public final class AS_RMSMappingQuality extends InfoFieldAnnotation implements A
         final ReducibleAnnotationData<Double> myData = new ReducibleAnnotationData<>(null);
         getRMSDataFromLikelihoods(likelihoods, myData);
         final String annotationString = makeRawAnnotationString(vc.getAlleles(), myData.getAttributeMap());
-        annotations.put(getRawKeyName(), annotationString);
+        annotations.put(getPrimaryRawKey(), annotationString);
         return annotations;
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})//FIXME
     public void calculateRawData(final VariantContext vc,
-                                 final ReadLikelihoods<Allele> likelihoods,
+                                 final AlleleLikelihoods<GATKRead, Allele> likelihoods,
                                  final ReducibleAnnotationData myData){
         //For the raw data here, we're only keeping track of the sum of the squares of our values
         //When we go to reduce, we'll use the AD info to get the number of reads
@@ -120,7 +140,7 @@ public final class AS_RMSMappingQuality extends InfoFieldAnnotation implements A
         }
         final Map<String, Object> annotations = new HashMap<>();
         String annotationString = makeRawAnnotationString(vcAlleles, combinedData.getAttributeMap());
-        annotations.put(getRawKeyName(), annotationString);
+        annotations.put(getPrimaryRawKey(), annotationString);
         return annotations;
     }
 
@@ -141,7 +161,7 @@ public final class AS_RMSMappingQuality extends InfoFieldAnnotation implements A
     protected void parseRawDataString(final ReducibleAnnotationData<Double> myData) {
         final String rawDataString = myData.getRawData();
         //get per-allele data by splitting on allele delimiter
-        final String[] rawDataPerAllele = rawDataString.split(SPLIT_DELIM);
+        final String[] rawDataPerAllele = rawDataString.split(AnnotationUtils.ALLELE_SPECIFIC_SPLIT_REGEX);
         for (int i=0; i<rawDataPerAllele.length; i++) {
             final String alleleData = rawDataPerAllele[i];
             myData.putAttribute(myData.getAlleles().get(i), Double.parseDouble(alleleData));
@@ -158,10 +178,10 @@ public final class AS_RMSMappingQuality extends InfoFieldAnnotation implements A
     @Override
     @SuppressWarnings({"unchecked", "rawtypes"})//FIXME generics here blow up
     public Map<String, Object> finalizeRawData(final VariantContext vc, final VariantContext originalVC) {
-        if (!vc.hasAttribute(getRawKeyName())) {
+        if (!vc.hasAttribute(getPrimaryRawKey())) {
             return new HashMap<>();
         }
-        final String rawMQdata = vc.getAttributeAsString(getRawKeyName(),null);
+        final String rawMQdata = vc.getAttributeAsString(getPrimaryRawKey(),null);
         if (rawMQdata == null) {
             return new HashMap<>();
         }
@@ -172,6 +192,7 @@ public final class AS_RMSMappingQuality extends InfoFieldAnnotation implements A
 
         final String annotationString = makeFinalizedAnnotationString(vc, myData.getAttributeMap());
         annotations.put(getKeyNames().get(0), annotationString);
+        annotations.put(getPrimaryRawKey(), makeRawAnnotationString(vc.getAlleles(), myData.getAttributeMap()));
         return annotations;
     }
 
@@ -179,13 +200,10 @@ public final class AS_RMSMappingQuality extends InfoFieldAnnotation implements A
     @Override
     public List<String> getKeyNames() { return Arrays.asList(GATKVCFConstants.AS_RMS_MAPPING_QUALITY_KEY); }
 
-    @Override
-    public String getRawKeyName() { return GATKVCFConstants.AS_RAW_RMS_MAPPING_QUALITY_KEY; }
-
-    private void getRMSDataFromLikelihoods(final ReadLikelihoods<Allele> likelihoods, ReducibleAnnotationData<Double> myData) {
-        for ( final ReadLikelihoods<Allele>.BestAllele bestAllele : likelihoods.bestAllelesBreakingTies() ) {
+    private void getRMSDataFromLikelihoods(final AlleleLikelihoods<GATKRead, Allele> likelihoods, ReducibleAnnotationData<Double> myData) {
+        for ( final AlleleLikelihoods<GATKRead, Allele>.BestAllele bestAllele : likelihoods.bestAllelesBreakingTies() ) {
             if (bestAllele.isInformative()) {
-                final int mq = bestAllele.read.getMappingQuality();
+                final int mq = bestAllele.evidence.getMappingQuality();
                 if ( mq != QualityUtils.MAPPING_QUALITY_UNAVAILABLE ) {
                     final double currSquareSum = myData.hasAttribute(bestAllele.allele) ? (double) myData.getAttribute(bestAllele.allele) : 0;
                     myData.putAttribute(bestAllele.allele, currSquareSum + mq * mq);
@@ -198,7 +216,7 @@ public final class AS_RMSMappingQuality extends InfoFieldAnnotation implements A
         String annotationString = "";
         for (final Allele current : vcAlleles) {
             if (!annotationString.isEmpty()) {
-                annotationString += PRINT_DELIM;
+                annotationString += AnnotationUtils.ALLELE_SPECIFIC_RAW_DELIM;
             }
             if(perAlleleValues.get(current) != null) {
                 annotationString += String.format(printFormat, perAlleleValues.get(current));

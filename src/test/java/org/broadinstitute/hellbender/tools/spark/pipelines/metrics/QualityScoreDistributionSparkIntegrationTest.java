@@ -35,7 +35,7 @@ public class QualityScoreDistributionSparkIntegrationTest  extends CommandLinePr
         return QualityScoreDistributionSpark.class.getSimpleName();
     }
 
-    @Test(groups = "spark")
+    @Test(groups = {"R", "spark"})
     public void testAccumulators() throws Exception {
         final long[] qs= new long[128];
         final long[] oqs= new long[128];
@@ -90,7 +90,7 @@ public class QualityScoreDistributionSparkIntegrationTest  extends CommandLinePr
         return list.iterator();
     }
 
-    @Test(dataProvider = "QualityScoreDistribution", groups = {"spark", "R"})
+    @Test(dataProvider = "QualityScoreDistribution", groups = {"R", "spark"})
     public void test(final String unsortedBamName, final String expectedFileName, final String referenceName,
                      final boolean makePdf, final boolean pfReadsOnly, final boolean alignedReadsOnly) throws IOException {
         final File unsortedBam = new File(TEST_DATA_DIR, unsortedBamName);
@@ -101,23 +101,23 @@ public class QualityScoreDistributionSparkIntegrationTest  extends CommandLinePr
         final File pdf = GATKBaseTest.createTempFile("test", ".pdf");
 
         ArgumentsBuilder args = new ArgumentsBuilder();
-        args.add("--" + StandardArgumentDefinitions.INPUT_LONG_NAME);
-        args.add(unsortedBam.getCanonicalPath());
-        args.add("--" + StandardArgumentDefinitions.OUTPUT_LONG_NAME);
-        args.add(outfile.getCanonicalPath());
+        args.addRaw("--" + StandardArgumentDefinitions.INPUT_LONG_NAME);
+        args.addRaw(unsortedBam.getCanonicalPath());
+        args.addRaw("--" + StandardArgumentDefinitions.OUTPUT_LONG_NAME);
+        args.addRaw(outfile.getCanonicalPath());
         if (null != referenceName) {
             final File REF = new File(referenceName);
-            args.add("-R");
-            args.add(REF.getAbsolutePath());
+            args.addRaw("-R");
+            args.addRaw(REF.getAbsolutePath());
         }
         if (makePdf) {
-            args.add("--" + "chart");
-            args.add(pdf.getCanonicalPath());
+            args.addRaw("--" + "chart");
+            args.addRaw(pdf.getCanonicalPath());
         }
-        args.add("--" + "pfReadsOnly");
-        args.add(pfReadsOnly);
-        args.add("--" + "alignedReadsOnly");
-        args.add(alignedReadsOnly);
+        args.addRaw("--" + "pfReadsOnly");
+        args.addRaw(pfReadsOnly);
+        args.addRaw("--" + "alignedReadsOnly");
+        args.addRaw(alignedReadsOnly);
 
         this.runCommandLine(args.getArgsArray());
 

@@ -34,6 +34,9 @@ public final class BaseUtils {
     public static final byte[] BASES = {'A', 'C', 'G', 'T'};
     public static final char[] BASE_CHARS = {'A', 'C', 'G', 'T'};
 
+    public static final byte[] BASES_EXTENDED = {'A', 'C', 'G', 'T', 'N', 'D'};
+    public static final char[] BASE_CHARS_EXTENDED = {'A', 'C', 'G', 'T', 'N', 'D'};
+
     private static final int[] baseIndexMap = new int[256];
     static {
         Arrays.fill(baseIndexMap, -1);
@@ -140,10 +143,37 @@ public final class BaseUtils {
     }
 
     /**
+     * Converts a base including extended bases (ATCG + D and N bases) to a base index
+     *
+     * @param base [AaCcGgTtDdNn]
+     * @return 0, 1, 2, 3, 4, or -1 if the base can't be understood
+     */
+    static public int extendedBaseToBaseIndex(byte base) {
+        switch (base) {
+            case 'd':
+            case 'D':
+                return Base.D.ordinal();
+            case 'n':
+            case 'N':
+                return Base.N.ordinal();
+
+            default:
+                return simpleBaseToBaseIndex(base);
+        }
+    }
+
+    /**
      * Returns true iff the base represented by the byte is a 'regular' base (ACGT or *).
      */
     public static boolean isRegularBase( final byte base ) {
         return simpleBaseToBaseIndex(base) != -1;
+    }
+
+    /**
+     * Returns true iff the base represented by the byte is a nucleotide base (ACGT).
+     */
+    public static boolean isNucleotide( final byte base ) {
+        return base != '*' && simpleBaseToBaseIndex(base) != -1;
     }
 
     /**

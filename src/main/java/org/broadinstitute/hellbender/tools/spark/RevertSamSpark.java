@@ -5,7 +5,6 @@ import com.google.common.collect.LinkedListMultimap;
 import com.google.common.collect.ListMultimap;
 import com.google.common.collect.Lists;
 import htsjdk.samtools.*;
-import htsjdk.samtools.cram.build.CramIO;
 import htsjdk.samtools.util.*;
 import htsjdk.tribble.AbstractFeatureReader;
 import htsjdk.tribble.FeatureReader;
@@ -19,6 +18,7 @@ import org.broadinstitute.barclay.argparser.CommandLineParser;
 import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
 import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
+import org.broadinstitute.hellbender.engine.GATKPathSpecifier;
 import org.broadinstitute.hellbender.engine.filters.ReadFilter;
 import org.broadinstitute.hellbender.engine.filters.ReadFilterLibrary;
 import org.broadinstitute.hellbender.engine.spark.GATKSparkTool;
@@ -215,7 +215,7 @@ public class RevertSamSpark extends GATKSparkTool {
         sam("Generate SAM files."),
         bam("Generate BAM files."),
         cram("Generate CRAM files."),
-        dynamic("Generate files based on the extention of input.");
+        dynamic("Generate files based on the extension of input.");
 
         final String description;
 
@@ -270,7 +270,7 @@ public class RevertSamSpark extends GATKSparkTool {
         ////////////////////////////////////////////////////////////////////////////
         Map<String, Path> writerMap = getOutputMap(outputMap,
                                                   output,
-                                                  getDefaultExtension(readArguments.getReadFiles().get(0).toString(), outputByReadgroupFileFormat),
+                                                  getDefaultExtension(readArguments.getReadPathSpecifiers().get(0), outputByReadgroupFileFormat),
                                                   localHeader.getReadGroups(),
                                                   outputByReadGroup);
 
@@ -499,15 +499,15 @@ public class RevertSamSpark extends GATKSparkTool {
     }
 
     @VisibleForTesting
-    static String getDefaultExtension(final String input, final FileType setting) {
+    static String getDefaultExtension(final GATKPathSpecifier inputPath, final FileType setting) {
         if (setting == FileType.dynamic) {
-            if (input.endsWith(IOUtil.SAM_FILE_EXTENSION)) {
-                return IOUtil.SAM_FILE_EXTENSION;
+            if (inputPath.isSam()) {
+                return FileExtensions.SAM;
             }
-            if (input.endsWith(CramIO.CRAM_FILE_EXTENSION)) {
+            if (inputPath.isCram()) {
                 throw new UserException.UnimplementedFeature("Input file is a cram. This is currently unsupported for this tool");
             }
-            return BamFileIoUtils.BAM_FILE_EXTENSION;
+            return FileExtensions.BAM;
         } else {
             return "." + setting.toString();
         }

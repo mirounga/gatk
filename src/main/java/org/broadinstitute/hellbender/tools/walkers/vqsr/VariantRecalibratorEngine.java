@@ -3,6 +3,8 @@ package org.broadinstitute.hellbender.tools.walkers.vqsr;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.LogManager;
 
+import org.broadinstitute.hellbender.exceptions.GATKException;
+import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.utils.Utils;
 
 import java.util.List;
@@ -31,7 +33,7 @@ public class VariantRecalibratorEngine {
 
     public GaussianMixtureModel generateModel(final List<VariantDatum> data, final int maxGaussians ) {
         if( data == null || data.isEmpty() ) {
-            throw new IllegalArgumentException("No data found.");
+            throw new UserException.VQSRNegativeModelFailure("No data found.");
         }
         if( maxGaussians <= 0 ) {
             throw new IllegalArgumentException("maxGaussians must be a positive integer but found: " + maxGaussians);
@@ -53,7 +55,7 @@ public class VariantRecalibratorEngine {
             try {
                 model.precomputeDenominatorForEvaluation();
             } catch( Exception e ) {
-                logger.warn("Model could not pre-compute denominators.");  //this happened when we were reading in VQSR models that didn't have enough precision
+                logger.warn("Model could not pre-compute denominators. " + e.getMessage());  //this happened when we were reading in VQSR models that didn't have enough precision
                 model.failedToConverge = true;
                 return;
             }
@@ -63,7 +65,6 @@ public class VariantRecalibratorEngine {
         for( final VariantDatum datum : data ) {
             final double thisLod = evaluateDatum( datum, model );
             if( Double.isNaN(thisLod) ) {
-                logger.warn("Evaluate datum returned a NaN.");
                 model.failedToConverge = true;
                 return;
             }

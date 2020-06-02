@@ -1,6 +1,7 @@
 package org.broadinstitute.hellbender.testutils;
 
 import htsjdk.samtools.util.Locatable;
+import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.tools.genomicsdb.GenomicsDBImport;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
 
@@ -52,8 +53,9 @@ public final class GenomicsDBTestUtils {
 
 
         final String workspace = new File(workspaceDir, "workspace").getAbsolutePath();
-        args.addArgument(GenomicsDBImport.WORKSPACE_ARG_LONG_NAME, workspace);
+        args.add(GenomicsDBImport.WORKSPACE_ARG_LONG_NAME, workspace);
         args.addInterval(interval);
+        args.add(StandardArgumentDefinitions.ADD_OUTPUT_VCF_COMMANDLINE, "false");
         importer.runCommandLine(args);
         return new File(workspace);
     }
@@ -75,10 +77,10 @@ public final class GenomicsDBTestUtils {
         args.addVCF(gvcf);
 
         final String workspace = new File(workspaceDir, "workspace").getAbsolutePath();
-        args.addArgument(GenomicsDBImport.WORKSPACE_ARG_LONG_NAME, workspace);
+        args.add(GenomicsDBImport.WORKSPACE_ARG_LONG_NAME, workspace);
         intervals.forEach(args::addInterval);
         if (mergeIntervals) {
-            args.addBooleanArgument(GenomicsDBImport.MERGE_INPUT_INTERVALS_LONG_NAME, true);
+            args.add(GenomicsDBImport.MERGE_INPUT_INTERVALS_LONG_NAME, true);
         }
         importer.runCommandLine(args);
         return new File(workspace);

@@ -2,9 +2,9 @@ package org.broadinstitute.hellbender.tools.walkers.vqsr;
 
 import org.apache.commons.math3.special.Gamma;
 
+import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.utils.MathUtils;
-import org.broadinstitute.hellbender.utils.collections.ExpandingArrayList;
 
 import java.util.Arrays;
 import java.util.List;
@@ -24,6 +24,7 @@ class MultivariateGaussian {
     private Matrix cachedSigmaInverse;
     final private double[] pVarInGaussian;
     int pVarInGaussianIndex;
+    final private static double EPSILON = 1e-200;
 
     public MultivariateGaussian( final int numVariants, final int numAnnotations  ) {
         mu = new double[numAnnotations];
@@ -90,8 +91,7 @@ class MultivariateGaussian {
     private void precomputeInverse() {
         try {
             cachedSigmaInverse = sigma.inverse();
-        } catch( Exception e ) {
-            //TODO: there must be something narrower than Exception to catch here
+        } catch( RuntimeException e ) {
             throw new UserException(
                     "Error during clustering. Most likely there are too few variants used during Gaussian mixture " +
                             "modeling. Please consider raising the number of variants used to train the negative "+
@@ -103,8 +103,15 @@ class MultivariateGaussian {
 
 
     public void precomputeDenominatorForEvaluation() {
+        //if the contribution of this Gaussian is zero, then don't bother
+        if (pMixtureLog10 == Double.NEGATIVE_INFINITY) {
+            return;
+        }
         precomputeInverse();
         cachedDenomLog10 = Math.log10(Math.pow(2.0 * Math.PI, -1.0 * ((double) mu.length) / 2.0)) + Math.log10(Math.pow(sigma.det(), -0.5)) ;
+        if (Double.isNaN(cachedDenomLog10) || sigma.det() < EPSILON) {
+            throw new GATKException("Denominator for gaussian evaluation cannot be computed. Covariance determinant is " + sigma.det() + ". One or more annotations (usually MQ) may have insufficient variance.");
+        }
     }
 
     public void precomputeDenominatorForVariationalBayes( final double sumHyperParameterLambda ) {
@@ -125,6 +132,9 @@ class MultivariateGaussian {
     }
 
     public double evaluateDatumLog10( final VariantDatum datum ) {
+        if (pMixtureLog10 == Double.NEGATIVE_INFINITY) {
+            return Double.NEGATIVE_INFINITY;
+        }
         double sumKernel = 0.0;
         final double[] crossProdTmp = new double[mu.length];
         Arrays.fill(crossProdTmp, 0.0);

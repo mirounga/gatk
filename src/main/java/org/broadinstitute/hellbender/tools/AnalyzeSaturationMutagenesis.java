@@ -10,6 +10,7 @@ import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
 import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.cmdline.programgroups.CoverageAnalysisProgramGroup;
+import org.broadinstitute.hellbender.engine.GATKPathSpecifier;
 import org.broadinstitute.hellbender.engine.GATKTool;
 import org.broadinstitute.hellbender.engine.ReferenceDataSource;
 import org.broadinstitute.hellbender.engine.filters.ReadFilterLibrary;
@@ -18,11 +19,12 @@ import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.tools.spark.utils.HopscotchMap;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.gcs.BucketUtils;
+import org.broadinstitute.hellbender.utils.read.CigarUtils;
+import org.broadinstitute.hellbender.utils.read.ClippingTail;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.read.SAMFileGATKReadWriter;
 
 import java.io.BufferedWriter;
-import java.io.File;
 import java.io.IOException;
 import java.io.OutputStreamWriter;
 import java.text.DecimalFormat;
@@ -103,12 +105,21 @@ public final class AnalyzeSaturationMutagenesis extends GATKTool {
     @Argument(doc = "minimum number of wt calls flanking variant", fullName = "min-flanking-length")
     @VisibleForTesting static int minFlankingLength = 2;
 
+    @Argument(doc = "minimum map quality for read alignment.  reads having alignments with MAPQs less than this are treated as unmapped.", fullName = "min-mapq")
+    private static int minMapQ = 4;
+
     @Argument(doc = "reference interval(s) of the ORF (1-based, inclusive), for example, '134-180,214-238' (no spaces)",
             fullName = "orf")
     private static String orfCoords;
 
     @Argument(doc = "minimum number of observations of reported variants", fullName = "min-variant-obs")
     private static long minVariantObservations = 3;
+
+    @Argument(doc = "examine supplemental alignments to find large deletions", fullName = "find-large-deletions")
+    @VisibleForTesting static boolean findLargeDels = false;
+
+    @Argument(doc = "minimum length of supplemental alignment", fullName = "min-alt-length")
+    @VisibleForTesting static int minAltLength = 15;
 
     @Argument(doc = "codon translation (a string of 64 amino acid codes", fullName = "codon-translation")
     private static String codonTranslation = "KNKNTTTTRSRSIIMIQHQHPPPPRRRRLLLLEDEDAAAAGGGGVVVVXYXYSSSSXCWCLFLF";
@@ -150,6 +161,8 @@ public final class AnalyzeSaturationMutagenesis extends GATKTool {
         "TAA", "TAC", "TAG", "TAT", "TCA", "TCC", "TCG", "TCT", "TGA", "TGC", "TGG", "TGT", "TTA", "TTC", "TTG", "TTT"
     };
 
+    private static Logger staticLogger;
+
     @Override
     public boolean requiresReads() {
         return true;
@@ -163,6 +176,7 @@ public final class AnalyzeSaturationMutagenesis extends GATKTool {
     @Override
     public void onTraversalStart() {
         super.onTraversalStart();
+        staticLogger = logger;
         final SAMFileHeader header = getHeaderForReads();
         if ( pairedMode && header != null && header.getSortOrder() == SortOrder.coordinate ) {
             throw new UserException("In paired mode the BAM cannot be coordinate sorted.  Mates must be adjacent.");
@@ -173,13 +187,12 @@ public final class AnalyzeSaturationMutagenesis extends GATKTool {
         reference = new Reference(ReferenceDataSource.of(referenceArguments.getReferencePath()));
         codonTracker = new CodonTracker(orfCoords, reference.getRefSeq(), logger);
         if ( writeRejectedReads ) {
-            rejectedReadsBAMWriter = createSAMWriter(new File(outputFilePrefix + ".rejected.bam"), false);
+            rejectedReadsBAMWriter = createSAMWriter(new GATKPathSpecifier(outputFilePrefix + ".rejected.bam"), false);
         }
     }
 
     @Override
     public void traverse() {
-
         // ignore non-primary alignments
         final Stream<GATKRead> reads = getTransformedReadStream(ReadFilterLibrary.PRIMARY_LINE);
 
@@ -286,14 +299,20 @@ public final class AnalyzeSaturationMutagenesis extends GATKTool {
         }
     }
 
+    // interpret the effects of the SNVs on the ORF
     private static void describeVariantsAsCodons( final BufferedWriter writer, final List<SNV> snvs )
             throws IOException {
         final List<CodonVariation> codonVariations = codonTracker.encodeSNVsAsCodons(snvs);
-        final int[] refCodonValues = codonTracker.getRefCodonValues();
+        if ( codonVariations.size() == 0 ) {
+            writer.write("\t0");
+            return;
+        }
 
         writer.write('\t');
-        writer.write(Long.toString(codonVariations.size()));
+        writer.write(Integer.toString(codonVariations.size()));
+        final int[] refCodonValues = codonTracker.getRefCodonValues();
 
+        // write a column describing each altered codon as DNA
         String sep = "\t";
         for ( final CodonVariation variation : codonVariations ) {
             writer.write(sep);
@@ -310,6 +329,7 @@ public final class AnalyzeSaturationMutagenesis extends GATKTool {
             }
         }
 
+        // write a column describing each altered codon as an amino acid
         sep = "\t";
         for ( final CodonVariation variation : codonVariations ) {
             writer.write(sep);
@@ -323,7 +343,7 @@ public final class AnalyzeSaturationMutagenesis extends GATKTool {
             } else if ( variation.isDeletion() ) {
                 writer.write("D:");
                 writer.write(codonTranslation.charAt(refCodonValues[codonId]));
-                writer.write(":-");
+                writer.write(">-");
             } else {
                 final char fromAA = codonTranslation.charAt(refCodonValues[codonId]);
                 final char toAA = codonTranslation.charAt(variation.getCodonValue());
@@ -335,6 +355,37 @@ public final class AnalyzeSaturationMutagenesis extends GATKTool {
                 writer.write(toAA);
             }
         }
+
+        // write one final column describing the total effect in HGVS standard nomenclature
+        // this involves grouping together codon variations that can be described together
+        sep = "\t";
+        CodonVariationGroup codonVariationGroup = null;
+        for ( final CodonVariation variation : codonVariations ) {
+            if ( codonVariationGroup == null ) {
+                if ( !isSynonymous(variation, refCodonValues) ) {
+                    codonVariationGroup = new CodonVariationGroup(refCodonValues, variation);
+                }
+            } else if ( !codonVariationGroup.addVariation(variation) ) {
+                writer.write(sep);
+                sep = ";";
+                writer.write(codonVariationGroup.asHGVSString());
+                codonVariationGroup = null;
+                if ( !isSynonymous(variation, refCodonValues) ) {
+                    codonVariationGroup = new CodonVariationGroup(refCodonValues, variation);
+                }
+            }
+        }
+        if ( codonVariationGroup != null && !codonVariationGroup.isEmpty() ) {
+            writer.write(sep);
+            writer.write(codonVariationGroup.asHGVSString());
+        }
+    }
+
+    // does the variation describe a "silent" mutation that doesn't cause a change in the amino acid?
+    private static boolean isSynonymous( final CodonVariation variation, final int[] refCodonValues ) {
+        return variation.getVariationType() == CodonVariationType.MODIFICATION &&
+                codonTranslation.charAt(variation.getCodonValue()) ==
+                        codonTranslation.charAt(refCodonValues[variation.getCodonId()]);
     }
 
     private static void writeRefCoverage() {
@@ -577,6 +628,7 @@ public final class AnalyzeSaturationMutagenesis extends GATKTool {
         }
     }
 
+    // categories for interpretation of reads
     enum ReportType {
         UNMAPPED("unmapped", "Unmapped Reads"),
         LOW_QUALITY("lowQ", "LowQ Reads"),
@@ -591,7 +643,7 @@ public final class AnalyzeSaturationMutagenesis extends GATKTool {
         public final String attributeValue; // value for tagging rejected reads.  when null, don't tag the read.
         public final String label;
 
-        private ReportType( final String attributeValue, final String label ) {
+        ReportType( final String attributeValue, final String label ) {
             this.attributeValue = attributeValue;
             this.label = label;
         }
@@ -599,8 +651,9 @@ public final class AnalyzeSaturationMutagenesis extends GATKTool {
         public final static String REPORT_TYPE_ATTRIBUTE_KEY = "XX";
     }
 
+    // counts of the reporting categories
     public final static class ReportTypeCounts {
-        private long[] counts = new long[ReportType.values().length];
+        private final long[] counts = new long[ReportType.values().length];
 
         public void bumpCount( final ReportType reportType ) {
             counts[reportType.ordinal()] += 1;
@@ -613,6 +666,7 @@ public final class AnalyzeSaturationMutagenesis extends GATKTool {
         }
     }
 
+    // a description of the wild type amplicon and its coverage
     @VisibleForTesting final static class Reference {
         // the amplicon -- all bytes are converted to upper-case 'A', 'C', 'G', or 'T', no nonsense
         private final byte[] refSeq;
@@ -700,6 +754,9 @@ public final class AnalyzeSaturationMutagenesis extends GATKTool {
         public int getStart() { return start; }
         public int getEnd() { return end; }
         public int size() { return end - start; }
+        public int overlapLength( final Interval that ) {
+            return Math.min(this.end, that.end) - Math.max(this.start, that.start);
+        }
 
         @Override
         public boolean equals( final Object obj ) {
@@ -885,6 +942,7 @@ public final class AnalyzeSaturationMutagenesis extends GATKTool {
         MODIFICATION
     }
 
+    // a description of a codon that varies from wild type
     @VisibleForTesting static final class CodonVariation {
         private final int codonId;
         private final int codonValue; // ignored for FRAMESHIFT and DELETION
@@ -934,6 +992,119 @@ public final class AnalyzeSaturationMutagenesis extends GATKTool {
         }
     }
 
+    // one or more codon variations that can be described together in standard nomenclature
+    @VisibleForTesting static final class CodonVariationGroup {
+        private final int[] refCodonValues;
+        private final StringBuilder altCalls;
+        private int startingCodon;
+        private int endingCodon;
+        private boolean isFrameShift;
+        private int insCount;
+        private int delCount;
+        private int subCount;
+
+        // start a new group with a first variation
+        public CodonVariationGroup( final int[] refCodonValues, final CodonVariation codonVariation ) {
+            this.refCodonValues = refCodonValues;
+            altCalls = new StringBuilder();
+            insCount = delCount = subCount = 0;
+            switch ( codonVariation.getVariationType() ) {
+                case FRAMESHIFT:
+                    isFrameShift = true;
+                    break;
+                case INSERTION:
+                    insCount = 1;
+                    altCalls.append(codonTranslation.charAt(codonVariation.getCodonValue()));
+                    break;
+                case DELETION:
+                    delCount = 1;
+                    break;
+                case MODIFICATION:
+                    subCount = 1;
+                    altCalls.append(codonTranslation.charAt(codonVariation.getCodonValue()));
+                    break;
+            }
+            startingCodon = endingCodon = codonVariation.getCodonId();
+        }
+
+        // attempt to add more variations
+        // returns false if the presented variation cannot be added to the group
+        public boolean addVariation( final CodonVariation codonVariation ) {
+            final int codonId = codonVariation.getCodonId();
+            // if we're skipping a codon, start a new group (except for frameshift groups)
+            if ( codonId > endingCodon + 1 && !isFrameShift ) return false;
+            switch ( codonVariation.getVariationType() ) {
+                case FRAMESHIFT:
+                    return false; // start new group for the frameshift
+                case INSERTION:
+                    insCount += 1;
+                    altCalls.append(codonTranslation.charAt(codonVariation.getCodonValue()));
+                    if ( isFrameShift && isEmpty() ) startingCodon = codonId;
+                    break;
+                case DELETION:
+                    delCount += 1;
+                    break;
+                case MODIFICATION:
+                    final char aa = codonTranslation.charAt(codonVariation.getCodonValue());
+                    if ( aa == codonTranslation.charAt(refCodonValues[codonId]) ) {
+                        if ( isFrameShift ) {
+                            if ( !isEmpty() ) altCalls.append(aa);
+                            break;
+                        }
+                        // synonymous codon -- start new group
+                        return false;
+                    }
+                    if ( isFrameShift && isEmpty() ) startingCodon = codonId;
+                    subCount += 1;
+                    altCalls.append(aa);
+                    break;
+            }
+            endingCodon = codonId;
+            return true;
+        }
+
+        // sometimes when starting with a frame shift you end up with nothing because the variants are all synonymous
+        public boolean isEmpty() { return subCount + insCount + delCount == 0; }
+
+        @Override public String toString() { return asHGVSString(); }
+
+        // translate the group into standard nomenclature
+        public String asHGVSString() {
+            final String alts = altCalls.toString();
+            final StringBuilder sb = new StringBuilder();
+            if ( isFrameShift && !alts.isEmpty() ) {
+                sb.append(codonTranslation.charAt(refCodonValues[startingCodon])).append(startingCodon + 1);
+                sb.append(alts.charAt(0));
+                final int len = endingCodon - startingCodon + 1;
+                if ( len > 1 ) {
+                    sb.append("fs*");
+                    if ( alts.charAt(alts.length() - 1) == 'X' ) sb.append(len);
+                    else sb.append('?');
+                }
+            } else {
+                // pure inserts need to have the starting codon fixed up
+                if ( insCount != 0 && delCount == 0 && subCount == 0 ) {
+                    startingCodon -= 1;
+                }
+                sb.append(codonTranslation.charAt(refCodonValues[startingCodon])).append(startingCodon + 1);
+
+                // suppress printing range and type when there is a single variation
+                if ( startingCodon != endingCodon ) {
+                    sb.append('_').append(codonTranslation.charAt(refCodonValues[endingCodon])).append(endingCodon + 1);
+                }
+                if ( subCount == 0 && insCount == 0 ) {
+                    sb.append("del");
+                } else if ( subCount == 0 && delCount == 0 ) {
+                    sb.append("ins");
+                } else if ( subCount + delCount + insCount > 1 ) {
+                    sb.append("insdel");
+                }
+                sb.append(alts);
+            }
+            return sb.toString();
+        }
+    }
+
     // A class to translate a sequence of base-call variants into a sequence of codon variants.
     // also has some counters to track the number of observations of different codon values at each codon
     @VisibleForTesting static final class CodonTracker {
@@ -965,13 +1136,18 @@ public final class AnalyzeSaturationMutagenesis extends GATKTool {
         public int[] getRefCodonValues() { return refCodonValues; }
         public long[][] getCodonCounts() { return codonCounts; }
 
+        /** Turns a list of variant base calls into a list of variant codons */
         public List<CodonVariation> encodeSNVsAsCodons( final List<SNV> snvs ) {
             final List<CodonVariation> codonVariations = new ArrayList<>();
             final Iterator<SNV> snvIterator = snvs.iterator();
             SNV snv = null;
+            final int orfStart = exonList.get(0).getStart();
+            // find 1st exonic SNV
             while ( snvIterator.hasNext() ) {
                 final SNV testSNV = snvIterator.next();
-                if ( isExonic(testSNV.getRefIndex()) ) {
+                final int refIndex = testSNV.getRefIndex();
+                // can't be an insert before the 1st codon and must be exonic
+                if ( (refIndex != orfStart || testSNV.getRefCall() != NO_CALL) && isExonic(refIndex) ) {
                     snv = testSNV;
                     break;
                 }
@@ -979,7 +1155,8 @@ public final class AnalyzeSaturationMutagenesis extends GATKTool {
 
             int frameShiftCodonId = findFrameShift(snvs);
 
-            final int lastExonEnd = exonList.get(exonList.size() - 1).getEnd();
+            final int lastExonEnd = exonList.get(exonList.size() - 1).getEnd(); // ref coordinate of end of final exon
+            // while there's another exonic SNV to process
             while ( snv != null ) {
                 int refIndex = snv.getRefIndex();
                 if ( refIndex >= lastExonEnd ) {
@@ -987,6 +1164,7 @@ public final class AnalyzeSaturationMutagenesis extends GATKTool {
                 }
                 Interval curExon = null;
                 final Iterator<Interval> exonIterator = exonList.iterator();
+                // find the exon in which this SNV lives
                 while ( exonIterator.hasNext() ) {
                     final Interval testExon = exonIterator.next();
                     if ( testExon.getStart() <= refIndex && testExon.getEnd() > refIndex ) {
@@ -998,24 +1176,27 @@ public final class AnalyzeSaturationMutagenesis extends GATKTool {
                     throw new GATKException("can't find current exon, even though refIndex should be exonic.");
                 }
 
+                // get the codon number and phase of the current SNV
                 int codonId = exonicBaseIndex(refIndex);
                 int codonPhase = codonId % 3;
                 codonId /= 3;
 
-                int codonValue = refCodonValues[codonId];
+                // patch up the codon value when we're not at a codon boundary
+                int codonValue = refCodonValues[codonId]; // 6-bit value (2 bits for each of 3 bases)
                 if ( codonPhase == 0 ) codonValue = 0;
                 else if ( codonPhase == 1 ) codonValue >>= 4;
                 else codonValue >>= 2;
 
-                int leadLag = 0;
+                int leadLag = 0; // when positive, the number of inserted bases.  when negative, # of deleted bases.
                 do {
-                    boolean codonValueAltered = false;
-                    boolean bumpRefIndex = false;
+                    boolean codonValueAltered = false; // have we modified the ref codon value with a SNV?
+                    boolean bumpRefIndex = false; // have we consumed a ref base?
                     if ( snv == null || snv.getRefIndex() != refIndex ) {
                         codonValue = (codonValue << 2) | "ACGT".indexOf(refSeq[refIndex]);
                         codonValueAltered = true;
                         bumpRefIndex = true;
                     } else {
+                        // process a SNV that describes a deletion
                         if ( snv.getVariantCall() == NO_CALL ) {
                             if ( codonId == frameShiftCodonId ) {
                                 codonVariations.add(CodonVariation.createFrameshift(codonId));
@@ -1029,15 +1210,18 @@ public final class AnalyzeSaturationMutagenesis extends GATKTool {
                                 leadLag = 0;
                             }
                             bumpRefIndex = true;
+                        // process a SNV that describes an insertion
                         } else if ( snv.getRefCall() == NO_CALL ) {
                             leadLag += 1;
                             codonValue = (codonValue << 2) | "ACGT".indexOf(snv.getVariantCall());
                             codonValueAltered = true;
+                        // process a SNV that describes a substitution
                         } else {
                             codonValue = (codonValue << 2) | "ACGT".indexOf(snv.getVariantCall());
                             codonValueAltered = true;
                             bumpRefIndex = true;
                         }
+                        // move to the next SNV
                         snv = null;
                         while ( snvIterator.hasNext() ) {
                             final SNV testSNV = snvIterator.next();
@@ -1047,7 +1231,7 @@ public final class AnalyzeSaturationMutagenesis extends GATKTool {
                             }
                         }
                     }
-                    if ( bumpRefIndex ) {
+                    if ( bumpRefIndex ) { // will be true except for insertions
                         if ( ++refIndex == curExon.getEnd() ) {
                             if ( exonIterator.hasNext() ) {
                                 curExon = exonIterator.next();
@@ -1058,15 +1242,15 @@ public final class AnalyzeSaturationMutagenesis extends GATKTool {
                             return codonVariations;
                         }
                     }
-                    if ( codonValueAltered ) {
-                        if ( ++codonPhase == 3 ) {
+                    if ( codonValueAltered ) { // if we changed anything
+                        if ( ++codonPhase == 3 ) { // if we're at a codon boundary
                             if ( codonId == frameShiftCodonId ) {
                                 codonVariations.add(CodonVariation.createFrameshift(codonId));
                                 frameShiftCodonId = NO_FRAME_SHIFT_CODON;
                             }
-                            if ( leadLag == 3 ) {
+                            if ( leadLag >= 3 ) {
                                 codonVariations.add(CodonVariation.createInsertion(codonId, codonValue));
-                                leadLag = 0;
+                                leadLag -= 3;
                                 codonId -= 1;
                             } else if ( codonValue != refCodonValues[codonId] ) {
                                 codonVariations.add(CodonVariation.createModification(codonId, codonValue));
@@ -1081,6 +1265,7 @@ public final class AnalyzeSaturationMutagenesis extends GATKTool {
                             codonValue = 0;
                         }
                     }
+                    // keep going until we're in frame (leadLag == 0), and at a codon boundary (codonPhase == 0)
                 } while ( leadLag != 0 || codonPhase != 0 );
             }
 
@@ -1270,6 +1455,7 @@ public final class AnalyzeSaturationMutagenesis extends GATKTool {
         }
     }
 
+    // describes the SNVs found in a read, and the reference covered by the read
     @VisibleForTesting static final class ReadReport {
         final List<Interval> refCoverage;
         final List<SNV> snvList;
@@ -1283,7 +1469,7 @@ public final class AnalyzeSaturationMutagenesis extends GATKTool {
             // interval.  (note that the trim interval refers to an interval of the read, not the reference.)
             final int readStart = trim.getStart();
             final int readEnd = trim.getEnd();
-            final Cigar cigar = read.getCigar();
+            final Cigar cigar = findLargeDels ? findLargeDeletions(read) : read.getCigar();
             final Iterator<CigarElement> cigarIterator = cigar.getCigarElements().iterator();
             CigarElement cigarElement = cigarIterator.next();
             CigarOperator cigarOperator = cigarElement.getOperator();
@@ -1428,6 +1614,103 @@ public final class AnalyzeSaturationMutagenesis extends GATKTool {
             return ReportType.CALLED_VARIANT;
         }
 
+        // try to find a supplemental alignment adjacent to the primary alignment on the read
+        // that is sensible (same strand, same order) and disjoint on the reference.
+        // if there is such a supplemental alignment, combine the primary and supplemental alignments,
+        // adding a large deletion in the middle to represent the missing reference bits.
+        @VisibleForTesting static Cigar findLargeDeletions( final GATKRead read ) {
+            Cigar cigar = read.getCigar();
+            final List<CigarElement> elements = cigar.getCigarElements();
+            final int nElements = elements.size();
+            if ( nElements < 2 ) return cigar;
+            final int initialClipLength = CigarUtils.countClippedBases(cigar, ClippingTail.LEFT_TAIL);
+            final int finalClipLength = CigarUtils.countClippedBases(cigar, ClippingTail.RIGHT_TAIL);
+            if ( initialClipLength >= minAltLength || finalClipLength >= minAltLength ) {
+                final String saTag = read.getAttributeAsString("SA");
+                if ( saTag == null ) return cigar;
+                final int readLength = read.getLength();
+                final Interval primaryReadInterval = new Interval(initialClipLength, readLength - finalClipLength);
+                for ( final String alt : saTag.split(";") ) {
+                    final String[] fields = alt.split(",");
+                    if ( fields.length != 6 ) {
+                        staticLogger.warn("Badly formed supplemental alignment: " + alt);
+                        continue;
+                    }
+                    try {
+                        if ( Integer.parseInt(fields[4]) < minMapQ ) continue;
+                    } catch ( final NumberFormatException nfe ) {
+                        staticLogger.warn("Can't get mapQ from supplemental alignment: " + alt);
+                        continue;
+                    }
+                    if ( !(read.isReverseStrand() ? "-" : "+").equals(fields[2]) ) continue;
+                    final Cigar altCigar;
+                    try {
+                        altCigar = TextCigarCodec.decode(fields[3]);
+                    } catch ( final IllegalArgumentException iae ) {
+                        staticLogger.warn("Can't parse cigar in supplemental alignment: " + alt);
+                        continue;
+                    }
+                    final List<CigarElement> altElements = altCigar.getCigarElements();
+                    final int nAltElements = altElements.size();
+                    if ( nAltElements < 2 ) continue;
+                    final int initialAltClipLength = CigarUtils.countClippedBases(altCigar, ClippingTail.LEFT_TAIL);
+                    final int finalAltClipLength = CigarUtils.countClippedBases(altCigar, ClippingTail.RIGHT_TAIL);
+                    final Interval altReadInterval =
+                            new Interval(initialAltClipLength, readLength - finalAltClipLength);
+                    final int overlapLength = primaryReadInterval.overlapLength(altReadInterval);
+                    // we expect the two alignments to cover neatly distinct parts of the read
+                    //   if there's a gap of more than a couple bases, or an overlap of more than a couple bases
+                    //   then something weird is going on (probably similarity in two parts of the amplicon),
+                    //   and we're not going to attempt to describe that as a large deletion
+                    if ( Math.abs(overlapLength) <= 2 ) {
+                        final int altRefStart;
+                        try {
+                            altRefStart = Integer.parseInt(fields[1]) - 1;
+                        } catch ( final NumberFormatException nfe ) {
+                            staticLogger.warn("Can't parse starting coordinate from supplement alignment: " + alt);
+                            continue;
+                        }
+                        if ( initialClipLength < initialAltClipLength ) {
+                            final int deletionLength = altRefStart - read.getEnd() + overlapLength;
+                            if ( deletionLength > 2 ) {
+                                cigar = replaceCigar(elements, overlapLength, deletionLength, altElements);
+                                read.setCigar(cigar);
+                                break;
+                            }
+                        } else {
+                            final int deletionLength =
+                                    read.getStart() - (altRefStart + altCigar.getReferenceLength() + 1) + overlapLength;
+                            if ( deletionLength > 2 ) {
+                                cigar = replaceCigar(altElements, overlapLength, deletionLength, elements);
+                                read.setCigar(cigar);
+                                read.setPosition(read.getContig(), altRefStart + 1);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            return cigar;
+        }
+
+        private static Cigar replaceCigar( final List<CigarElement> elements1, final int overlapLength,
+                                           final int deletionLength, final List<CigarElement> elements2 ) {
+            final int nElements1 = elements1.size();
+            final int nElements2 = elements2.size();
+            final List<CigarElement> cigarElements =
+                    new ArrayList<>(nElements1 + nElements2 - 1);
+            cigarElements.addAll(elements1.subList(0, nElements1 - 1));
+            cigarElements.add(new CigarElement(deletionLength, CigarOperator.D));
+            if ( overlapLength == 0 ) {
+                cigarElements.addAll(elements2.subList(1, nElements2));
+            } else {
+                final CigarElement firstMatch = elements2.get(1);
+                cigarElements.add(new CigarElement(firstMatch.getLength() - overlapLength, CigarOperator.M));
+                cigarElements.addAll(elements2.subList(2,nElements2));
+            }
+            return new Cigar(cigarElements);
+        }
+
         private static List<Interval> combineCoverage( final ReadReport report1, final ReadReport report2 ) {
             final List<Interval> refCoverage1 = report1.getRefCoverage();
             final List<Interval> refCoverage2 = report2.getRefCoverage();
@@ -1546,11 +1829,12 @@ public final class AnalyzeSaturationMutagenesis extends GATKTool {
     @VisibleForTesting static ReadReport getReadReport( final GATKRead read ) {
         totalBaseCalls += read.getLength();
 
-        if ( read.isUnmapped() || read.isDuplicate() || read.failsVendorQualityCheck() ) {
+        if ( read.isUnmapped() || read.isDuplicate() || read.failsVendorQualityCheck() ||
+                read.getMappingQuality() < minMapQ ) {
             return rejectRead(read, ReportType.UNMAPPED);
         }
 
-        Interval trim = calculateTrim(read);
+        final Interval trim = calculateTrim(read);
         if ( trim.size() < minLength ) {
             return rejectRead(read, ReportType.LOW_QUALITY);
         }

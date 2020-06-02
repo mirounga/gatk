@@ -208,7 +208,7 @@ public abstract class PairHMM implements Closeable{
      * @param gcp penalty for gap continuations base array map for processed reads.
      *
      */
-    public void computeLog10Likelihoods(final LikelihoodMatrix<Haplotype> logLikelihoods,
+    public void computeLog10Likelihoods(final LikelihoodMatrix<GATKRead, Haplotype> logLikelihoods,
                                       final List<GATKRead> processedReads,
                                       final Map<GATKRead, byte[]> gcp) {
         if (processedReads.isEmpty()) {
@@ -314,7 +314,7 @@ public abstract class PairHMM implements Closeable{
         final double result = subComputeReadLikelihoodGivenHaplotypeLog10(haplotypeBases, readBases, readQuals, insertionGOP, deletionGOP, overallGCP, hapStartIndex, recacheReadValues, nextHapStartIndex);
 
         Utils.validate(result <= 0.0, () -> "PairHMM Log Probability cannot be greater than 0: " + String.format("haplotype: %s, read: %s, result: %f, PairHMM: %s", new String(haplotypeBases), new String(readBases), result, this.getClass().getSimpleName()));
-        Utils.validate(MathUtils.goodLog10Probability(result), () -> "Invalid Log Probability: " + result);
+        Utils.validate(MathUtils.isValidLog10Probability(result), () -> "Invalid Log Probability: " + result);
 
         // Warning: This assumes no downstream modification of the haplotype bases (saves us from copying the array). It is okay for the haplotype caller.
         previousHaplotypeBases = haplotypeBases;

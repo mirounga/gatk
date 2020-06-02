@@ -10,10 +10,9 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.engine.ReferenceContext;
-import org.broadinstitute.hellbender.utils.GATKProtectedVariantContextUtils;
 import org.broadinstitute.hellbender.utils.QualityUtils;
 import org.broadinstitute.hellbender.utils.Utils;
-import org.broadinstitute.hellbender.utils.genotyper.ReadLikelihoods;
+import org.broadinstitute.hellbender.utils.genotyper.AlleleLikelihoods;
 import org.broadinstitute.hellbender.utils.help.HelpConstants;
 import org.broadinstitute.hellbender.utils.pileup.PileupElement;
 import org.broadinstitute.hellbender.utils.pileup.ReadPileup;
@@ -21,6 +20,7 @@ import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.read.ReadUtils;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFHeaderLines;
+import org.broadinstitute.hellbender.utils.variant.GATKVariantContextUtils;
 
 import java.util.*;
 import java.util.function.Function;
@@ -62,7 +62,7 @@ public final class OrientationBiasReadCounts extends GenotypeAnnotation implemen
                                   final VariantContext vc,
                                   final Genotype g,
                                   final GenotypeBuilder gb,
-                                  final ReadLikelihoods<Allele> likelihoods){
+                                  final AlleleLikelihoods<GATKRead, Allele> likelihoods){
         Utils.nonNull(gb, "gb is null");
         Utils.nonNull(vc, "vc is null");
 
@@ -77,8 +77,8 @@ public final class OrientationBiasReadCounts extends GenotypeAnnotation implemen
                 .collect(Collectors.toMap(a -> a, a -> new MutableInt(0)));
 
         Utils.stream(likelihoods.bestAllelesBreakingTies(g.getSampleName()))
-                .filter(ba -> ba.isInformative() && isUsableRead(ba.read) && getReadBaseQuality(ba.read, vc.getStart()).orElse(0) >= MINIMUM_BASE_QUALITY)
-                .forEach(ba -> (ReadUtils.isF2R1(ba.read) ? f2r1Counts : f1r2Counts).get(ba.allele).increment());
+                .filter(ba -> ba.isInformative() && isUsableRead(ba.evidence) && BaseQualityRankSumTest.getReadBaseQuality(ba.evidence, vc).orElse(0) >= MINIMUM_BASE_QUALITY)
+                .forEach(ba -> (ReadUtils.isF2R1(ba.evidence) ? f2r1Counts : f1r2Counts).get(ba.allele).increment());
 
         final int[] f1r2 = vc.getAlleles().stream().mapToInt(a -> f1r2Counts.get(a).intValue()).toArray();
 
@@ -154,7 +154,7 @@ public final class OrientationBiasReadCounts extends GenotypeAnnotation implemen
 
         final Map<Allele, MutableInt> countMap = ReadUtils.isF2R1(pileupElement.getRead()) ? f2r1Counts : f1r2Counts;
 
-        final Allele pileupAllele = GATKProtectedVariantContextUtils.chooseAlleleForRead(pileupElement, referenceAllele, altAlleles, minBaseQualityCutoff);
+        final Allele pileupAllele = GATKVariantContextUtils.chooseAlleleForRead(pileupElement, referenceAllele, altAlleles, minBaseQualityCutoff);
 
         if (pileupAllele == null) {
             return;
@@ -169,9 +169,4 @@ public final class OrientationBiasReadCounts extends GenotypeAnnotation implemen
         return read.getMappingQuality() != 0 && read.getMappingQuality() != QualityUtils.MAPPING_QUALITY_UNAVAILABLE;
     }
 
-    private static OptionalDouble getReadBaseQuality(final GATKRead read, final int refLoc) {
-        Utils.nonNull(read);
-        final int readCoord = ReadUtils.getReadCoordinateForReferenceCoordinate(read.getSoftStart(), read.getCigar(), refLoc, ReadUtils.ClippingTail.RIGHT_TAIL, true);
-        return readCoord < 0 || readCoord >= read.getLength() ? OptionalDouble.empty() : OptionalDouble.of(read.getBaseQuality(readCoord));
-    }
 }

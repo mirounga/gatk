@@ -1,3 +1,5 @@
+version 1.0
+
 #  Run Mutect 2 on a list of tumors or tumor-normal pairs
 #
 #  Description of inputs
@@ -20,33 +22,29 @@
 import "mutect2.wdl" as m2
 
 workflow Mutect2_Multi {
-    # Mutect2 inputs
-	File? intervals
-	File ref_fasta
-	File ref_fai
-	File ref_dict
-	File pair_list
-	Array[Array[String]] pairs = read_tsv(pair_list)
-	File? pon
-	File? pon_idx
-	File? gnomad
-	File? gnomad_idx
-	File? variants_for_contamination
+  input {
+    File? intervals
+    File ref_fasta
+    File ref_fai
+    File ref_dict
+    File pair_list
+
+    File? pon
+    File? pon_idx
+    File? gnomad
+    File? gnomad_idx
+    File? variants_for_contamination
     File? variants_for_contamination_idx
-	Boolean? run_orientation_bias_mixture_model_filter
-	Int scatter_count
-	String? m2_extra_args
+    Boolean? run_orientation_bias_mixture_model_filter
+    Int scatter_count
+    String? m2_extra_args
     String? m2_extra_filtering_args
     Boolean? compress_vcfs
     Boolean? make_bamout
 
     # Oncotator inputs
-    Boolean? run_oncotator
-    File? onco_ds_tar_gz
-    String? onco_ds_local_db_dir
     String? sequencing_center
     String? sequence_source
-    File? default_config_file
 
     # funcotator inputs
     Boolean? run_funcotator
@@ -60,9 +58,11 @@ workflow Mutect2_Multi {
 
     # runtime
     String gatk_docker
-    String? oncotator_docker
     Int? preemptible_attempts
     File? gatk_override
+  }
+
+  Array[Array[String]] pairs = read_tsv(pair_list)
 
 	scatter( row in pairs ) {
 	    #      If the condition is true, variables inside the 'if' block retain their values outside the block.
@@ -92,12 +92,8 @@ workflow Mutect2_Multi {
                 run_orientation_bias_mixture_model_filter = run_orientation_bias_mixture_model_filter,
                 m2_extra_args = m2_extra_args,
                 m2_extra_filtering_args = m2_extra_filtering_args,
-                run_oncotator = run_oncotator,
-                onco_ds_tar_gz = onco_ds_tar_gz,
-                onco_ds_local_db_dir = onco_ds_local_db_dir,
                 sequencing_center = sequencing_center,
                 sequence_source = sequence_source,
-                default_config_file = default_config_file,
                 run_funcotator = run_funcotator,
                 funco_reference_version = funco_reference_version,
                 funco_data_sources_tar_gz = funco_data_sources_tar_gz,
@@ -110,8 +106,7 @@ workflow Mutect2_Multi {
                 compress_vcfs = compress_vcfs,
                 gatk_override = gatk_override,
                 gatk_docker = gatk_docker,
-                oncotator_docker = oncotator_docker,
-                preemptible_attempts = preemptible_attempts
+                preemptible = preemptible_attempts
         }
     }
 
@@ -120,7 +115,6 @@ workflow Mutect2_Multi {
         Array[File] filtered_vcf_idx = Mutect2.filtered_vcf_idx
         Array[File?] contamination_tables = Mutect2.contamination_table
 
-        Array[File?] oncotated_m2_mafs = Mutect2.oncotated_m2_maf
         Array[File?] m2_bamout = Mutect2.bamout
         Array[File?] m2_bamout_index = Mutect2.bamout_index
     }

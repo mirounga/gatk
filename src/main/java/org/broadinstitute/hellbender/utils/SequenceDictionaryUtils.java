@@ -146,6 +146,8 @@ public final class SequenceDictionaryUtils {
                                              final SAMSequenceDictionary dict2,
                                              final boolean requireSuperset,
                                              final boolean checkContigOrdering ) {
+        Utils.nonNull(dict1, "Something went wrong with sequence dictionary detection, check that "+name1+" has a valid sequence dictionary");
+        Utils.nonNull(dict2, "Something went wrong with sequence dictionary detection, check that "+name2+" has a valid sequence dictionary");
 
         final SequenceDictionaryCompatibility type = compareDictionaries(dict1, dict2, checkContigOrdering);
 
@@ -154,7 +156,12 @@ public final class SequenceDictionaryUtils {
                 return;
             case COMMON_SUBSET:
                 if ( requireSuperset ) {
-                    throw new UserException.IncompatibleSequenceDictionaries(String.format("Dictionary %s is missing contigs found in dictionary %s", name1, name2), name1, dict1, name2, dict2);
+                    final Set<String> contigs1 = dict1.getSequences().stream().map(SAMSequenceRecord::getSequenceName).collect(Collectors.toSet());
+                    final List<String> missingContigs = dict2.getSequences().stream()
+                            .map(SAMSequenceRecord::getSequenceName)
+                            .filter(contig -> !contigs1.contains(contig))
+                            .collect(Collectors.toList());
+                    throw new UserException.IncompatibleSequenceDictionaries(String.format("Dictionary %s is missing contigs found in dictionary %s.  Missing contigs: \n %s \n", name1, name2, String.join(", ", missingContigs)), name1, dict1, name2, dict2);
                 }
                 return;
             case SUPERSET:

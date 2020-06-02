@@ -197,6 +197,7 @@ public final class ValidateVariants extends VariantWalker {
     // information to keep track of when validating a GVCF
     private SimpleInterval previousInterval;
     private int previousStart = -1;
+    private String previousContig = null;
 
     @Override
     public void onTraversalStart() {
@@ -209,6 +210,18 @@ public final class ValidateVariants extends VariantWalker {
             genomeLocSortedSet = new GenomeLocSortedSet(new GenomeLocParser(seqDictionary));
         }
         validationTypes = calculateValidationTypesToApply(excludeTypes);
+
+        //warn user if certain requested validations cannot be done due to lack of arguments
+        if(dbsnp.dbsnp == null && (validationTypes.contains(ValidationType.ALL) || validationTypes.contains(ValidationType.IDS)))
+        {
+            logger.warn("IDS validation cannot be done because no DBSNP file was provided");
+            logger.warn("Other possible validations will still be performed");
+        }
+        if(!hasReference() && (validationTypes.contains(ValidationType.ALL) || validationTypes.contains(ValidationType.REF)))
+        {
+            logger.warn("REF validation cannot be done because no reference file was provided");
+            logger.warn("Other possible validations will still be performed");
+        }
     }
 
     @Override
@@ -227,14 +240,7 @@ public final class ValidateVariants extends VariantWalker {
         if (VALIDATE_GVCF) {
             final SimpleInterval refInterval = ref.getInterval();
 
-            //if next VC refers to a previous genomic position, throw an error
-            //Note that HaplotypeCaller can emit variants that start inside of a deletion on another haplotype,
-            // making v2's start less than the deletion's end
-            if (previousStart > -1 && vc.getStart() < previousStart) {
-                final UserException e = new UserException(String.format("In a GVCF all records must ordered. Record: %s covers a position previously traversed.",
-                        vc.toStringWithoutGenotypes()));
-                throwOrWarn(e);
-            }
+            validateVariantsOrder(vc);
 
             // GenomeLocSortedSet will automatically merge intervals that are overlapping when setting `mergeIfIntervalOverlaps`
             // to true.  In a GVCF most blocks are adjacent to each other so they wouldn't normally get merged.  We check
@@ -304,17 +310,20 @@ public final class ValidateVariants extends VariantWalker {
      * @return the final set of type to validate. May be empty.
      */
     private Collection<ValidationType> calculateValidationTypesToApply(final List<ValidationType> excludeTypes) {
-        if (VALIDATE_GVCF && !excludeTypes.contains(ValidationType.ALLELES)) {
+
+        //creates local, temp list so that original list provided by user doesn't get modified
+        List<ValidationType> excludeTypesTemp = new ArrayList<>(excludeTypes);
+        if (VALIDATE_GVCF && !excludeTypesTemp.contains(ValidationType.ALLELES)) {
             // Note: in a future version allele validation might be OK for GVCFs, if that happens
             // this will be more complicated.
             logger.warn("GVCF format is currently incompatible with allele validation. Not validating Alleles.");
-            excludeTypes.add(ValidationType.ALLELES);
+            excludeTypesTemp.add(ValidationType.ALLELES);
         }
-        if (excludeTypes.isEmpty()) {
+        if (excludeTypesTemp.isEmpty()) {
             return Collections.singleton(ValidationType.ALL);
         }
-        final Set<ValidationType> excludeTypeSet = new LinkedHashSet<>(excludeTypes);
-        if (excludeTypes.size() != excludeTypeSet.size()) {
+        final Set<ValidationType> excludeTypeSet = new LinkedHashSet<>(excludeTypesTemp);
+        if (excludeTypesTemp.size() != excludeTypeSet.size()) {
             logger.warn("found repeat redundant validation types listed using the --validation-type-to-exclude argument");
         }
         if (excludeTypeSet.contains(ValidationType.ALL)) {
@@ -326,9 +335,27 @@ public final class ValidateVariants extends VariantWalker {
             final Set<ValidationType> result = new LinkedHashSet<>(ValidationType.CONCRETE_TYPES);
             result.removeAll(excludeTypeSet);
             if (result.contains(ValidationType.REF) && !hasReference()) {
-                throw new UserException.MissingReference("Validation type " + ValidationType.REF.name() + " was selected but no reference was provided.");
+                throw new UserException.MissingReference("Validation type " + ValidationType.REF.name() + " was selected but no reference was provided.", true);
             }
             return result;
+        }
+    }
+
+    private void validateVariantsOrder(final VariantContext vc) {
+        // Check if the current VC belongs to the same contig as the previous one.
+        // If not, reset the start position to -1.
+        if (previousContig == null || !previousContig.equals(vc.getContig())) {
+            previousContig = vc.getContig();
+            previousStart = -1;
+        }
+
+        //if next VC refers to a previous genomic position, throw an error
+        //Note that HaplotypeCaller can emit variants that start inside of a deletion on another haplotype,
+        // making v2's start less than the deletion's end
+        if (previousStart > -1 && vc.getStart() < previousStart) {
+            final UserException e = new UserException(String.format("In a GVCF all records must ordered. Record: %s covers a position previously traversed.",
+                    vc.toStringWithoutGenotypes()));
+            throwOrWarn(e);
         }
     }
 
@@ -345,8 +372,29 @@ public final class ValidateVariants extends VariantWalker {
         // The workaround is to not pass an empty list.
         switch( t ) {
             case ALL:
-                if (!rsIDs.isEmpty()) {
-                    vc.extraStrictValidation(reportedRefAllele, observedRefAllele, rsIDs);
+                if(hasReference())
+                {
+                    if(!rsIDs.isEmpty())
+                    {
+                        vc.extraStrictValidation(reportedRefAllele, observedRefAllele, rsIDs);
+                    }
+                    else{
+                        vc.validateReferenceBases(reportedRefAllele, observedRefAllele);
+                        vc.validateAlternateAlleles();
+                        vc.validateChromosomeCounts();
+                    }
+                }
+                else{
+                    if (rsIDs.isEmpty())
+                    {
+                        vc.validateAlternateAlleles();
+                        vc.validateChromosomeCounts();
+                    }
+                    else{
+                        vc.validateAlternateAlleles();
+                        vc.validateChromosomeCounts();
+                        vc.validateRSIDs(rsIDs);
+                    }
                 }
                 break;
             case REF:

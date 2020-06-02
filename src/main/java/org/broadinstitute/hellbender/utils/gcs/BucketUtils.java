@@ -1,52 +1,65 @@
 package org.broadinstitute.hellbender.utils.gcs;
 
-import com.google.cloud.http.HttpTransportOptions;
+import com.google.cloud.hadoop.gcsio.GoogleCloudStorageFileSystem;
+import com.google.cloud.storage.BlobInfo;
+import com.google.cloud.storage.HttpMethod;
+import com.google.cloud.storage.Storage;
 import com.google.cloud.storage.StorageOptions;
 import com.google.cloud.storage.contrib.nio.CloudStorageConfiguration;
 import com.google.cloud.storage.contrib.nio.CloudStorageConfiguration.Builder;
 import com.google.cloud.storage.contrib.nio.CloudStorageFileSystem;
 import com.google.cloud.storage.contrib.nio.CloudStorageFileSystemProvider;
+import com.google.cloud.storage.contrib.nio.SeekableByteChannelPrefetcher;
 import com.google.common.base.Strings;
 import com.google.common.io.ByteStreams;
+import htsjdk.samtools.util.FileExtensions;
 import htsjdk.samtools.util.IOUtil;
 import htsjdk.samtools.util.RuntimeIOException;
-import htsjdk.tribble.Tribble;
-import htsjdk.tribble.util.TabixUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 import org.broadinstitute.hellbender.engine.GATKPathSpecifier;
+import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
+import org.broadinstitute.http.nio.HttpFileSystemProvider;
+import org.broadinstitute.http.nio.HttpsFileSystemProvider;
 import shaded.cloud_nio.com.google.api.gax.retrying.RetrySettings;
 import shaded.cloud_nio.com.google.auth.oauth2.GoogleCredentials;
+import shaded.cloud_nio.com.google.cloud.http.HttpTransportOptions;
 import shaded.cloud_nio.org.threeten.bp.Duration;
 
 import java.io.*;
+import java.net.URL;
+import java.nio.channels.SeekableByteChannel;
 import java.nio.file.Files;
 import java.util.Arrays;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 
 /**
  * Utilities for dealing with google buckets.
  */
 public final class BucketUtils {
-    public static final String GCS_SCHEME = "gs";
-    public static final String GCS_PREFIX = GCS_SCHEME + "://";
-    public static final String HDFS_PREFIX = "hdfs://";
+    public static final String GCS_PREFIX = GoogleCloudStorageFileSystem.SCHEME + "://";
+    public static final String HTTP_PREFIX = HttpFileSystemProvider.SCHEME + "://";
+    public static final String HTTPS_PREFIX = HttpsFileSystemProvider.SCHEME +"://";
+    public static final String HDFS_SCHEME = "hdfs";
+    public static final String HDFS_PREFIX = HDFS_SCHEME + "://";
 
     // slashes omitted since hdfs paths seem to only have 1 slash which would be weirder to include than no slashes
     public static final String FILE_PREFIX = "file:";
 
-    public static final Logger logger = LogManager.getLogger("org.broadinstitute.hellbender.utils.gcs");
-
     private BucketUtils(){} //private so that no one will instantiate this class
 
-    public static boolean isCloudStorageUrl(final String path) {
+    /**
+     * @param path path to inspect
+     * @return true if this path represents a gcs location
+     */
+    public static boolean isGcsUrl(final String path) {
         Utils.nonNull(path);
         return path.startsWith(GCS_PREFIX);
     }
@@ -56,14 +69,41 @@ public final class BucketUtils {
      * @param pathSpec specifier to inspect
      * @return true if this {@code GATKPathSpecifier} represents a gcs URI.
      */
-    public static boolean isCloudStorageUrl(final GATKPathSpecifier pathSpec) {
+    public static boolean isGcsUrl(final GATKPathSpecifier pathSpec) {
         Utils.nonNull(pathSpec);
-        return pathSpec.getScheme().equals(GCS_SCHEME);
+        return pathSpec.getScheme().equals(GoogleCloudStorageFileSystem.SCHEME);
     }
 
-    public static boolean isCloudStorageUrl(final java.nio.file.Path path) {
-        // the initial "" protects us against a null scheme
-        return ("" + path.toUri().getScheme() + "://").equals(GCS_PREFIX);
+    /**
+     * @param pathSpec specifier to inspect
+     * @return true if this {@code GATKPathSpecifier} represents a remote storage system which may benefit from prefetching (gcs or http(s))
+     */
+    public static boolean isEligibleForPrefetching(final GATKPathSpecifier pathSpec) {
+        Utils.nonNull(pathSpec);
+        return isEligibleForPrefetching(pathSpec.getScheme());
+     }
+
+    /**
+     * @param path path to inspect
+     * @return true if this {@code Path} represents a remote storage system which may benefit from prefetching (gcs or http(s))
+     */
+    public static boolean isEligibleForPrefetching(final java.nio.file.Path path) {
+        Utils.nonNull(path);
+        return isEligibleForPrefetching(path.toUri().getScheme());
+    }
+
+    private static boolean isEligibleForPrefetching(final String scheme){
+        return scheme != null
+                && (scheme.equals(GoogleCloudStorageFileSystem.SCHEME)
+                || scheme.equals(HttpFileSystemProvider.SCHEME)
+                || scheme.equals(HttpsFileSystemProvider.SCHEME));
+    }
+
+    /**
+     * @return true if the given path is an http or https Url.
+     */
+    public static boolean isHttpUrl(String path){
+        return path.startsWith(HTTP_PREFIX) || path.startsWith(HTTPS_PREFIX);
     }
 
     /**
@@ -74,10 +114,10 @@ public final class BucketUtils {
     }
 
     /**
-     * Returns true if the given path is a GCS or HDFS (Hadoop filesystem) URL.
+     * Returns true if the given path is a GCS, HDFS (Hadoop filesystem), or Http(s) URL.
      */
     public static boolean isRemoteStorageUrl(String path) {
-        return isCloudStorageUrl(path) || isHadoopUrl(path);
+        return isGcsUrl(path) || isHadoopUrl(path) || isHttpUrl(path);
     }
 
     /**
@@ -85,8 +125,9 @@ public final class BucketUtils {
      * @param path the path
      * @return an absolute file path if the original path was a relative file path, otherwise the original path
      */
+    //TODO: get rid of this..
     public static String makeFilePathAbsolute(String path){
-        if (isCloudStorageUrl(path) || isHadoopUrl(path) || isFileUrl(path)){
+        if (isGcsUrl(path) || isHadoopUrl(path) || isFileUrl(path) || isHttpUrl(path)){
             return path;
         } else {
             return new File(path).getAbsolutePath();
@@ -105,7 +146,7 @@ public final class BucketUtils {
         try {
             Utils.nonNull(path);
             InputStream inputStream;
-            if (isCloudStorageUrl(path)) {
+            if (isGcsUrl(path)) {
                 java.nio.file.Path p = getPathOnGcs(path);
                 inputStream = Files.newInputStream(p);
             } else if (isHadoopUrl(path)) {
@@ -113,7 +154,7 @@ public final class BucketUtils {
                 FileSystem fs = file.getFileSystem(new Configuration());
                 inputStream = fs.open(file);
             } else {
-                 inputStream = new FileInputStream(path);
+                inputStream = new FileInputStream(path);
             }
 
             if(IOUtil.hasBlockCompressedExtension(path)){
@@ -136,7 +177,7 @@ public final class BucketUtils {
     public static OutputStream createFile(String path) {
         Utils.nonNull(path);
         try {
-            if (isCloudStorageUrl(path)) {
+            if (isGcsUrl(path)) {
                 java.nio.file.Path p = getPathOnGcs(path);
                 return Files.newOutputStream(p);
             } else if (isHadoopUrl(path)) {
@@ -172,7 +213,7 @@ public final class BucketUtils {
      *
      */
     public static void deleteFile(String pathToDelete) throws IOException {
-        if (isCloudStorageUrl(pathToDelete)) {
+        if (isGcsUrl(pathToDelete)) {
             java.nio.file.Path p = getPathOnGcs(pathToDelete);
             Files.delete(p);
         } else if (isHadoopUrl(pathToDelete)) {
@@ -197,11 +238,11 @@ public final class BucketUtils {
      *
      */
     public static String getTempFilePath(String prefix, String extension){
-        if (isCloudStorageUrl(prefix) || (isHadoopUrl(prefix))){
+        if (isGcsUrl(prefix) || (isHadoopUrl(prefix))){
             final String path = randomRemotePath(prefix, "", extension);
             IOUtils.deleteOnExit(IOUtils.getPath(path));
-            IOUtils.deleteOnExit(IOUtils.getPath(path + Tribble.STANDARD_INDEX_EXTENSION));
-            IOUtils.deleteOnExit(IOUtils.getPath(path + TabixUtils.STANDARD_INDEX_EXTENSION));
+            IOUtils.deleteOnExit(IOUtils.getPath(path + FileExtensions.TRIBBLE_INDEX));
+            IOUtils.deleteOnExit(IOUtils.getPath(path + FileExtensions.TABIX_INDEX));
             IOUtils.deleteOnExit(IOUtils.getPath(path + ".bai"));
             IOUtils.deleteOnExit(IOUtils.getPath(path + ".md5"));
             IOUtils.deleteOnExit(IOUtils.getPath(path.replaceAll(extension + "$", ".bai"))); //if path ends with extension, replace it with .bai
@@ -219,7 +260,7 @@ public final class BucketUtils {
      * @param suffix The end of the file name, e.g. ".tmp"
      */
     public static String randomRemotePath(String stagingLocation, String prefix, String suffix) {
-        if (isCloudStorageUrl(stagingLocation)) {
+        if (isGcsUrl(stagingLocation)) {
             // Go through URI because Path.toString isn't guaranteed to include the "gs://" prefix.
             return getPathOnGcs(stagingLocation).resolve(prefix + UUID.randomUUID().toString() + suffix).toUri().toString();
         } else if (isHadoopUrl(stagingLocation)) {
@@ -259,7 +300,7 @@ public final class BucketUtils {
      * @throws IOException
      */
     public static long fileSize(String path) throws IOException {
-        if (isCloudStorageUrl(path)) {
+        if (isGcsUrl(path)) {
             java.nio.file.Path p = getPathOnGcs(path);
             return Files.size(p);
         } else if (isHadoopUrl(path)) {
@@ -276,14 +317,14 @@ public final class BucketUtils {
      * Note that sub-directories are ignored - they are not recursed into.
      * Only supports HDFS and local paths.
      *
-     * @param path The URL to the file or directory whose size to return
+     * @param pathSpecifier The URL to the file or directory whose size to return
      * @return the total size of all files in bytes
      */
-    public static long dirSize(String path) {
+    public static long dirSize(final GATKPathSpecifier pathSpecifier) {
         try {
             // GCS case (would work with local too)
-            if (isCloudStorageUrl(path)) {
-                java.nio.file.Path p = getPathOnGcs(path);
+            if (isGcsUrl(pathSpecifier)) {
+                java.nio.file.Path p = getPathOnGcs(pathSpecifier.getRawInputString());
                 if (Files.isRegularFile(p)) {
                     return Files.size(p);
                 }
@@ -298,11 +339,11 @@ public final class BucketUtils {
                 ).sum();
             }
             // local file or HDFS case
-            Path hadoopPath = new Path(path);
-            FileSystem fs = new Path(path).getFileSystem(new Configuration());
+            Path hadoopPath = new Path(pathSpecifier.getURIString());
+            FileSystem fs = new Path(pathSpecifier.getURIString()).getFileSystem(new Configuration());
             FileStatus status = fs.getFileStatus(hadoopPath);
             if (status == null) {
-                throw new UserException.CouldNotReadInputFile(path, "File not found.");
+                throw new UserException.CouldNotReadInputFile(pathSpecifier.getRawInputString(), "File not found.");
             }
             long size = 0;
             if (status.isDirectory()) {
@@ -316,7 +357,7 @@ public final class BucketUtils {
             }
             return size;
         } catch (RuntimeIOException | IOException e) {
-            throw new UserException("Failed to determine total input size of " + path + "\n Caused by:" + e.getMessage(), e);
+            throw new UserException("Failed to determine total input size of " + pathSpecifier.getRawInputString() + "\n Caused by:" + e.getMessage(), e);
         }
     }
 
@@ -429,5 +470,50 @@ public final class BucketUtils {
 
         // 2. Create GCS filesystem object with those credentials
         return CloudStorageFileSystem.forBucket(bucket, CloudStorageConfiguration.DEFAULT, storageOptions);
+    }
+
+    /**
+     * Wrap a SeekableByteChannel with a prefetcher.
+     * @param bufferSizeMB buffer size in mb which the prefetcher should fetch ahead.
+     * @param channel a channel that needs prefetching
+     */
+    public static SeekableByteChannel addPrefetcher(final int bufferSizeMB, final SeekableByteChannel channel) {
+        try {
+            return SeekableByteChannelPrefetcher.addPrefetcher(bufferSizeMB, channel);
+        } catch (final IOException ex) {
+            throw new GATKException("Unable to initialize the prefetcher: " + ex);
+        }
+    }
+
+    /**
+     * Creates a wrapping function which adds a prefetcher if the buffer size is > 0 if it's <= 0 then this wrapper returns the
+     * original channel.
+     * @param cloudPrefetchBuffer the prefetcher buffer size in MB
+     */
+    public static Function<SeekableByteChannel, SeekableByteChannel> getPrefetchingWrapper(final int cloudPrefetchBuffer) {
+        return cloudPrefetchBuffer > 0 ? rawChannel -> addPrefetcher(cloudPrefetchBuffer, rawChannel) : Utils.identityFunction();
+    }
+
+    /**
+     * Take a GCS path and return a signed url to the same resource which allows unauthenticated users to access the file.
+     * @param path String representing a GCS path
+     * @param hoursToLive how long in hours the url will remain valid
+     * @return A signed url which provides access to the bucket location over http allowing unauthenticated users to access it
+     */
+    public static String createSignedUrlToGcsObject(String path, final long hoursToLive) {
+        final Storage storage = StorageOptions.getDefaultInstance().getService();
+        final BlobInfo info = BlobInfo.newBuilder(getBucket(path), getPathWithoutBucket(path)).build();
+        final URL signedUrl = storage.signUrl(info, hoursToLive, TimeUnit.HOURS, Storage.SignUrlOption.httpMethod(HttpMethod.GET));
+        return signedUrl.toString();
+    }
+
+    /**
+     * Convert a GCS bucket location into the equivalent public http url.  This doesn't do any validation checking
+     * to be sure that the location actually exists or is accessible.  It's just a string -> string conversion
+     * @param path String representing the gs:// path to an object in a public bucket
+     * @return  String representing the https:// path to the same object
+     */
+    public static String bucketPathToPublicHttpUrl(String path){
+        return String.format("https://storage.googleapis.com/%s/%s", getBucket(path), getPathWithoutBucket(path));
     }
 }

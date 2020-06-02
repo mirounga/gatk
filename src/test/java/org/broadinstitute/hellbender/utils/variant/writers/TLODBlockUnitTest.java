@@ -40,7 +40,7 @@ public class TLODBlockUnitTest {
         final int[] expectedMedianDPs = new int[DPs.length];
         for (int i = 0; i < DPs.length; i++) {
             TLODs[i] = TLOD_TO_DP_RATIO * DPs[i];
-            expectedTLODs[i] = MathUtils.arrayMin(Arrays.copyOfRange(TLODs, 0, i + 1));
+            expectedTLODs[i] = Arrays.stream(Arrays.copyOfRange(TLODs, 0, i + 1)).min().getAsDouble();
             expectedMinDPs[i] = MathUtils.arrayMin(Arrays.copyOfRange(DPs, 0, i + 1));
             expectedMedianDPs[i] = MathUtils.median(Arrays.copyOfRange(DPs, 0, i + 1));
         }
@@ -54,7 +54,7 @@ public class TLODBlockUnitTest {
             Assert.assertEquals(band.getMinBlockLOD(), expectedTLODs[i]);
         }
 
-        final Genotype g = band.createHomRefGenotype("TUMOR");
+        final Genotype g = band.createHomRefGenotype("TUMOR", false);
         Assert.assertTrue(g.hasDP() && g.getDP() == expectedMedianDPs[DPs.length-1]);
         Assert.assertTrue(g.hasExtendedAttribute(GATKVCFConstants.MIN_DP_FORMAT_KEY) && ((int) g.getExtendedAttribute(GATKVCFConstants.MIN_DP_FORMAT_KEY)) == expectedMinDPs[DPs.length-1]);
         Assert.assertTrue(g.hasExtendedAttribute(GATKVCFConstants.TUMOR_LOG_10_ODDS_KEY) && ((double) g.getExtendedAttribute(GATKVCFConstants.TUMOR_LOG_10_ODDS_KEY)) == expectedTLODs[DPs.length-1]);

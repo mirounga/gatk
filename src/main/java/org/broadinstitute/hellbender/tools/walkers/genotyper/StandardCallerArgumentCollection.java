@@ -7,7 +7,6 @@ import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.barclay.argparser.ArgumentCollection;
 import org.broadinstitute.barclay.argparser.Hidden;
 import org.broadinstitute.hellbender.engine.FeatureInput;
-import org.broadinstitute.hellbender.tools.walkers.genotyper.afcalc.AFCalculatorImplementation;
 import org.broadinstitute.hellbender.utils.Utils;
 
 import java.io.File;
@@ -30,37 +29,17 @@ public class StandardCallerArgumentCollection implements Serializable {
         Utils.nonNull(other);
 
         this.genotypeArgs = new GenotypeCalculationArgumentCollection(other.genotypeArgs);
-        this.genotypingOutputMode = other.genotypingOutputMode;
-        this.alleles = other.alleles; // FeatureInputs are immutable outside of the engine, so this shallow copy is safe
         this.CONTAMINATION_FRACTION = other.CONTAMINATION_FRACTION;
         this.CONTAMINATION_FRACTION_FILE = other.CONTAMINATION_FRACTION_FILE != null ? new File(other.CONTAMINATION_FRACTION_FILE.getAbsolutePath()) : null;
         if ( other.sampleContamination != null ) {
             setSampleContamination(other.sampleContamination);
         }
-        this.requestedAlleleFrequencyCalculationModel = other.requestedAlleleFrequencyCalculationModel;
-        this.exactCallsLog = other.exactCallsLog != null ? new File(other.exactCallsLog.getAbsolutePath()) : null;
         this.outputMode = other.outputMode;
         this.annotateAllSitesWithPLs = other.annotateAllSitesWithPLs;
     }
 
     @ArgumentCollection
     public GenotypeCalculationArgumentCollection genotypeArgs = new GenotypeCalculationArgumentCollection();
-
-    @Argument(fullName = "genotyping-mode", doc = "Specifies how to determine the alternate alleles to use for genotyping", optional=true)
-    public GenotypingOutputMode genotypingOutputMode = GenotypingOutputMode.DISCOVERY;
-
-    /**
-     * When the caller is put into GENOTYPE_GIVEN_ALLELES mode it will genotype the samples using only the alleles provide in this rod binding
-     */
-    @Argument(fullName="alleles", doc="The set of alleles at which to genotype when --genotyping-mode is GENOTYPE_GIVEN_ALLELES", optional=true)
-    public FeatureInput<VariantContext> alleles;
-
-    /**
-     * When set to true an when in GENOTYPE_GIVEN_ALLELES mode all given alleles, even filtered ones, are genotyped
-     */
-    @Advanced
-    @Argument(fullName = "genotype-filtered-alleles", doc = "Whether to genotype all given alleles, even filtered ones, --genotyping-mode is GENOTYPE_GIVEN_ALLELES", optional = true)
-    public boolean genotypeFilteredAlleles = false;
 
     /**
      * If this fraction is greater is than zero, the caller will aggressively attempt to remove contamination through biased down-sampling of reads.
@@ -150,27 +129,16 @@ public class StandardCallerArgumentCollection implements Serializable {
         return false;
     }
 
-    /**
-     * Controls the model used to calculate the probability that a site is variant plus the various sample genotypes in the data at a given locus.
-     */
-    @Hidden
-    @Argument(fullName = "p-nonref-model", doc = "Non-reference probability calculation model to employ", optional = true)
-    public AFCalculatorImplementation requestedAlleleFrequencyCalculationModel;
-
-    @Hidden
-    @Argument(shortName = "log-exact-calls", optional=true)
-    public File exactCallsLog = null;
-
     @Argument(fullName = "output-mode", doc = "Specifies which type of calls we should output", optional = true)
     public OutputMode outputMode = OutputMode.EMIT_VARIANTS_ONLY;
 
     /**
-     * Advanced, experimental argument: if SNP likelihood model is specified, and if EMIT_ALL_SITES output mode is set, when we set this argument then we will also emit PLs at all sites.
+     * Advanced, experimental argument: if SNP likelihood model is specified, and if EMIT_ALL_ACTIVE_SITES output mode is set, when we set this argument then we will also emit PLs at all sites.
      * This will give a measure of reference confidence and a measure of which alt alleles are more plausible (if any).
      * WARNINGS:
      * - This feature will inflate VCF file size considerably.
      * - All SNP ALT alleles will be emitted with corresponding 10 PL values.
-     * - An error will be emitted if EMIT_ALL_SITES is not set, or if anything other than diploid SNP model is used
+     * - An error will be emitted if EMIT_ALL_ACTIVE_SITES is not set, or if anything other than diploid SNP model is used
      */
     @Advanced
     @Argument(fullName = "all-site-pls", doc = "Annotate all sites with PLs", optional = true)

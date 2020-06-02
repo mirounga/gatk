@@ -1,13 +1,9 @@
 package org.broadinstitute.hellbender.utils.io;
 
 import com.google.cloud.storage.contrib.nio.CloudStorageFileSystem;
-import htsjdk.samtools.BAMIndex;
-import htsjdk.samtools.BamFileIoUtils;
-import htsjdk.samtools.cram.build.CramIO;
 import htsjdk.samtools.util.BlockCompressedInputStream;
+import htsjdk.samtools.util.FileExtensions;
 import htsjdk.samtools.util.IOUtil;
-import htsjdk.tribble.Tribble;
-import htsjdk.tribble.util.TabixUtils;
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
@@ -35,12 +31,10 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.Arrays;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 import java.util.zip.ZipException;
@@ -61,34 +55,6 @@ public final class IOUtils {
      * Patterns identifying GenomicsDB paths
      */
     private static final Pattern GENOMICSDB_URI_PATTERN = Pattern.compile("^" + GENOMIC_DB_URI_SCHEME + "(\\.?)(.*)(://)(.*)");
-
-    /**
-     * Returns true if the file's extension is CRAM.
-     */
-    public static boolean isCramFile(final File inputFile) {
-        return isCramFileName(inputFile.getName());
-    }
-
-    /**
-     * Returns true if the file's extension is CRAM.
-     */
-    public static boolean isCramFile(final Path path) {
-        return isCramFileName(path.getFileName().toString());
-    }
-
-    /**
-     * Returns true if the file's extension is CRAM.
-     */
-    public static boolean isCramFileName(final String inputFileName) {
-        return CramIO.CRAM_FILE_EXTENSION.equalsIgnoreCase("." + FilenameUtils.getExtension(inputFileName));
-    }
-
-    /**
-     * Returns true if the file's extension is BAM.
-     */
-    public static boolean isBamFileName(final String inputFileName) {
-        return BamFileIoUtils.BAM_FILE_EXTENSION.equalsIgnoreCase("." + FilenameUtils.getExtension(inputFileName));
-    }
 
     /**
      * Given a Path, determine if it is an HDF5 file without requiring that we're on a platform that supports
@@ -152,6 +118,23 @@ public final class IOUtils {
         try {
             File tempFile = File.createTempFile(prefix, suffix, directory).toPath().normalize().toFile();
             FileUtils.writeStringToFile(tempFile, content, StandardCharsets.UTF_8);
+            return tempFile;
+        } catch (IOException e) {
+            throw new UserException.BadTempDir(e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Writes multiple lines of content to a temp file and returns the temporary file.
+     * @param prefix prefix to use for the temp file name
+     * @param suffix extension to use for the temp file
+     * @param content List<String> Strings that will be written to the file as separate lines
+     * @return temporary File that will be deleted on exit
+     */
+    public static File writeTempFile(final List<String> content, final String prefix, final String suffix) {
+        try {
+            final File tempFile = createTempFile(prefix, suffix);
+            FileUtils.writeLines(tempFile, content);
             return tempFile;
         } catch (IOException e) {
             throw new UserException.BadTempDir(e.getMessage(), e);
@@ -223,6 +206,7 @@ public final class IOUtils {
      * @param resource Embedded resource.
      * @param file File path to write.
      */
+    @SuppressWarnings("deprecation")
     public static void writeResource(Resource resource, File file) {
         String path = resource.getPath();
         InputStream inputStream = resource.getResourceContentsAsStream();
@@ -266,7 +250,7 @@ public final class IOUtils {
             fileContents = readStreamIntoByteArray(new FileInputStream(source), readBufferSize);
         }
         catch ( FileNotFoundException e ) {
-            throw new UserException.CouldNotReadInputFile(source, e);
+            throw new UserException.CouldNotReadInputFile(source.getAbsolutePath(), e);
         }
 
         if ( fileContents.length != source.length() ) {
@@ -702,8 +686,8 @@ public final class IOUtils {
             file.deleteOnExit();
 
             // Mark corresponding indices for deletion on exit as well just in case an index is created for the temp file:
-            new File(file.getAbsolutePath() + Tribble.STANDARD_INDEX_EXTENSION).deleteOnExit();
-            new File(file.getAbsolutePath() + TabixUtils.STANDARD_INDEX_EXTENSION).deleteOnExit();
+            new File(file.getAbsolutePath() + FileExtensions.TRIBBLE_INDEX).deleteOnExit();
+            new File(file.getAbsolutePath() + FileExtensions.TABIX_INDEX).deleteOnExit();
             new File(file.getAbsolutePath() + ".bai").deleteOnExit();
             new File(file.getAbsolutePath() + ".md5").deleteOnExit();
             new File(file.getAbsolutePath().replaceAll(extension + "$", ".bai")).deleteOnExit();
@@ -736,9 +720,9 @@ public final class IOUtils {
 
             // Mark corresponding indices for deletion on exit as well just in case an index is created for the temp file:
             final String filename = path.getFileName().toString();
-            IOUtils.deleteOnExit(path.resolveSibling(filename + Tribble.STANDARD_INDEX_EXTENSION));
-            IOUtils.deleteOnExit(path.resolveSibling(filename + TabixUtils.STANDARD_INDEX_EXTENSION));
-            IOUtils.deleteOnExit(path.resolveSibling(filename + BAMIndex.BAI_INDEX_SUFFIX));
+            IOUtils.deleteOnExit(path.resolveSibling(filename + FileExtensions.TRIBBLE_INDEX));
+            IOUtils.deleteOnExit(path.resolveSibling(filename + FileExtensions.TABIX_INDEX));
+            IOUtils.deleteOnExit(path.resolveSibling(filename + FileExtensions.BAI_INDEX));
             IOUtils.deleteOnExit(path.resolveSibling(filename.replaceAll(extension + "$", ".bai")));
             IOUtils.deleteOnExit(path.resolveSibling(filename + ".md5"));
 
@@ -898,7 +882,7 @@ public final class IOUtils {
         for (final File file : files) {
             Utils.nonNull(file, "Unexpected null file reference.");
             if (!file.exists()) {
-                throw new UserException.CouldNotReadInputFile(file, "The input file does not exist.");
+                throw new UserException.CouldNotReadInputFile(file.getAbsolutePath(), "The input file does not exist.");
             } else if (!file.isFile()) {
                 throw new UserException.CouldNotReadInputFile(file.getAbsolutePath(), "The input file is not a regular file");
             } else if (!file.canRead()) {

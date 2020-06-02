@@ -23,7 +23,8 @@ public class HaplotypeCallerArgumentCollection extends AssemblyBasedCallerArgume
 
     public static final String GQ_BAND_LONG_NAME = "gvcf-gq-bands";
     public static final String GQ_BAND_SHORT_NAME = "GQB";
-    public static final String CORRECT_OVERLAPPING_BASE_QUALITIES_LONG_NAME = "correct-overlapping-quality";
+    public static final String DO_NOT_CORRECT_OVERLAPPING_BASE_QUALITIES_LONG_NAME = "do-not-correct-overlapping-quality";
+    public static final String OUTPUT_BLOCK_LOWER_BOUNDS = "floor-blocks";
 
 
     @ArgumentCollection
@@ -62,7 +63,7 @@ public class HaplotypeCallerArgumentCollection extends AssemblyBasedCallerArgume
      * filtered in the comp track will be ignored. Note that 'dbSNP' has been special-cased (see the --dbsnp argument).
      */
     @Advanced
-    @Argument(fullName = "comp", shortName = "comp", doc = "Comparison VCF file(s)", optional = true)
+    @Argument(fullName = StandardArgumentDefinitions.COMPARISON_LONG_NAME, shortName = StandardArgumentDefinitions.COMPARISON_SHORT_NAME, doc = "Comparison VCF file(s)", optional = true)
     public List<FeatureInput<VariantContext>> comps = new ArrayList<>();
 
     /**
@@ -90,6 +91,13 @@ public class HaplotypeCallerArgumentCollection extends AssemblyBasedCallerArgume
     };
 
     /**
+     * Output the band lower bound for each GQ block instead of the min GQ -- for better compression
+     */
+    @Advanced
+    @Argument(fullName=HaplotypeCallerArgumentCollection.OUTPUT_BLOCK_LOWER_BOUNDS, doc = "Output the band lower bound for each GQ block regardless of the data it represents", optional = true)
+    public boolean floorBlocks = false;
+
+    /**
      * This parameter determines the maximum size of an indel considered as potentially segregating in the
      * reference model.  It is used to eliminate reads from being indel informative at a site, and determines
      * by that mechanism the certainty in the reference base.  Conceptually, setting this parameter to
@@ -100,16 +108,11 @@ public class HaplotypeCallerArgumentCollection extends AssemblyBasedCallerArgume
     @Argument(fullName = "indel-size-to-eliminate-in-ref-model", doc = "The size of an indel to check for in the reference model", optional = true)
     public int indelSizeToEliminateInRefModel = 10;
 
-
-    @Advanced
-    @Argument(fullName = "use-alleles-trigger", doc = "Use additional trigger on variants found in an external alleles file", optional = true)
-    public boolean USE_ALLELES_TRIGGER = false;
-
     /**
      * If set, certain "early exit" optimizations in HaplotypeCaller, which aim to save compute and time by skipping
      * calculations if an ActiveRegion is determined to contain no variants, will be disabled. This is most likely to be useful if
      * you're using the -bamout argument to examine the placement of reads following reassembly and are interested in seeing the mapping of
-     * reads in regions with no variations. Setting the --force-active and --dont-trim-active-regions flags may also be necessary.
+     * reads in regions with no variations. Setting the --force-active flag may also be necessary.
      */
     @Advanced
     @Argument(fullName = "disable-optimizations", doc="Don't skip calculations in ActiveRegions with no variants",
@@ -127,6 +130,12 @@ public class HaplotypeCallerArgumentCollection extends AssemblyBasedCallerArgume
     @Argument(fullName = "just-determine-active-regions", doc = "Just determine ActiveRegions, don't perform assembly or calling", optional = true)
     public boolean justDetermineActiveRegions = false;
 
+
+    @Hidden
+    @Advanced
+    @Argument(fullName="debug-assembly-region-state", doc="Write output files for assembled regions with read summaries and called haplotypes to the specified path", optional = true)
+    public String assemblyStateOutput = null;
+
     /**
      * This argument is intended for benchmarking and scalability testing.
      */
@@ -141,10 +150,14 @@ public class HaplotypeCallerArgumentCollection extends AssemblyBasedCallerArgume
     @Argument(fullName = DO_NOT_RUN_PHYSICAL_PHASING_LONG_NAME,  doc = "Disable physical phasing", optional = true)
     public boolean doNotRunPhysicalPhasing = false;
 
+    /**
+     * Base quality is capped at half of PCR error rate for bases where read and mate overlap, to account for full correlation of PCR errors at these bases.  This argument disables that correction.
+     */
+    @Advanced
+    @Argument(fullName = DO_NOT_CORRECT_OVERLAPPING_BASE_QUALITIES_LONG_NAME, doc = "Disable overlapping base quality correction")
+    public boolean doNotCorrectOverlappingBaseQualities = false;
+
     @Advanced
     @Argument(fullName= USE_FILTERED_READS_FOR_ANNOTATIONS_LONG_NAME, doc = "Use the contamination-filtered read maps for the purposes of annotating variants", optional=true)
     public boolean useFilteredReadMapForAnnotations = false;
-
-    @Argument(fullName = CORRECT_OVERLAPPING_BASE_QUALITIES_LONG_NAME)
-    public boolean doNotCorrectOverlappingBaseQualities = false;
 }

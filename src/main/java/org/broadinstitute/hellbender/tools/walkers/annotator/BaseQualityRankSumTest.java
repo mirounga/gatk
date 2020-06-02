@@ -1,17 +1,17 @@
 package org.broadinstitute.hellbender.tools.walkers.annotator;
 
-import htsjdk.variant.vcf.VCFInfoHeaderLine;
+import htsjdk.variant.variantcontext.VariantContext;
 import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.help.HelpConstants;
-import org.broadinstitute.hellbender.utils.pileup.PileupElement;
+import org.broadinstitute.hellbender.utils.read.ClippingTail;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.read.ReadUtils;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
-import org.broadinstitute.hellbender.utils.variant.GATKVCFHeaderLines;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 import java.util.OptionalDouble;
 
 
@@ -34,18 +34,13 @@ public final class BaseQualityRankSumTest extends RankSumTest implements Standar
     public List<String> getKeyNames() { return Collections.singletonList(GATKVCFConstants.BASE_QUAL_RANK_SUM_KEY); }
 
     @Override
-    protected OptionalDouble getElementForRead(final GATKRead read, final int refLoc) {
-        return getReadBaseQuality(read, refLoc);
+    protected OptionalDouble getElementForRead(final GATKRead read, final VariantContext vc) {
+        return getReadBaseQuality(read, vc);
     }
 
-    public static OptionalDouble getReadBaseQuality(final GATKRead read, final int refLoc) {
+    public static OptionalDouble getReadBaseQuality(final GATKRead read, final VariantContext vc) {
         Utils.nonNull(read);
-        return OptionalDouble.of(read.getBaseQuality(ReadUtils.getReadCoordinateForReferenceCoordinateUpToEndOfRead(read, refLoc, ReadUtils.ClippingTail.RIGHT_TAIL)));
-    }
-
-    @Override
-    // When we have a pileupe element we only need its underlying read in order to com
-    protected OptionalDouble getElementForPileupElement(final PileupElement p, final int refLoc) {
-        return OptionalDouble.of(p.getQual());
+        final Optional<Byte> readBaseQuality = ReadUtils.getReadBaseQualityAtReferenceCoordinate(read, vc.getStart());
+        return readBaseQuality.isPresent() ? OptionalDouble.of(readBaseQuality.get()) : OptionalDouble.empty();
     }
 }
