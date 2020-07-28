@@ -4,26 +4,25 @@ import com.google.common.jimfs.Configuration;
 import com.google.common.jimfs.Jimfs;
 import htsjdk.samtools.SAMSequenceDictionary;
 import htsjdk.samtools.SAMSequenceRecord;
+import htsjdk.samtools.util.FileExtensions;
 import htsjdk.samtools.util.Locatable;
 import htsjdk.tribble.AbstractFeatureReader;
 import htsjdk.tribble.Feature;
 import htsjdk.tribble.FeatureCodec;
 import htsjdk.tribble.FeatureReader;
-import htsjdk.tribble.util.TabixUtils;
 import htsjdk.variant.bcf2.BCF2Codec;
 import htsjdk.variant.variantcontext.*;
 import htsjdk.variant.variantcontext.writer.Options;
 import htsjdk.variant.variantcontext.writer.VariantContextWriter;
 import htsjdk.variant.vcf.*;
-import java.nio.file.FileSystem;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import org.apache.commons.lang3.tuple.Pair;
 import org.broadinstitute.hellbender.GATKBaseTest;
 import org.broadinstitute.hellbender.engine.FeatureManager;
+import org.broadinstitute.hellbender.testutils.VariantContextTestUtils;
 import org.broadinstitute.hellbender.tools.walkers.genotyper.GenotypeAssignmentMethod;
 import org.broadinstitute.hellbender.utils.*;
-import org.broadinstitute.hellbender.testutils.VariantContextTestUtils;
+import org.broadinstitute.hellbender.utils.pileup.PileupElement;
+import org.broadinstitute.hellbender.utils.read.ArtificialReadUtils;
 import org.testng.Assert;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.DataProvider;
@@ -31,10 +30,15 @@ import org.testng.annotations.Test;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.FileSystem;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.*;
 import java.util.stream.Collectors;
 
 public final class GATKVariantContextUtilsUnitTest extends GATKBaseTest {
+
+    private static final int LENGTH_OF_ARTIFICIAL_READ = 50;
 
     Allele Aref, Cref, Gref, Tref, A, T, C, G, ATC, ATCATC;
     Allele ATCATCT;
@@ -152,6 +156,12 @@ public final class GATKVariantContextUtilsUnitTest extends GATKBaseTest {
             Assert.assertTrue(ref.isReference());
             Assert.assertEquals(ref.getBaseString(), expectedRef.getBaseString());
         }
+    }
+
+    @Test
+    public void testMatchingAlleles() {
+        Assert.assertTrue(GATKVariantContextUtils.isAlleleInList(Allele.REF_A, Allele.ALT_T, ATCref, Arrays.asList(Allele.ALT_A, Allele.create("TTC",false))));
+        Assert.assertTrue(GATKVariantContextUtils.isAlleleInList(Allele.REF_A, Allele.ALT_T, ATCref, Arrays.asList(Allele.ALT_T, Allele.create("TTC",false))));
     }
 
     // --------------------------------------------------------------------------------
@@ -425,20 +435,6 @@ public final class GATKVariantContextUtilsUnitTest extends GATKBaseTest {
         Assert.assertEquals(merged.getFilters(), cfg.expected.getFilters());
     }
 
-    @Test
-    public void testEqualSites() throws Exception {
-        final VariantContext v1 = new VariantContextBuilder("foo", "1", 10, 10, Collections.singletonList(Aref)).make();
-        final VariantContext v2 = new VariantContextBuilder("foo", "1", 11, 11, Collections.singletonList(Aref)).make();
-        final VariantContext v1WithAlleles = new VariantContextBuilder("foo", "1", 11, 11, Arrays.asList(T, Aref)).make();
-        Assert.assertTrue(GATKVariantContextUtils.equalSites(v1, v1));
-        Assert.assertTrue(GATKVariantContextUtils.equalSites(v2, v2));
-
-        Assert.assertFalse(GATKVariantContextUtils.equalSites(v1, v2));
-        Assert.assertFalse(GATKVariantContextUtils.equalSites(v1, v1WithAlleles));
-        Assert.assertFalse(GATKVariantContextUtils.equalSites(v2, v1));
-        Assert.assertFalse(GATKVariantContextUtils.equalSites(v1WithAlleles, v1));
-    }
-
     // --------------------------------------------------------------------------------
     //
     // Test genotype merging
@@ -648,29 +644,6 @@ public final class GATKVariantContextUtilsUnitTest extends GATKBaseTest {
             return String.format("ref=%s allele=%s reverse clip %d", ref, alleles, expectedClip);
         }
     }
-
-    @DataProvider(name = "ReverseClippingPositionTestProvider")
-    public Object[][] makeReverseClippingPositionTestProvider() {
-        // pair clipping
-        new ReverseClippingPositionTestProvider(0, "ATT", "CCG");
-        new ReverseClippingPositionTestProvider(1, "ATT", "CCT");
-        new ReverseClippingPositionTestProvider(2, "ATT", "CTT");
-        new ReverseClippingPositionTestProvider(2, "ATT", "ATT");  // cannot completely clip allele
-
-        // triplets
-        new ReverseClippingPositionTestProvider(0, "ATT", "CTT", "CGG");
-        new ReverseClippingPositionTestProvider(1, "ATT", "CTT", "CGT"); // the T can go
-        new ReverseClippingPositionTestProvider(2, "ATT", "CTT", "CTT"); // both Ts can go
-
-        return ReverseClippingPositionTestProvider.getTests(ReverseClippingPositionTestProvider.class);
-    }
-
-    @Test(dataProvider = "ReverseClippingPositionTestProvider")
-    public void testReverseClippingPositionTestProvider(ReverseClippingPositionTestProvider cfg) {
-        int result = GATKVariantContextUtils.computeReverseClipping(cfg.alleles, cfg.ref.getBytes());
-        Assert.assertEquals(result, cfg.expectedClip);
-    }
-
 
     // --------------------------------------------------------------------------------
     //
@@ -909,7 +882,7 @@ public final class GATKVariantContextUtilsUnitTest extends GATKBaseTest {
         int insLocStop = 20;
 
         Pair<List<Integer>,byte[]> result;
-        byte[] refBytes = "TATCATCATCGGA".getBytes();
+        byte[] refBytes = "ATCATCATCGGA".getBytes();    // excludes leading match base common to VC's ref and alt alleles
 
         Assert.assertEquals(GATKVariantContextUtils.findRepeatedSubstring("ATG".getBytes()),3);
         Assert.assertEquals(GATKVariantContextUtils.findRepeatedSubstring("AAA".getBytes()),1);
@@ -935,7 +908,7 @@ public final class GATKVariantContextUtilsUnitTest extends GATKBaseTest {
         Assert.assertEquals(result.getRight().length,3);
 
         // simple non-tandem deletion: CCCC*, -
-        refBytes = "TCCCCCCCCATG".getBytes();
+        refBytes = "CCCCCCCCATG".getBytes();    // excludes leading match base common to VC's ref and alt alleles
         vc = new VariantContextBuilder("foo", delLoc, 10, 14, Arrays.asList(ccccR,nullA)).make();
         result = GATKVariantContextUtils.getNumTandemRepeatUnits(vc, refBytes);
         Assert.assertEquals(result.getLeft().toArray()[0],8);
@@ -943,7 +916,7 @@ public final class GATKVariantContextUtilsUnitTest extends GATKBaseTest {
         Assert.assertEquals(result.getRight().length,1);
 
         // CCCC*,CC,-,CCCCCC, context = CCC: (C)7 -> (C)5,(C)3,(C)9
-        refBytes = "TCCCCCCCAGAGAGAG".getBytes();
+        refBytes = "CCCCCCCAGAGAGAG".getBytes();    // excludes leading match base common to VC's ref and alt alleles
         vc = new VariantContextBuilder("foo", insLoc, insLocStart, insLocStart+4, Arrays.asList(ccccR,cc, nullA,cccccc)).make();
         result = GATKVariantContextUtils.getNumTandemRepeatUnits(vc, refBytes);
         Assert.assertEquals(result.getLeft().toArray()[0],7);
@@ -953,7 +926,7 @@ public final class GATKVariantContextUtilsUnitTest extends GATKBaseTest {
         Assert.assertEquals(result.getRight().length,1);
 
         // GAGA*,-,GAGAGAGA
-        refBytes = "TGAGAGAGAGATTT".getBytes();
+        refBytes = "GAGAGAGAGATTT".getBytes();  // excludes leading match base common to VC's ref and alt alleles
         vc = new VariantContextBuilder("foo", insLoc, insLocStart, insLocStart+4, Arrays.asList(gagaR, nullA,gagagaga)).make();
         result = GATKVariantContextUtils.getNumTandemRepeatUnits(vc, refBytes);
         Assert.assertEquals(result.getLeft().toArray()[0],5);
@@ -968,52 +941,6 @@ public final class GATKVariantContextUtilsUnitTest extends GATKBaseTest {
     // test forward clipping
     //
     // --------------------------------------------------------------------------------
-
-    @DataProvider(name = "ForwardClippingData")
-    public Object[][] makeForwardClippingData() {
-        List<Object[]> tests = new ArrayList<>();
-
-        // this functionality can be adapted to provide input data for whatever you might want in your data
-        tests.add(new Object[]{Collections.singletonList("A"), -1});
-        tests.add(new Object[]{Collections.singletonList("<DEL>"), -1});
-        tests.add(new Object[]{Arrays.asList("A", "C"), -1});
-        tests.add(new Object[]{Arrays.asList("AC", "C"), -1});
-        tests.add(new Object[]{Arrays.asList("A", "G"), -1});
-        tests.add(new Object[]{Arrays.asList("A", "T"), -1});
-        tests.add(new Object[]{Arrays.asList("GT", "CA"), -1});
-        tests.add(new Object[]{Arrays.asList("GT", "CT"), -1});
-        tests.add(new Object[]{Arrays.asList("ACC", "AC"), 0});
-        tests.add(new Object[]{Arrays.asList("ACGC", "ACG"), 1});
-        tests.add(new Object[]{Arrays.asList("ACGC", "ACG"), 1});
-        tests.add(new Object[]{Arrays.asList("ACGC", "ACGA"), 2});
-        tests.add(new Object[]{Arrays.asList("ACGC", "AGC"), 0});
-        tests.add(new Object[]{Arrays.asList("A", "<DEL>"), -1});
-        for ( int len = 0; len < 50; len++ )
-            tests.add(new Object[]{Arrays.asList("A" + new String(Utils.dupBytes((byte)'C', len)), "C"), -1});
-
-        tests.add(new Object[]{Arrays.asList("A", "T", "C"), -1});
-        tests.add(new Object[]{Arrays.asList("AT", "AC", "AG"), 0});
-        tests.add(new Object[]{Arrays.asList("AT", "AC", "A"), -1});
-        tests.add(new Object[]{Arrays.asList("AT", "AC", "ACG"), 0});
-        tests.add(new Object[]{Arrays.asList("AC", "AC", "ACG"), 0});
-        tests.add(new Object[]{Arrays.asList("AC", "ACT", "ACG"), 0});
-        tests.add(new Object[]{Arrays.asList("ACG", "ACGT", "ACGTA"), 1});
-        tests.add(new Object[]{Arrays.asList("ACG", "ACGT", "ACGCA"), 1});
-
-        return tests.toArray(new Object[][]{});
-    }
-
-    @Test(dataProvider = "ForwardClippingData")
-    public void testForwardClipping(final List<String> alleleStrings, final int expectedClip) {
-        final List<Allele> alleles = alleleStrings.stream()
-                .map(Allele::create)
-                .collect(Collectors.toList());
-
-        for ( final List<Allele> myAlleles : Utils.makePermutations(alleles, alleles.size(), false)) {
-            final int actual = GATKVariantContextUtils.computeForwardClipping(myAlleles);
-            Assert.assertEquals(actual, expectedClip);
-        }
-    }
 
     @DataProvider(name = "ClipAlleleTest")
     public Object[][] makeClipAlleleTest() {
@@ -1187,14 +1114,14 @@ public final class GATKVariantContextUtilsUnitTest extends GATKBaseTest {
         final VariantContext vcBase = new VariantContextBuilder("test", "20", 10, 10, AC).make();
 
         // haploid, one alt allele
-        final double[] haploidRefPL = MathUtils.normalizeFromRealSpace(new double[]{0.9, 0.1});
-        final double[] haploidAltPL = MathUtils.normalizeFromRealSpace(new double[]{0.1, 0.9});
+        final double[] haploidRefPL = MathUtils.normalizeSumToOne(new double[]{0.9, 0.1});
+        final double[] haploidAltPL = MathUtils.normalizeSumToOne(new double[]{0.1, 0.9});
         final double[] haploidUninformative = new double[]{0, 0};
 
         // diploid, one alt allele
-        final double[] homRefPL = MathUtils.normalizeFromRealSpace(new double[]{0.9, 0.09, 0.01});
-        final double[] hetPL = MathUtils.normalizeFromRealSpace(new double[]{0.09, 0.9, 0.01});
-        final double[] homVarPL = MathUtils.normalizeFromRealSpace(new double[]{0.01, 0.09, 0.9});
+        final double[] homRefPL = MathUtils.normalizeSumToOne(new double[]{0.9, 0.09, 0.01});
+        final double[] hetPL = MathUtils.normalizeSumToOne(new double[]{0.09, 0.9, 0.01});
+        final double[] homVarPL = MathUtils.normalizeSumToOne(new double[]{0.01, 0.09, 0.9});
         final double[] uninformative = new double[]{0, 0, 0};
 
         final Genotype base = new GenotypeBuilder("NA12878").DP(10).GQ(50).make();
@@ -1562,84 +1489,6 @@ public final class GATKVariantContextUtilsUnitTest extends GATKBaseTest {
     //
     // --------------------------------------------------------------------------------
 
-
-    @Test(dataProvider = "indexOfAlleleData")
-    public void testIndexOfAllele(final Allele reference, final List<Allele> altAlleles, final List<Allele> otherAlleles) {
-        final List<Allele> alleles = new ArrayList<>(altAlleles.size() + 1);
-        alleles.add(reference);
-        alleles.addAll(altAlleles);
-        final VariantContext vc = makeVC("Source", alleles);
-
-        for (int i = 0; i < alleles.size(); i++) {
-            Assert.assertEquals(GATKVariantContextUtils.indexOfAllele(vc,alleles.get(i),true,true,true),i);
-            Assert.assertEquals(GATKVariantContextUtils.indexOfAllele(vc, alleles.get(i), false, true, true),i);
-            Assert.assertEquals(GATKVariantContextUtils.indexOfAllele(vc,alleles.get(i),true,true,false),i);
-            Assert.assertEquals(GATKVariantContextUtils.indexOfAllele(vc,alleles.get(i),false,true,false),i);
-            Assert.assertEquals(GATKVariantContextUtils.indexOfAllele(vc,Allele.create(alleles.get(i),true),true,true,true),i);
-            Assert.assertEquals(GATKVariantContextUtils.indexOfAllele(vc,Allele.create(alleles.get(i),true),true,true,false),-1);
-            if (i == 0) {
-                Assert.assertEquals(GATKVariantContextUtils.indexOfAllele(vc,alleles.get(i),true,false,true),-1);
-                Assert.assertEquals(GATKVariantContextUtils.indexOfAllele(vc,alleles.get(i),false,false,true),-1);
-                Assert.assertEquals(GATKVariantContextUtils.indexOfAllele(vc,alleles.get(i),true,false,false),-1);
-                Assert.assertEquals(GATKVariantContextUtils.indexOfAllele(vc,alleles.get(i),false,false,false),-1);
-                Assert.assertEquals(GATKVariantContextUtils.indexOfAllele(vc,Allele.create(alleles.get(i).getBases(),true),false,true,true),i);
-                Assert.assertEquals(GATKVariantContextUtils.indexOfAllele(vc,Allele.create(alleles.get(i).getBases(),false),false,true,true),-1);
-            } else {
-                Assert.assertEquals(GATKVariantContextUtils.indexOfAltAllele(vc,alleles.get(i),true),i - 1);
-                Assert.assertEquals(GATKVariantContextUtils.indexOfAltAllele(vc,alleles.get(i),false), i - 1);
-                Assert.assertEquals(GATKVariantContextUtils.indexOfAltAllele(vc,Allele.create(alleles.get(i),true),true),i-1);
-                Assert.assertEquals(GATKVariantContextUtils.indexOfAltAllele(vc,Allele.create(alleles.get(i),true),false),-1);
-            }
-        }
-
-        for (final Allele other : otherAlleles) {
-            Assert.assertEquals(GATKVariantContextUtils.indexOfAllele(vc, other, true, true, true), -1);
-            Assert.assertEquals(GATKVariantContextUtils.indexOfAllele(vc,other,false,true,true),-1);
-            Assert.assertEquals(GATKVariantContextUtils.indexOfAllele(vc,other,true,true,false),-1);
-            Assert.assertEquals(GATKVariantContextUtils.indexOfAllele(vc,other,false,true,false),-1);
-            Assert.assertEquals(GATKVariantContextUtils.indexOfAllele(vc,other,true,false,true),-1);
-            Assert.assertEquals(GATKVariantContextUtils.indexOfAllele(vc,other,false,false,true),-1);
-            Assert.assertEquals(GATKVariantContextUtils.indexOfAllele(vc,other,true,false,false),-1);
-            Assert.assertEquals(GATKVariantContextUtils.indexOfAllele(vc, other, false, false, false),-1);
-        }
-    }
-
-    @DataProvider(name = "indexOfAlleleData")
-    public Iterator<Object[]> indexOfAlleleData() {
-
-        final Allele[] ALTERNATIVE_ALLELES = new Allele[] { T, C, G, ATC, ATCATC};
-
-        final int lastMask = 0x1F;
-
-        return new Iterator<Object[]>() {
-
-            int nextMask = 0;
-
-            @Override
-            public boolean hasNext() {
-                return nextMask <= lastMask;
-            }
-
-            @Override
-            public Object[] next() {
-
-                int mask = nextMask++;
-                final List<Allele> includedAlleles = new ArrayList<>(5);
-                final List<Allele> excludedAlleles = new ArrayList<>(5);
-                for (int i = 0; i < ALTERNATIVE_ALLELES.length; i++) {
-                    ((mask & 1) == 1 ? includedAlleles : excludedAlleles).add(ALTERNATIVE_ALLELES[i]);
-                    mask >>= 1;
-                }
-                return new Object[] { Aref , includedAlleles, excludedAlleles};
-            }
-
-            @Override
-            public void remove() {
-                throw new UnsupportedOperationException();
-            }
-        };
-    }
-
     @Test(dataProvider = "totalPloidyData")
     public void testTotalPloidy(final int[] ploidies, final int defaultPloidy, final int expected) {
         final Genotype[] genotypes = new Genotype[ploidies.length];
@@ -1749,7 +1598,7 @@ public final class GATKVariantContextUtilsUnitTest extends GATKBaseTest {
     private void verifyFileType(
             final File resultVCFFile,
             final String outputExtension) {
-        final FeatureCodec<? extends Feature, ?> featureCodec = FeatureManager.getCodecForFile(resultVCFFile);
+        final FeatureCodec<? extends Feature, ?> featureCodec = FeatureManager.getCodecForFile(resultVCFFile.toPath());
 
         if (outputExtension.equals(".vcf") ||
             outputExtension.equals(".vcf.bgz") ||
@@ -1870,7 +1719,7 @@ public final class GATKVariantContextUtilsUnitTest extends GATKBaseTest {
         }
 
         // make sure we got a tabix index
-        final File tabixIndexFile = new File(outputGZIPFile.getAbsolutePath() + TabixUtils.STANDARD_INDEX_EXTENSION);
+        final File tabixIndexFile = new File(outputGZIPFile.getAbsolutePath() + FileExtensions.TABIX_INDEX);
         Assert.assertTrue(tabixIndexFile.exists());
         Assert.assertTrue(tabixIndexFile.length() > 0);
 
@@ -1893,7 +1742,7 @@ public final class GATKVariantContextUtilsUnitTest extends GATKBaseTest {
             publicTestDir + "org/broadinstitute/hellbender/engine/8_mutect2_sorted.vcf.gz");
         try (FileSystem jimfs = Jimfs.newFileSystem(Configuration.unix())) {
             final Path outputGZIP = jimfs.getPath("testCreateVcfWriterOnNio.vcf.gz");
-            final Path tabixIndex = outputGZIP.resolveSibling(outputGZIP.getFileName().toString() + TabixUtils.STANDARD_INDEX_EXTENSION);
+            final Path tabixIndex = outputGZIP.resolveSibling(outputGZIP.getFileName().toString() + FileExtensions.TABIX_INDEX);
             long recordCount = 0;
 
             try (final VariantContextWriter vcfWriter = GATKVariantContextUtils.createVCFWriter(
@@ -2399,7 +2248,7 @@ public final class GATKVariantContextUtilsUnitTest extends GATKBaseTest {
         final List<VariantContext> outVcs = GATKVariantContextUtils.splitVariantContextToBiallelics(vcToSplit, true, GenotypeAssignmentMethod.BEST_MATCH_TO_ORIGINAL, keepOriginalChrCounts);
         Assert.assertEquals(outVcs.size(), expectedVcs.size());
         for (int i = 0; i < outVcs.size(); i++) {
-            VariantContextTestUtils.assertVariantContextsAreEqual(outVcs.get(i), expectedVcs.get(i), new ArrayList<String>());
+            VariantContextTestUtils.assertVariantContextsAreEqual(outVcs.get(i), expectedVcs.get(i), new ArrayList<String>(), Collections.emptyList());
         }
     }
 
@@ -2410,7 +2259,7 @@ public final class GATKVariantContextUtilsUnitTest extends GATKBaseTest {
         for (int i = 0; i < biallelics.size(); i++) {
             final VariantContext actual = biallelics.get(i);
             final VariantContext expected = expectedBiallelics.get(i);
-            VariantContextTestUtils.assertVariantContextsAreEqual(actual, expected, new ArrayList<String>());
+            VariantContextTestUtils.assertVariantContextsAreEqual(actual, expected, new ArrayList<String>(), Collections.emptyList());
         }
     }
 
@@ -2464,5 +2313,193 @@ public final class GATKVariantContextUtilsUnitTest extends GATKBaseTest {
         Assert.assertFalse(GATKVariantContextUtils.isUnmixedMnpIgnoringNonRef(makeVC(makeAlleles("A", "AC", NON_REF), 1)));
         Assert.assertFalse(GATKVariantContextUtils.isUnmixedMnpIgnoringNonRef(makeVC(makeAlleles("ACT", "A", NON_REF), 1)));
         Assert.assertFalse(GATKVariantContextUtils.isUnmixedMnpIgnoringNonRef(makeVC(makeAlleles("ACT", "A", "AGG", NON_REF), 1)));
+    }
+
+    @Test(dataProvider = "variantTypes")
+    public void testVariantTypesAndIsComplex(final String ref, final String alt, final VariantContext.Type gtType, boolean isComplexIndel) {
+        Assert.assertEquals(GATKVariantContextUtils.typeOfVariant(Allele.create(ref), Allele.create(alt)), gtType);
+        Assert.assertEquals(GATKVariantContextUtils.isComplexIndel(Allele.create(ref), Allele.create(alt)), isComplexIndel);
+    }
+
+    @Test(expectedExceptions = IllegalStateException.class)
+    public void testSymbolicRef() {
+        GATKVariantContextUtils.typeOfVariant(Allele.NON_REF_ALLELE, Allele.create("C"));
+    }
+
+    @DataProvider(name = "variantTypes")
+    public Object[][] variantTypes() {
+        return new Object[][]{
+                // ref, alt, type, isComplex?
+                {"CCTTGGCTTATTCCA", "C", VariantContext.Type.INDEL, false},
+                {"C", "CCTTGGCTTATTCCA", VariantContext.Type.INDEL, false},
+                {"ACTAG", "A", VariantContext.Type.INDEL, false},
+                {"ATT", "AT", VariantContext.Type.INDEL, false},
+                {"AT", "ATT", VariantContext.Type.INDEL, false},
+                {"CT", "CAGG", VariantContext.Type.INDEL, true},
+                {"CTTT", "CAGG", VariantContext.Type.MNP, false},
+                {"CTTT", "CAGGG", VariantContext.Type.INDEL, true},
+                {"T", "T", VariantContext.Type.NO_VARIATION, false},
+                {"CTAG", "CTAG", VariantContext.Type.NO_VARIATION, false},
+                {"A", "AAGAAGCATGC", VariantContext.Type.INDEL, false},
+                {"A", "C", VariantContext.Type.SNP, false},
+                {"AG", "CA", VariantContext.Type.MNP, false},
+                {"AGAAGG", "CATTCC", VariantContext.Type.MNP, false},
+                {"GC", "GA", VariantContext.Type.SNP, false},
+                {"GA", "<NON_REF>", VariantContext.Type.SYMBOLIC, false},
+                {"GA", "*", VariantContext.Type.NO_VARIATION, false},
+
+                // There are two MNPs here
+                {"AGAAGG", "CATACC", VariantContext.Type.MNP, false},
+
+                // Note that this is technically a simple AT insertion, but the isComplex cannot handle this properly.
+                {"CT", "CATT", VariantContext.Type.INDEL, true},
+        };
+    }
+
+    @Test(dataProvider = "bestAlleleSNP")
+    public void testChooseBestAlleleSNP(final Allele referenceAllele, final List<Allele> altAlleles, int offsetIntoRead, int minBaseQualityCutoff, int gtChosenInAlt, boolean isGtRef) {
+
+        // No indels
+        if (isGtRef) {
+            final PileupElement pileupElement = ArtificialReadUtils.createNonIndelPileupElement(offsetIntoRead, referenceAllele, GATKVariantContextUtilsUnitTest.LENGTH_OF_ARTIFICIAL_READ);
+            final Allele chosen = GATKVariantContextUtils.chooseAlleleForRead(pileupElement, referenceAllele, altAlleles, minBaseQualityCutoff);
+            Assert.assertEquals(chosen, referenceAllele);
+        } else {
+            final PileupElement pileupElement = ArtificialReadUtils.createNonIndelPileupElement(offsetIntoRead, altAlleles.get(gtChosenInAlt), GATKVariantContextUtilsUnitTest.LENGTH_OF_ARTIFICIAL_READ);
+            final Allele chosen = GATKVariantContextUtils.chooseAlleleForRead(pileupElement, referenceAllele, altAlleles, minBaseQualityCutoff);
+            Assert.assertEquals(chosen, altAlleles.get(gtChosenInAlt));
+        }
+    }
+
+    @DataProvider(name = "bestAlleleSNP")
+    public Object[][] createSNPAlleles() {
+        return new Object[][] {
+                // final Allele referenceAllele, final List<Allele> altAlleles, int offsetIntoRead, int minBaseQualityCutoff, int gtChosenInAlt, boolean isGtRef
+                {
+                        Allele.create("A", true), Arrays.asList(Allele.create("T", false), Allele.create("CA", false)), 0, 0,
+                        0, false
+                }, {
+                Allele.create("A", true), Arrays.asList(Allele.create("T", false), Allele.create("CA", false)), 0,  0,
+                0, true
+        }, {
+                Allele.create("A", true), Arrays.asList(Allele.create("C", false), Allele.create("T", false)), 1, 0,
+                0, false
+        }, {
+                Allele.create("AA", true), Arrays.asList(Allele.create("CC", false), Allele.create("T", false)), 1, 0,
+                0, false
+        }, {
+                Allele.create("AA", true), Arrays.asList(Allele.create("T", false), Allele.create("CC", false)), 1, 0,
+                1, false
+        }, {
+                Allele.create("GA", true), Arrays.asList(Allele.create("T", false), Allele.create("CC", false)), 1, 0,
+                1, true
+        }
+        };
+    }
+
+    @Test(dataProvider = "testInsertions")
+    public void testChooseBestAlleleInsertion(final int offsetIntoRead, final String refBases, final String altBases,
+                                              final boolean isSpliceInAlt) {
+
+        // We assume that we are on the base right before the insertion.  We are pretending each read is 50 bases long.
+        final Allele referenceAllele = Allele.create(refBases, true);
+        final Allele insertionAllele = Allele.create(altBases, false);
+
+        if (isSpliceInAlt) {
+            final PileupElement pileupElement = ArtificialReadUtils.createSplicedInsertionPileupElement(offsetIntoRead, insertionAllele, GATKVariantContextUtilsUnitTest.LENGTH_OF_ARTIFICIAL_READ);
+            Assert.assertEquals(
+                    GATKVariantContextUtils.chooseAlleleForRead(pileupElement, referenceAllele,
+                            Collections.singletonList(insertionAllele), 0),
+                    insertionAllele);
+        } else {
+            final PileupElement pileupElement = ArtificialReadUtils.createNonIndelPileupElement(offsetIntoRead, referenceAllele, GATKVariantContextUtilsUnitTest.LENGTH_OF_ARTIFICIAL_READ);
+            Assert.assertEquals(
+                    GATKVariantContextUtils.chooseAlleleForRead(pileupElement, referenceAllele,
+                            Collections.singletonList(insertionAllele), 0),
+                    referenceAllele);
+        }
+    }
+
+    @Test(dataProvider = "testDeletions")
+    public void testChooseBestAlleleDeletion(final int offsetIntoRead, final String refBases, final String altBases,
+                                             final boolean isSpliceInAlt) {
+
+        // We assume that we are on the base right before the insertion.  We are pretending each read is 50 bases long.
+        final Allele referenceAllele = Allele.create(refBases, true);
+        final Allele deletionAllele = Allele.create(altBases, false);
+
+        if (isSpliceInAlt) {
+            final PileupElement pileupElement = ArtificialReadUtils.createSplicedDeletionPileupElement(offsetIntoRead, referenceAllele, GATKVariantContextUtilsUnitTest.LENGTH_OF_ARTIFICIAL_READ);
+            Assert.assertEquals(
+                    GATKVariantContextUtils.chooseAlleleForRead(pileupElement, referenceAllele,
+                            Collections.singletonList(deletionAllele), 0),
+                    deletionAllele);
+        } else {
+            final PileupElement pileupElement = ArtificialReadUtils.createNonIndelPileupElement(offsetIntoRead, referenceAllele, GATKVariantContextUtilsUnitTest.LENGTH_OF_ARTIFICIAL_READ);
+            Assert.assertEquals(
+                    GATKVariantContextUtils.chooseAlleleForRead(pileupElement, referenceAllele,
+                            Collections.singletonList(deletionAllele), 0),
+                    referenceAllele);
+        }
+    }
+
+    @Test
+    public void testChooseBestAlleleNull() {
+
+        final int offsetIntoRead = 10;
+
+        // We assume that we are on the base right before the insertion.  We are pretending each read is 50 bases long.
+        final Allele referenceAllele = Allele.create("T", true);
+        final Allele deletionAllele = Allele.create("A", false);
+
+        final PileupElement pileupElement = ArtificialReadUtils.createNonIndelPileupElement(offsetIntoRead, referenceAllele, GATKVariantContextUtilsUnitTest.LENGTH_OF_ARTIFICIAL_READ);
+        final byte[] newBases = pileupElement.getRead().getBases();
+        newBases[offsetIntoRead] = (byte) 'C';
+        pileupElement.getRead().setBases(newBases);
+
+        Assert.assertEquals(
+                GATKVariantContextUtils.chooseAlleleForRead(pileupElement, referenceAllele,
+                        Collections.singletonList(deletionAllele), 0),
+                null);
+    }
+
+    @DataProvider(name="testInsertions")
+    public Object[][] createTestInsertions() {
+        return new Object[][] {
+                {0, "A", "ATT", true},
+                {0, "A", "ATT", false},
+                {10, "A", "ATT", true},
+                {10, "A", "ATT", false}
+        };
+    }
+    @DataProvider(name="testDeletions")
+    public Object[][] createTestDeletions() {
+        return new Object[][] {
+                {0, "ATT", "A", true},
+                {0, "ATT", "A", false},
+                {10, "ATT", "A", true},
+                {10, "ATT", "A", false}
+        };
+    }
+
+    @Test(dataProvider = "doesReadContainAllele")
+    public void testDoesReadContainAllele(final int offsetIntoRead, final String actualBases, final String searchAlleleBases,
+                                          final Trilean gt) {
+
+        final PileupElement pileupElement = ArtificialReadUtils.createNonIndelPileupElement(offsetIntoRead, Allele.create(actualBases, true), GATKVariantContextUtilsUnitTest.LENGTH_OF_ARTIFICIAL_READ);
+        Assert.assertEquals(GATKVariantContextUtils.doesReadContainAllele(pileupElement, Allele.create(searchAlleleBases, false)),
+                gt);
+        Assert.assertEquals(GATKVariantContextUtils.doesReadContainAllele(pileupElement, Allele.create(actualBases, false)),
+                Trilean.TRUE);
+    }
+
+    @DataProvider(name="doesReadContainAllele")
+    public Object[][] createDoesReadContainAlelle() {
+        return new Object[][] {
+                {10, "ATT", "C", Trilean.FALSE},
+                {10, "AT", "AT", Trilean.TRUE},
+                {49, "A", "ATT", Trilean.UNKNOWN},
+                {48, "AT", "ATT", Trilean.UNKNOWN},
+        };
     }
 }

@@ -14,6 +14,7 @@ import org.broadinstitute.hellbender.engine.ReferenceContext;
 import org.broadinstitute.hellbender.tools.funcotator.DataSourceFuncotationFactory;
 import org.broadinstitute.hellbender.tools.funcotator.Funcotation;
 import org.broadinstitute.hellbender.tools.funcotator.FuncotatorArgumentDefinitions;
+import org.broadinstitute.hellbender.tools.funcotator.FuncotatorUtils;
 import org.broadinstitute.hellbender.tools.funcotator.dataSources.TableFuncotation;
 import org.broadinstitute.hellbender.tools.funcotator.dataSources.gencode.GencodeFuncotation;
 import org.broadinstitute.hellbender.tools.funcotator.dataSources.gencode.GencodeFuncotationFactory;
@@ -24,7 +25,6 @@ import org.broadinstitute.hellbender.utils.variant.GATKVariantContextUtils;
 
 import java.nio.file.Path;
 import java.util.*;
-import java.util.function.BiFunction;
 import java.util.stream.Collectors;
 
 /**
@@ -59,7 +59,7 @@ public class VcfFuncotationFactory extends DataSourceFuncotationFactory {
      * The field names that this {@link VcfFuncotationFactory} supports
      * and default values for each.
      */
-    private final LinkedHashMap<String, Object> supportedFieldNamesAndDefaults;
+    private final LinkedHashMap<String, String> supportedFieldNamesAndDefaults;
 
     /**
      * A list of values to use when there are no annotations for an allele.
@@ -132,8 +132,28 @@ public class VcfFuncotationFactory extends DataSourceFuncotationFactory {
                                  final LinkedHashMap<String, String> annotationOverridesMap,
                                  final FeatureInput<? extends Feature> mainSourceFileAsFeatureInput,
                                  final boolean isDataSourceB37) {
+        this(name, version, sourceFilePath, annotationOverridesMap, mainSourceFileAsFeatureInput, isDataSourceB37, FuncotatorUtils.DEFAULT_MIN_NUM_BASES_FOR_VALID_SEGMENT);
+    }
 
-        super(mainSourceFileAsFeatureInput);
+    /**
+     * Create a {@link VcfFuncotationFactory}.
+     * @param name A {@link String} containing the name of this {@link VcfFuncotationFactory}.
+     * @param version  The version {@link String} of the backing data source from which {@link Funcotation}s will be made.
+     * @param sourceFilePath {@link Path} to the VCF file from which {@link VariantContext}s will be read in and used as Features from which to create {@link Funcotation}s.
+     * @param annotationOverridesMap A {@link LinkedHashMap<String,String>} containing user-specified overrides for specific {@link Funcotation}s.
+     * @param mainSourceFileAsFeatureInput The backing {@link FeatureInput} for this {@link VcfFuncotationFactory}, from which all {@link Funcotation}s will be created.
+     * @param isDataSourceB37 If {@code true}, indicates that the data source behind this {@link GencodeFuncotationFactory} contains B37 data.
+     * @param minBasesForValidSegment The minimum number of bases for a segment to be considered valid.
+     */
+    public VcfFuncotationFactory(final String name,
+                                 final String version,
+                                 final Path sourceFilePath,
+                                 final LinkedHashMap<String, String> annotationOverridesMap,
+                                 final FeatureInput<? extends Feature> mainSourceFileAsFeatureInput,
+                                 final boolean isDataSourceB37,
+                                 final int minBasesForValidSegment) {
+
+        super(mainSourceFileAsFeatureInput, minBasesForValidSegment);
 
         this.name = name;
         this.version = version;
@@ -248,7 +268,6 @@ public class VcfFuncotationFactory extends DataSourceFuncotationFactory {
         }
     }
 
-    @Override
     /**
      * {@inheritDoc}
      *
@@ -256,6 +275,7 @@ public class VcfFuncotationFactory extends DataSourceFuncotationFactory {
      *
      * {@link VcfFuncotationFactory} can be used with or without Gencode annotations.
      */
+    @Override
     protected List<Funcotation> createFuncotationsOnVariant(final VariantContext variant, final ReferenceContext referenceContext, final List<Feature> featureList) {
 
         final List<Funcotation> outputFuncotations = new ArrayList<>();
@@ -294,7 +314,7 @@ public class VcfFuncotationFactory extends DataSourceFuncotationFactory {
                     final Allele queryAltAllele = variant.getAlternateAllele(i);
                     if (matchIndex != -1) {
 
-                        final LinkedHashMap<String, Object> annotations = new LinkedHashMap<>(supportedFieldNamesAndDefaults);
+                        final LinkedHashMap<String, String> annotations = new LinkedHashMap<>(supportedFieldNamesAndDefaults);
 
                         for (final Map.Entry<String, Object> entry : featureVariant.getAttributes().entrySet()) {
                             populateAnnotationMap(featureVariant, variant, matchIndex, annotations, entry);
@@ -333,10 +353,13 @@ public class VcfFuncotationFactory extends DataSourceFuncotationFactory {
         final LinkedHashSet<String> allFieldNames = funcotation1.getFieldNames();
         allFieldNames.addAll(funcotation2.getFieldNames());
 
-        final Map<String, Object> mergedFieldsMap = allFieldNames.stream()
-                .collect(Collectors.toMap(f -> f, f -> mergeFuncotationValue(f, funcotation1, funcotation2, VcfFuncotationFactory::renderFieldConflicts)));
-        return TableFuncotation.create(mergedFieldsMap, funcotation1.getAltAllele(), funcotation1.getDataSourceName(),
-                merge(funcotation1.getMetadata(), funcotation2.getMetadata()));
+        final LinkedHashMap<String, String> mergedFieldsMap = new LinkedHashMap<>();
+        for (final String fieldName: allFieldNames){
+            mergedFieldsMap.put(fieldName, mergeFuncotationValue(fieldName, funcotation1, funcotation2));
+        }
+
+       return TableFuncotation.create(mergedFieldsMap, funcotation1.getAltAllele(), funcotation1.getDataSourceName(),
+            merge(funcotation1.getMetadata(), funcotation2.getMetadata()));
     }
 
     /**
@@ -357,20 +380,17 @@ public class VcfFuncotationFactory extends DataSourceFuncotationFactory {
      * @param fieldName the annotation to determine.
      * @param funcotation1 first region to merge.
      * @param funcotation2 second region to merge.
-     * @param conflictFunction the function to run to solve conflicts.
      * @return string with the new, merged value of the annotation.  Returns {@code null} if the annotation name
      * does not exist in either region.
      */
     private static String mergeFuncotationValue(final String fieldName, final Funcotation funcotation1,
-                                                final Funcotation funcotation2, final BiFunction<String, String, String> conflictFunction) {
+                                                final Funcotation funcotation2) {
         final boolean doesRegion1ContainAnnotation = funcotation1.hasField(fieldName);
         final boolean doesRegion2ContainAnnotation = funcotation2.hasField(fieldName);
 
         if (doesRegion1ContainAnnotation && doesRegion2ContainAnnotation) {
-
             // Both regions contain an annotation and presumably these are of different values.
-            return conflictFunction.apply(funcotation1.getField(fieldName),
-                    funcotation2.getField(fieldName));
+            return  VcfFuncotationFactory.renderFieldConflicts(funcotation1.getField(fieldName), funcotation2.getField(fieldName));
         } else if (doesRegion1ContainAnnotation) {
             return funcotation1.getField(fieldName);
         } else if (doesRegion2ContainAnnotation) {
@@ -384,7 +404,7 @@ public class VcfFuncotationFactory extends DataSourceFuncotationFactory {
         return value1 + DUPLICATE_RECORD_DELIMITER + value2;
     }
 
-    private void populateAnnotationMap(final VariantContext funcotationFactoryVariant, final VariantContext queryVariant, final int funcotationFactoryAltAlleleIndex, final LinkedHashMap<String, Object> annotations, final Map.Entry<String, Object> attributeEntry) {
+    private void populateAnnotationMap(final VariantContext funcotationFactoryVariant, final VariantContext queryVariant, final int funcotationFactoryAltAlleleIndex, final LinkedHashMap<String, String> annotations, final Map.Entry<String, Object> attributeEntry) {
         final String valueString;
         final String attributeName = attributeEntry.getKey();
 

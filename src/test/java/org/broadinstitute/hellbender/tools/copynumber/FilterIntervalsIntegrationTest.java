@@ -47,30 +47,40 @@ public final class FilterIntervalsIntegrationTest extends CommandLineProgramTest
     private static final AnnotatedIntervalCollection ANNOTATED_INTERVALS = new AnnotatedIntervalCollection(
             LOCATABLE_METADATA,
             Arrays.asList(
-                    new AnnotatedInterval(new SimpleInterval("20", 1,	10),
+                    new AnnotatedInterval(new SimpleInterval("20", 1, 10),
                             new AnnotationMap(Arrays.asList(
                                     Pair.of(CopyNumberAnnotations.GC_CONTENT, 0.5),
                                     Pair.of(CopyNumberAnnotations.MAPPABILITY, 0.05),
                                     Pair.of(CopyNumberAnnotations.SEGMENTAL_DUPLICATION_CONTENT, 0.05)))),
-                    new AnnotatedInterval(new SimpleInterval("20", 11,	20),
+                    new AnnotatedInterval(new SimpleInterval("20", 11, 20),
                             new AnnotationMap(Arrays.asList(
                                     Pair.of(CopyNumberAnnotations.GC_CONTENT, 0.5),
                                     Pair.of(CopyNumberAnnotations.MAPPABILITY, 0.5),
                                     Pair.of(CopyNumberAnnotations.SEGMENTAL_DUPLICATION_CONTENT, 0.95)))),
-                    new AnnotatedInterval(new SimpleInterval("20", 21,	30),
+                    new AnnotatedInterval(new SimpleInterval("20", 21, 30),
                             new AnnotationMap(Arrays.asList(
                                     Pair.of(CopyNumberAnnotations.GC_CONTENT, 0.5),
                                     Pair.of(CopyNumberAnnotations.MAPPABILITY, 0.5),
                                     Pair.of(CopyNumberAnnotations.SEGMENTAL_DUPLICATION_CONTENT, 0.5)))),
-                    new AnnotatedInterval(new SimpleInterval("20", 31,	40),
+                    new AnnotatedInterval(new SimpleInterval("20", 31, 40),
                             new AnnotationMap(Arrays.asList(
                                     Pair.of(CopyNumberAnnotations.GC_CONTENT, 0.05),
                                     Pair.of(CopyNumberAnnotations.MAPPABILITY, 0.5),
                                     Pair.of(CopyNumberAnnotations.SEGMENTAL_DUPLICATION_CONTENT, 0.5)))),
-                    new AnnotatedInterval(new SimpleInterval("20", 41,	50),
+                    new AnnotatedInterval(new SimpleInterval("20", 41, 50),
                             new AnnotationMap(Arrays.asList(
                                     Pair.of(CopyNumberAnnotations.GC_CONTENT, 0.95),
                                     Pair.of(CopyNumberAnnotations.MAPPABILITY, 0.95),
+                                    Pair.of(CopyNumberAnnotations.SEGMENTAL_DUPLICATION_CONTENT, 0.5)))),
+                    new AnnotatedInterval(new SimpleInterval("20", 51, 60),
+                            new AnnotationMap(Arrays.asList(
+                                    Pair.of(CopyNumberAnnotations.GC_CONTENT, 0.5),
+                                    Pair.of(CopyNumberAnnotations.MAPPABILITY, 0.5),
+                                    Pair.of(CopyNumberAnnotations.SEGMENTAL_DUPLICATION_CONTENT, 0.5)))),
+                    new AnnotatedInterval(new SimpleInterval("21", 1, 10),
+                            new AnnotationMap(Arrays.asList(
+                                    Pair.of(CopyNumberAnnotations.GC_CONTENT, 0.5),
+                                    Pair.of(CopyNumberAnnotations.MAPPABILITY, 0.5),
                                     Pair.of(CopyNumberAnnotations.SEGMENTAL_DUPLICATION_CONTENT, 0.5))))));
 
     @DataProvider(name = "dataAnnotationBasedFilters")
@@ -92,28 +102,28 @@ public final class FilterIntervalsIntegrationTest extends CommandLineProgramTest
         return new Object[][]{
                 //intervals file, array of strings for excluded intervals, annotated-intervals file,
                 //min/max GC content, mix/max mappability, min/max seg-dupe content, expected array of indices of retained intervals
-                {intervalsFile, Collections.emptyList(), annotatedIntervalsFile, 0., 1., 0., 1., 0., 1., Arrays.asList(0, 1, 2, 3, 4)},
-                {intervalsFile, Collections.emptyList(), annotatedIntervalsFile, 0.1, 0.9, 0., 1., 0., 1., Arrays.asList(0, 1, 2)},
-                {intervalsFile, Collections.emptyList(), annotatedIntervalsFile, 0., 1., 0.1, 0.9, 0., 1., Arrays.asList(1, 2, 3)},
-                {intervalsFile, Collections.emptyList(), annotatedIntervalsFile, 0., 1., 0., 1., 0.1, 0.9, Arrays.asList(2, 3, 4)},
-                {intervalsFile, Collections.emptyList(), annotatedIntervalsFile, 0.1, 0.9, 0.1, 0.9, 0., 1., Arrays.asList(1, 2)},
-                {intervalsFile, Collections.emptyList(), annotatedIntervalsFile, 0.1, 0.9, 0., 1., 0.1, 0.9, Collections.singletonList(2)},
-                {intervalsFile, Collections.emptyList(), annotatedIntervalsFile, 0., 1., 0.1, 0.9, 0.1, 0.9, Arrays.asList(2, 3)},
-                {intervalsFile, Collections.emptyList(), annotatedIntervalsFile, 0.1, 0.9, 0.1, 0.9, 0.1, 0.9, Collections.singletonList(2)},
-                {intervalsFile, Collections.singletonList("20:1-10"), annotatedIntervalsFile, 0., 1., 0., 1., 0., 1., Arrays.asList(1, 2, 3, 4)},
-                {intervalsFile, Arrays.asList("20:1-15", "20:35-45"), annotatedIntervalsFile, 0., 1., 0., 1., 0., 1., Collections.singletonList(2)},
-                {intervalsFile, Collections.singletonList("20:25-50"), annotatedIntervalsFile, 0.1, 0.9, 0., 1., 0., 1., Arrays.asList(0, 1)},
-                {intervalsWithExtraIntervalFile, Collections.emptyList(), annotatedIntervalsFile, 0., 1., 0., 1., 0., 1., Arrays.asList(0, 1, 2, 3, 4)},
-                {intervalsWithExtraIntervalFile, Collections.emptyList(), annotatedIntervalsFile, 0.1, 0.9, 0., 1., 0., 1., Arrays.asList(0, 1, 2)},
-                {intervalsWithExtraIntervalFile, Collections.emptyList(), annotatedIntervalsFile, 0., 1., 0.1, 0.9, 0., 1., Arrays.asList(1, 2, 3)},
-                {intervalsWithExtraIntervalFile, Collections.emptyList(), annotatedIntervalsFile, 0., 1., 0., 1., 0.1, 0.9, Arrays.asList(2, 3, 4)},
-                {intervalsWithExtraIntervalFile, Collections.emptyList(), annotatedIntervalsFile, 0.1, 0.9, 0.1, 0.9, 0., 1., Arrays.asList(1, 2)},
-                {intervalsWithExtraIntervalFile, Collections.emptyList(), annotatedIntervalsFile, 0.1, 0.9, 0., 1., 0.1, 0.9, Collections.singletonList(2)},
-                {intervalsWithExtraIntervalFile, Collections.emptyList(), annotatedIntervalsFile, 0., 1., 0.1, 0.9, 0.1, 0.9, Arrays.asList(2, 3)},
-                {intervalsWithExtraIntervalFile, Collections.emptyList(), annotatedIntervalsFile, 0.1, 0.9, 0.1, 0.9, 0.1, 0.9, Collections.singletonList(2)},
-                {intervalsWithExtraIntervalFile, Collections.singletonList("20:1-10"), annotatedIntervalsFile, 0., 1., 0., 1., 0., 1., Arrays.asList(1, 2, 3, 4)},
-                {intervalsWithExtraIntervalFile, Arrays.asList("20:1-15", "20:35-45"), annotatedIntervalsFile, 0., 1., 0., 1., 0., 1., Collections.singletonList(2)},
-                {intervalsWithExtraIntervalFile, Collections.singletonList("20:25-50"), annotatedIntervalsFile, 0.1, 0.9, 0., 1., 0., 1., Arrays.asList(0, 1)}};
+                {intervalsFile, Collections.emptyList(), annotatedIntervalsFile, 0., 1., 0., 1., 0., 1., Arrays.asList(0, 1, 2, 3, 4, 5)},
+                {intervalsFile, Collections.emptyList(), annotatedIntervalsFile, 0.1, 0.9, 0., 1., 0., 1., Arrays.asList(0, 1, 2, 5)},
+                {intervalsFile, Collections.emptyList(), annotatedIntervalsFile, 0., 1., 0.1, 0.9, 0., 1., Arrays.asList(1, 2, 3, 5)},
+                {intervalsFile, Collections.emptyList(), annotatedIntervalsFile, 0., 1., 0., 1., 0.1, 0.9, Arrays.asList(2, 3, 4, 5)},
+                {intervalsFile, Collections.emptyList(), annotatedIntervalsFile, 0.1, 0.9, 0.1, 0.9, 0., 1., Arrays.asList(1, 2, 5)},
+                {intervalsFile, Collections.emptyList(), annotatedIntervalsFile, 0.1, 0.9, 0., 1., 0.1, 0.9, Arrays.asList(2, 5)},
+                {intervalsFile, Collections.emptyList(), annotatedIntervalsFile, 0., 1., 0.1, 0.9, 0.1, 0.9, Arrays.asList(2, 3, 5)},
+                {intervalsFile, Collections.emptyList(), annotatedIntervalsFile, 0.1, 0.9, 0.1, 0.9, 0.1, 0.9, Arrays.asList(2, 5)},
+                {intervalsFile, Collections.singletonList("20:1-10"), annotatedIntervalsFile, 0., 1., 0., 1., 0., 1., Arrays.asList(1, 2, 3, 4, 5)},
+                {intervalsFile, Arrays.asList("20:1-15", "20:35-45"), annotatedIntervalsFile, 0., 1., 0., 1., 0., 1., Arrays.asList(2, 5)},
+                {intervalsFile, Collections.singletonList("20:25-50"), annotatedIntervalsFile, 0.1, 0.9, 0., 1., 0., 1., Arrays.asList(0, 1, 5)},
+                {intervalsWithExtraIntervalFile, Collections.emptyList(), annotatedIntervalsFile, 0., 1., 0., 1., 0., 1., Arrays.asList(0, 1, 2, 3, 4, 5)},
+                {intervalsWithExtraIntervalFile, Collections.emptyList(), annotatedIntervalsFile, 0.1, 0.9, 0., 1., 0., 1., Arrays.asList(0, 1, 2, 5)},
+                {intervalsWithExtraIntervalFile, Collections.emptyList(), annotatedIntervalsFile, 0., 1., 0.1, 0.9, 0., 1., Arrays.asList(1, 2, 3, 5)},
+                {intervalsWithExtraIntervalFile, Collections.emptyList(), annotatedIntervalsFile, 0., 1., 0., 1., 0.1, 0.9, Arrays.asList(2, 3, 4, 5)},
+                {intervalsWithExtraIntervalFile, Collections.emptyList(), annotatedIntervalsFile, 0.1, 0.9, 0.1, 0.9, 0., 1., Arrays.asList(1, 2, 5)},
+                {intervalsWithExtraIntervalFile, Collections.emptyList(), annotatedIntervalsFile, 0.1, 0.9, 0., 1., 0.1, 0.9, Arrays.asList(2, 5)},
+                {intervalsWithExtraIntervalFile, Collections.emptyList(), annotatedIntervalsFile, 0., 1., 0.1, 0.9, 0.1, 0.9, Arrays.asList(2, 3, 5)},
+                {intervalsWithExtraIntervalFile, Collections.emptyList(), annotatedIntervalsFile, 0.1, 0.9, 0.1, 0.9, 0.1, 0.9, Arrays.asList(2, 5)},
+                {intervalsWithExtraIntervalFile, Collections.singletonList("20:1-10"), annotatedIntervalsFile, 0., 1., 0., 1., 0., 1., Arrays.asList(1, 2, 3, 4, 5)},
+                {intervalsWithExtraIntervalFile, Arrays.asList("20:1-15", "20:35-45"), annotatedIntervalsFile, 0., 1., 0., 1., 0., 1., Arrays.asList(2, 5)},
+                {intervalsWithExtraIntervalFile, Collections.singletonList("20:25-50"), annotatedIntervalsFile, 0.1, 0.9, 0., 1., 0., 1., Arrays.asList(0, 1, 5)}};
     }
 
     @Test(dataProvider = "dataAnnotationBasedFilters")
@@ -129,17 +139,17 @@ public final class FilterIntervalsIntegrationTest extends CommandLineProgramTest
                                            final List<Integer> expectedIndices) {
         final File outputFile = createTempFile("filter-intervals-test", ".interval_list");
         final ArgumentsBuilder argsBuilder = new ArgumentsBuilder()
-                .addArgument(StandardArgumentDefinitions.INTERVALS_LONG_NAME, intervalsFile.getAbsolutePath())
-                .addArgument(CopyNumberStandardArgument.ANNOTATED_INTERVALS_FILE_LONG_NAME, annotatedIntervalsFile.getAbsolutePath())
-                .addArgument(FilterIntervals.MINIMUM_GC_CONTENT_LONG_NAME, Double.toString(minimumGCContent))
-                .addArgument(FilterIntervals.MAXIMUM_GC_CONTENT_LONG_NAME, Double.toString(maximumGCContent))
-                .addArgument(FilterIntervals.MINIMUM_MAPPABILITY_LONG_NAME, Double.toString(minimumMappability))
-                .addArgument(FilterIntervals.MAXIMUM_MAPPABILITY_LONG_NAME, Double.toString(maximumMappability))
-                .addArgument(FilterIntervals.MINIMUM_SEGMENTAL_DUPLICATION_CONTENT_LONG_NAME, Double.toString(minimumSegmentalDuplicationContent))
-                .addArgument(FilterIntervals.MAXIMUM_SEGMENTAL_DUPLICATION_CONTENT_LONG_NAME, Double.toString(maximumSegmentalDuplicationContent))
-                .addArgument(IntervalArgumentCollection.INTERVAL_MERGING_RULE_LONG_NAME, IntervalMergingRule.OVERLAPPING_ONLY.toString())
+                .add(StandardArgumentDefinitions.INTERVALS_LONG_NAME, intervalsFile.getAbsolutePath())
+                .add(CopyNumberStandardArgument.ANNOTATED_INTERVALS_FILE_LONG_NAME, annotatedIntervalsFile.getAbsolutePath())
+                .add(FilterIntervals.MINIMUM_GC_CONTENT_LONG_NAME, Double.toString(minimumGCContent))
+                .add(FilterIntervals.MAXIMUM_GC_CONTENT_LONG_NAME, Double.toString(maximumGCContent))
+                .add(FilterIntervals.MINIMUM_MAPPABILITY_LONG_NAME, Double.toString(minimumMappability))
+                .add(FilterIntervals.MAXIMUM_MAPPABILITY_LONG_NAME, Double.toString(maximumMappability))
+                .add(FilterIntervals.MINIMUM_SEGMENTAL_DUPLICATION_CONTENT_LONG_NAME, Double.toString(minimumSegmentalDuplicationContent))
+                .add(FilterIntervals.MAXIMUM_SEGMENTAL_DUPLICATION_CONTENT_LONG_NAME, Double.toString(maximumSegmentalDuplicationContent))
+                .add(IntervalArgumentCollection.INTERVAL_MERGING_RULE_LONG_NAME, IntervalMergingRule.OVERLAPPING_ONLY.toString())
                 .addOutput(outputFile);
-        excludedIntervals.forEach(i -> argsBuilder.addArgument(IntervalArgumentCollection.EXCLUDE_INTERVALS_LONG_NAME, i));
+        excludedIntervals.forEach(i -> argsBuilder.add(IntervalArgumentCollection.EXCLUDE_INTERVALS_LONG_NAME, i));
         runCommandLine(argsBuilder);
         final IntervalList result = IntervalList.fromFile(outputFile);
         final IntervalList all = IntervalList.fromFile(intervalsFile);
@@ -219,13 +229,13 @@ public final class FilterIntervalsIntegrationTest extends CommandLineProgramTest
                                       final List<Integer> expectedIndices) {
         final File outputFile = createTempFile("filter-intervals-test", ".interval_list");
         final ArgumentsBuilder argsBuilder = new ArgumentsBuilder()
-                .addArgument(StandardArgumentDefinitions.INTERVALS_LONG_NAME, intervalsFile.getAbsolutePath())
-                .addArgument(FilterIntervals.LOW_COUNT_FILTER_COUNT_THRESHOLD_LONG_NAME, Integer.toString(lowCountFilterCountThreshold))
-                .addArgument(FilterIntervals.LOW_COUNT_FILTER_PERCENTAGE_OF_SAMPLES_LONG_NAME, Double.toString(lowCountFilterPercentageOfSamples))
-                .addArgument(FilterIntervals.EXTREME_COUNT_FILTER_MINIMUM_PERCENTILE_LONG_NAME, Double.toString(extremeCountFilterMinimumPercentile))
-                .addArgument(FilterIntervals.EXTREME_COUNT_FILTER_MAXIMUM_PERCENTILE_LONG_NAME, Double.toString(extremeCountFilterMaximumPercentile))
-                .addArgument(FilterIntervals.EXTREME_COUNT_FILTER_PERCENTAGE_OF_SAMPLES_LONG_NAME, Double.toString(extremeCountFilterPercentageOfSamples))
-                .addArgument(IntervalArgumentCollection.INTERVAL_MERGING_RULE_LONG_NAME, IntervalMergingRule.OVERLAPPING_ONLY.toString())
+                .add(StandardArgumentDefinitions.INTERVALS_LONG_NAME, intervalsFile.getAbsolutePath())
+                .add(FilterIntervals.LOW_COUNT_FILTER_COUNT_THRESHOLD_LONG_NAME, Integer.toString(lowCountFilterCountThreshold))
+                .add(FilterIntervals.LOW_COUNT_FILTER_PERCENTAGE_OF_SAMPLES_LONG_NAME, Double.toString(lowCountFilterPercentageOfSamples))
+                .add(FilterIntervals.EXTREME_COUNT_FILTER_MINIMUM_PERCENTILE_LONG_NAME, Double.toString(extremeCountFilterMinimumPercentile))
+                .add(FilterIntervals.EXTREME_COUNT_FILTER_MAXIMUM_PERCENTILE_LONG_NAME, Double.toString(extremeCountFilterMaximumPercentile))
+                .add(FilterIntervals.EXTREME_COUNT_FILTER_PERCENTAGE_OF_SAMPLES_LONG_NAME, Double.toString(extremeCountFilterPercentageOfSamples))
+                .add(IntervalArgumentCollection.INTERVAL_MERGING_RULE_LONG_NAME, IntervalMergingRule.OVERLAPPING_ONLY.toString())
                 .addOutput(outputFile);
         countFiles.forEach(argsBuilder::addInput);
         runCommandLine(argsBuilder);
@@ -331,22 +341,22 @@ public final class FilterIntervalsIntegrationTest extends CommandLineProgramTest
                                final List<Integer> expectedIndices) {
         final File outputFile = createTempFile("filter-intervals-test", ".interval_list");
         final ArgumentsBuilder argsBuilder = new ArgumentsBuilder()
-                .addArgument(StandardArgumentDefinitions.INTERVALS_LONG_NAME, intervalsFile.getAbsolutePath())
-                .addArgument(CopyNumberStandardArgument.ANNOTATED_INTERVALS_FILE_LONG_NAME, annotatedIntervalsFile.getAbsolutePath())
-                .addArgument(FilterIntervals.MINIMUM_GC_CONTENT_LONG_NAME, Double.toString(minimumGCContent))
-                .addArgument(FilterIntervals.MAXIMUM_GC_CONTENT_LONG_NAME, Double.toString(maximumGCContent))
-                .addArgument(FilterIntervals.MINIMUM_MAPPABILITY_LONG_NAME, Double.toString(minimumMappability))
-                .addArgument(FilterIntervals.MAXIMUM_MAPPABILITY_LONG_NAME, Double.toString(maximumMappability))
-                .addArgument(FilterIntervals.MINIMUM_SEGMENTAL_DUPLICATION_CONTENT_LONG_NAME, Double.toString(minimumSegmentalDuplicationContent))
-                .addArgument(FilterIntervals.MAXIMUM_SEGMENTAL_DUPLICATION_CONTENT_LONG_NAME, Double.toString(maximumSegmentalDuplicationContent))
-                .addArgument(FilterIntervals.LOW_COUNT_FILTER_COUNT_THRESHOLD_LONG_NAME, Integer.toString(lowCountFilterCountThreshold))
-                .addArgument(FilterIntervals.LOW_COUNT_FILTER_PERCENTAGE_OF_SAMPLES_LONG_NAME, Double.toString(lowCountFilterPercentageOfSamples))
-                .addArgument(FilterIntervals.EXTREME_COUNT_FILTER_MINIMUM_PERCENTILE_LONG_NAME, Double.toString(extremeCountFilterMinimumPercentile))
-                .addArgument(FilterIntervals.EXTREME_COUNT_FILTER_MAXIMUM_PERCENTILE_LONG_NAME, Double.toString(extremeCountFilterMaximumPercentile))
-                .addArgument(FilterIntervals.EXTREME_COUNT_FILTER_PERCENTAGE_OF_SAMPLES_LONG_NAME, Double.toString(extremeCountFilterPercentageOfSamples))
-                .addArgument(IntervalArgumentCollection.INTERVAL_MERGING_RULE_LONG_NAME, IntervalMergingRule.OVERLAPPING_ONLY.toString())
+                .add(StandardArgumentDefinitions.INTERVALS_LONG_NAME, intervalsFile.getAbsolutePath())
+                .add(CopyNumberStandardArgument.ANNOTATED_INTERVALS_FILE_LONG_NAME, annotatedIntervalsFile.getAbsolutePath())
+                .add(FilterIntervals.MINIMUM_GC_CONTENT_LONG_NAME, Double.toString(minimumGCContent))
+                .add(FilterIntervals.MAXIMUM_GC_CONTENT_LONG_NAME, Double.toString(maximumGCContent))
+                .add(FilterIntervals.MINIMUM_MAPPABILITY_LONG_NAME, Double.toString(minimumMappability))
+                .add(FilterIntervals.MAXIMUM_MAPPABILITY_LONG_NAME, Double.toString(maximumMappability))
+                .add(FilterIntervals.MINIMUM_SEGMENTAL_DUPLICATION_CONTENT_LONG_NAME, Double.toString(minimumSegmentalDuplicationContent))
+                .add(FilterIntervals.MAXIMUM_SEGMENTAL_DUPLICATION_CONTENT_LONG_NAME, Double.toString(maximumSegmentalDuplicationContent))
+                .add(FilterIntervals.LOW_COUNT_FILTER_COUNT_THRESHOLD_LONG_NAME, Integer.toString(lowCountFilterCountThreshold))
+                .add(FilterIntervals.LOW_COUNT_FILTER_PERCENTAGE_OF_SAMPLES_LONG_NAME, Double.toString(lowCountFilterPercentageOfSamples))
+                .add(FilterIntervals.EXTREME_COUNT_FILTER_MINIMUM_PERCENTILE_LONG_NAME, Double.toString(extremeCountFilterMinimumPercentile))
+                .add(FilterIntervals.EXTREME_COUNT_FILTER_MAXIMUM_PERCENTILE_LONG_NAME, Double.toString(extremeCountFilterMaximumPercentile))
+                .add(FilterIntervals.EXTREME_COUNT_FILTER_PERCENTAGE_OF_SAMPLES_LONG_NAME, Double.toString(extremeCountFilterPercentageOfSamples))
+                .add(IntervalArgumentCollection.INTERVAL_MERGING_RULE_LONG_NAME, IntervalMergingRule.OVERLAPPING_ONLY.toString())
                 .addOutput(outputFile);
-        excludedIntervals.forEach(i -> argsBuilder.addArgument(IntervalArgumentCollection.EXCLUDE_INTERVALS_LONG_NAME, i));
+        excludedIntervals.forEach(i -> argsBuilder.add(IntervalArgumentCollection.EXCLUDE_INTERVALS_LONG_NAME, i));
         countFiles.forEach(argsBuilder::addInput);
         runCommandLine(argsBuilder);
         final IntervalList result = IntervalList.fromFile(outputFile);

@@ -4,6 +4,7 @@ import com.google.common.collect.AbstractIterator;
 import com.google.common.collect.Iterators;
 import com.google.common.primitives.Ints;
 import htsjdk.samtools.SAMFileHeader;
+import htsjdk.samtools.util.Locatable;
 import htsjdk.tribble.util.ParsingUtils;
 import htsjdk.variant.variantcontext.VariantContext;
 import org.apache.commons.lang3.ArrayUtils;
@@ -14,11 +15,10 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.broadinstitute.hellbender.engine.FeatureDataSource;
 import org.broadinstitute.hellbender.exceptions.GATKException;
+import org.broadinstitute.hellbender.utils.param.ParamUtils;
 
 import javax.annotation.Nullable;
-import java.io.File;
-import java.io.FileNotFoundException;
-import java.io.IOException;
+import java.io.*;
 import java.lang.reflect.Array;
 import java.math.BigInteger;
 import java.nio.file.Files;
@@ -512,14 +512,7 @@ public final class Utils {
     public static String calcMD5(final byte[] bytes) {
         Utils.nonNull(bytes, "the input array cannot be null");
         try {
-            final byte[] thedigest = MessageDigest.getInstance("MD5").digest(bytes);
-            final BigInteger bigInt = new BigInteger(1, thedigest);
-
-            String md5String = bigInt.toString(16);
-            while (md5String.length() < 32) {
-                md5String = "0" + md5String; // pad to length 32
-            }
-            return md5String;
+            return Utils.MD5ToString(MessageDigest.getInstance("MD5").digest(bytes));
         }
         catch ( final NoSuchAlgorithmException e ) {
             throw new IllegalStateException("MD5 digest algorithm not present", e);
@@ -528,9 +521,6 @@ public final class Utils {
 
     /**
      * Calculates the MD5 for the specified file and returns it as a String
-     *
-     * Warning: this loads the whole file into memory, so it's not suitable
-     * for large files.
      *
      * @param file file whose MD5 to calculate
      * @return file's MD5 in String form
@@ -543,14 +533,11 @@ public final class Utils {
     /**
      * Calculates the MD5 for the specified file and returns it as a String
      *
-     * Warning: this loads the whole file into memory, so it's not suitable
-     * for large files.
-     *
      * @param path file whose MD5 to calculate
      * @return file's MD5 in String form
      * @throws IOException if the file could not be read
      */
-    public static String calculatePathMD5(final Path path) throws IOException{
+    public static String calculatePathMD5(final Path path) throws IOException {
         // This doesn't have as nice error messages as FileUtils, but it's close.
         String fname = path.toUri().toString();
         if (!Files.exists(path)) {
@@ -562,7 +549,24 @@ public final class Utils {
         if (!Files.isRegularFile(path)) {
             throw new IOException("File '" + fname + "' exists but is not a regular file");
         }
-        return Utils.calcMD5(Files.readAllBytes(path));
+        try {
+            final MessageDigest md = MessageDigest.getInstance("MD5");
+            final byte[] buff = new byte[8192];
+            final InputStream is = Files.newInputStream(path);
+            int bytesRead;
+            while ((bytesRead = is.read(buff)) > 0) {
+                md.update(buff, 0, bytesRead);
+            }
+            return Utils.MD5ToString(md.digest());
+        } catch ( final NoSuchAlgorithmException e ) {
+            throw new IllegalStateException("MD5 digest algorithm not present", e);
+        }
+    }
+
+    private static String MD5ToString(final byte[] bytes) {
+        final BigInteger bigInt = new BigInteger(1, bytes);
+        final String md5String = bigInt.toString(16);
+        return StringUtils.repeat("0", 32 - md5String.length()) + md5String;
     }
 
     /**
@@ -1103,6 +1107,18 @@ public final class Utils {
     }
 
     /**
+     * Returns a function that always returns its input argument. Unlike {@link Function#identity()} the returned
+     * function is also serializable.
+     *
+     * @param <T> the type of the input and output objects to the function
+     * @return a function that always returns its input argument
+     */
+    @SuppressWarnings("unchecked")
+    public static <T> Function<T, T> identityFunction() {
+        return (Function & Serializable) t -> t;
+    }
+
+    /**
      * Like Guava's {@link Iterators#transform(Iterator, com.google.common.base.Function)}, but runs a fixed number
      * ({@code numThreads}) of transformations in parallel, while maintaining ordering of the output iterator.
      * This is useful if the transformations are CPU intensive.
@@ -1370,5 +1386,25 @@ public final class Utils {
             patterns.add(Pattern.compile(filter));
         }
         return patterns;
+    }
+
+
+    /**
+     * Removes the last portion of a list so that it has a new size of at
+     * most a given number of elements.
+     * @param list the list to modify.
+     * @param maxLength the intended maximum length for the list.
+     */
+    public static void truncate(final List<?> list, final int maxLength) {
+        Utils.nonNull(list);
+        ParamUtils.isPositiveOrZero(maxLength, "new maximum length");
+        if (maxLength == 0) { // special quicker case when ml == 0.
+            list.clear();
+        } else {
+            final int length = list.size();
+            if (maxLength < length) {  // if not we are done.
+                list.subList(maxLength, length).clear();
+            }
+        }
     }
 }

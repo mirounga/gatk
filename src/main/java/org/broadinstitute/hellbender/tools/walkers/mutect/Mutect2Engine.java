@@ -1,6 +1,5 @@
 package org.broadinstitute.hellbender.tools.walkers.mutect;
 
-import com.google.common.annotations.VisibleForTesting;
 import htsjdk.samtools.SAMFileHeader;
 import htsjdk.samtools.util.Locatable;
 import htsjdk.variant.variantcontext.Genotype;
@@ -10,30 +9,32 @@ import htsjdk.variant.vcf.VCFConstants;
 import htsjdk.variant.vcf.VCFHeader;
 import htsjdk.variant.vcf.VCFHeaderLine;
 import htsjdk.variant.vcf.VCFStandardHeaderLines;
-import org.apache.commons.lang3.mutable.MutableInt;
+import org.apache.commons.lang3.mutable.MutableLong;
 import org.apache.commons.lang3.tuple.ImmutablePair;
+import org.apache.commons.math3.special.Gamma;
 import org.apache.commons.math3.util.FastMath;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.broadinstitute.hellbender.engine.*;
 import org.broadinstitute.hellbender.engine.filters.*;
+import org.broadinstitute.hellbender.engine.spark.AssemblyRegionArgumentCollection;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.tools.walkers.annotator.Annotation;
 import org.broadinstitute.hellbender.tools.walkers.annotator.StandardMutectAnnotation;
 import org.broadinstitute.hellbender.tools.walkers.annotator.VariantAnnotatorEngine;
-import org.broadinstitute.hellbender.tools.walkers.genotyper.GenotypingGivenAllelesUtils;
 import org.broadinstitute.hellbender.tools.walkers.genotyper.HomogeneousPloidyModel;
 import org.broadinstitute.hellbender.tools.walkers.haplotypecaller.*;
 import org.broadinstitute.hellbender.tools.walkers.haplotypecaller.readthreading.ReadThreadingAssembler;
 import org.broadinstitute.hellbender.tools.walkers.mutect.filtering.FilterMutectCalls;
+import org.broadinstitute.hellbender.tools.walkers.readorientation.BetaDistributionShape;
 import org.broadinstitute.hellbender.tools.walkers.readorientation.F1R2CountsCollector;
 import org.broadinstitute.hellbender.transformers.PalindromeArtifactClipReadTransformer;
 import org.broadinstitute.hellbender.transformers.ReadTransformer;
 import org.broadinstitute.hellbender.utils.*;
 import org.broadinstitute.hellbender.utils.activityprofile.ActivityProfileState;
 import org.broadinstitute.hellbender.utils.fasta.CachingIndexedFastaSequenceFile;
+import org.broadinstitute.hellbender.utils.genotyper.AlleleLikelihoods;
 import org.broadinstitute.hellbender.utils.genotyper.IndexedSampleList;
-import org.broadinstitute.hellbender.utils.genotyper.ReadLikelihoods;
 import org.broadinstitute.hellbender.utils.genotyper.SampleList;
 import org.broadinstitute.hellbender.utils.haplotype.Haplotype;
 import org.broadinstitute.hellbender.utils.haplotype.HaplotypeBAMWriter;
@@ -60,7 +61,7 @@ public final class Mutect2Engine implements AssemblyRegionEvaluator {
             GATKVCFConstants.EVENT_COUNT_IN_HAPLOTYPE_KEY, GATKVCFConstants.IN_PON_KEY, GATKVCFConstants.POPULATION_AF_KEY,
             GATKVCFConstants.GERMLINE_QUAL_KEY, GATKVCFConstants.CONTAMINATION_QUAL_KEY, GATKVCFConstants.SEQUENCING_QUAL_KEY,
             GATKVCFConstants.POLYMERASE_SLIPPAGE_QUAL_KEY, GATKVCFConstants.READ_ORIENTATION_QUAL_KEY,
-            GATKVCFConstants.STRAND_QUAL_KEY, GATKVCFConstants.ORIGINAL_CONTIG_MISMATCH_KEY, GATKVCFConstants.N_COUNT_KEY, GATKVCFConstants.UNIQUE_ALT_READ_SET_COUNT_KEY);
+            GATKVCFConstants.STRAND_QUAL_KEY, GATKVCFConstants.ORIGINAL_CONTIG_MISMATCH_KEY, GATKVCFConstants.N_COUNT_KEY, GATKVCFConstants.AS_UNIQUE_ALT_READ_SET_COUNT_KEY);
     private static final String MUTECT_VERSION = "2.2";
 
     public static final String TUMOR_SAMPLE_KEY_IN_VCF_HEADER = "tumor_sample";
@@ -97,29 +98,29 @@ public final class Mutect2Engine implements AssemblyRegionEvaluator {
     private Optional<HaplotypeBAMWriter> haplotypeBAMWriter;
     private VariantAnnotatorEngine annotationEngine;
     private final SmithWatermanAligner aligner;
-    private AssemblyRegionTrimmer trimmer = new AssemblyRegionTrimmer();
+    private final AssemblyRegionTrimmer trimmer;
     private SomaticReferenceConfidenceModel referenceConfidenceModel = null;
 
-    private final MutableInt callableSites = new MutableInt(0);
+    private final MutableLong callableSites = new MutableLong(0);
 
     private final Optional<F1R2CountsCollector> f1R2CountsCollector;
 
     /**
      * Create and initialize a new HaplotypeCallerEngine given a collection of HaplotypeCaller arguments, a reads header,
      * and a reference file
-     *
-     * @param MTAC command-line arguments for the HaplotypeCaller
+     *  @param MTAC command-line arguments for the HaplotypeCaller
+     * @param assemblyRegionArgs
      * @param createBamOutIndex true to create an index file for the bamout
      * @param createBamOutMD5 true to create an md5 file for the bamout
      * @param header header for the reads
-     * @param reference path to the reference
+     * @param referenceSpec reference specifier for the reference
      * @param annotatorEngine annotator engine built with desired annotations
      */
-    public Mutect2Engine(final M2ArgumentCollection MTAC, final boolean createBamOutIndex, final boolean createBamOutMD5, final SAMFileHeader header, final String reference, final VariantAnnotatorEngine annotatorEngine) {
+    public Mutect2Engine(final M2ArgumentCollection MTAC, AssemblyRegionArgumentCollection assemblyRegionArgs, final boolean createBamOutIndex, final boolean createBamOutMD5, final SAMFileHeader header, final GATKPath referenceSpec, final VariantAnnotatorEngine annotatorEngine) {
         this.MTAC = Utils.nonNull(MTAC);
         this.header = Utils.nonNull(header);
         minCallableDepth = MTAC.callableDepth;
-        referenceReader = AssemblyBasedCallerUtils.createReferenceReader(Utils.nonNull(reference));
+        referenceReader = AssemblyBasedCallerUtils.createReferenceReader(Utils.nonNull(referenceSpec));
         aligner = SmithWatermanAligner.getAligner(MTAC.smithWatermanImplementation);
         samplesList = new IndexedSampleList(new ArrayList<>(ReadUtils.getSamplesFromHeader(header)));
 
@@ -140,8 +141,8 @@ public final class Mutect2Engine implements AssemblyRegionEvaluator {
         likelihoodCalculationEngine = AssemblyBasedCallerUtils.createLikelihoodCalculationEngine(MTAC.likelihoodArgs);
         genotypingEngine = new SomaticGenotypingEngine(MTAC, normalSamples, annotationEngine);
         haplotypeBAMWriter = AssemblyBasedCallerUtils.createBamWriter(MTAC, createBamOutIndex, createBamOutMD5, header);
-        trimmer.initialize(MTAC.assemblerArgs, header.getSequenceDictionary(), forceCallingAllelesPresent, emitReferenceConfidence());
-        referenceConfidenceModel = new SomaticReferenceConfidenceModel(samplesList, header, 0, genotypingEngine);  //TODO: do something classier with the indel size arg
+        trimmer = new AssemblyRegionTrimmer(assemblyRegionArgs, header.getSequenceDictionary());
+        referenceConfidenceModel = new SomaticReferenceConfidenceModel(samplesList, header, 0, MTAC.minAF);  //TODO: do something classier with the indel size arg
         final List<String> tumorSamples = ReadUtils.getSamplesFromHeader(header).stream().filter(this::isTumorSample).collect(Collectors.toList());
         f1R2CountsCollector = MTAC.f1r2TarGz == null ? Optional.empty() : Optional.of(new F1R2CountsCollector(MTAC.f1r2Args, header, MTAC.f1r2TarGz, tumorSamples));
     }
@@ -219,19 +220,18 @@ public final class Mutect2Engine implements AssemblyRegionEvaluator {
         removeUnmarkedDuplicates(originalAssemblyRegion);
 
         final List<VariantContext> givenAlleles = featureContext.getValues(MTAC.alleles).stream()
-                .filter(vc -> MTAC.genotypeFilteredAlleles || vc.isNotFiltered()).collect(Collectors.toList());
+                .filter(vc -> MTAC.forceCallFiltered || vc.isNotFiltered()).collect(Collectors.toList());
 
         final AssemblyRegion assemblyActiveRegion = AssemblyBasedCallerUtils.assemblyRegionWithWellMappedReads(originalAssemblyRegion, READ_QUALITY_FILTER_THRESHOLD, header);
         final AssemblyResultSet untrimmedAssemblyResult = AssemblyBasedCallerUtils.assembleReads(assemblyActiveRegion, givenAlleles, MTAC, header, samplesList, logger, referenceReader, assemblyEngine, aligner, false);
 
         final SortedSet<VariantContext> allVariationEvents = untrimmedAssemblyResult.getVariationEvents(MTAC.maxMnpDistance);
-        final AssemblyRegionTrimmer.Result trimmingResult = trimmer.trim(originalAssemblyRegion, allVariationEvents);
+        final AssemblyRegionTrimmer.Result trimmingResult = trimmer.trim(originalAssemblyRegion, allVariationEvents, referenceContext);
         if (!trimmingResult.isVariationPresent()) {
             return emitReferenceConfidence() ? referenceModelForNoVariation(originalAssemblyRegion) : NO_CALLS;
         }
 
-        final AssemblyResultSet assemblyResult =
-                trimmingResult.needsTrimming() ? untrimmedAssemblyResult.trimTo(trimmingResult.getCallableRegion()) : untrimmedAssemblyResult;
+        final AssemblyResultSet assemblyResult = untrimmedAssemblyResult.trimTo(trimmingResult.getVariantRegion());
 
         // we might find out after assembly that the "active" region actually has no variants
         if( ! assemblyResult.isVariationPresent() ) {
@@ -243,9 +243,11 @@ public final class Mutect2Engine implements AssemblyRegionEvaluator {
 
         final Map<String,List<GATKRead>> reads = splitReadsBySample( regionForGenotyping.getReads() );
 
-        final ReadLikelihoods<Haplotype> readLikelihoods = likelihoodCalculationEngine.computeReadLikelihoods(assemblyResult,samplesList,reads).copy(true);
+        final AlleleLikelihoods<GATKRead, Haplotype> readLikelihoods = likelihoodCalculationEngine.computeReadLikelihoods(assemblyResult,samplesList,reads);
+        readLikelihoods.switchToNaturalLog();
+
         final Map<GATKRead,GATKRead> readRealignments = AssemblyBasedCallerUtils.realignReadsToTheirBestHaplotype(readLikelihoods, assemblyResult.getReferenceHaplotype(), assemblyResult.getPaddedReferenceLoc(), aligner);
-        readLikelihoods.changeReads(readRealignments);
+        readLikelihoods.changeEvidence(readRealignments);
 
         final CalledHaplotypes calledHaplotypes = genotypingEngine.callMutations(
                 readLikelihoods, assemblyResult, referenceContext, regionForGenotyping.getSpan(), featureContext, givenAlleles, header, haplotypeBAMWriter.isPresent(), emitReferenceConfidence());
@@ -257,18 +259,15 @@ public final class Mutect2Engine implements AssemblyRegionEvaluator {
             }
             else {
                 final List<VariantContext> result = new LinkedList<>();
-                // output left-flanking non-variant section:
-                if (trimmingResult.hasLeftFlankingRegion()) {
-                    result.addAll(referenceModelForNoVariation(trimmingResult.nonVariantLeftFlankRegion()));
-                }
-                // output variant containing region.
+                // output left-flanking non-variant section, then variant-containing section, then right flank
+                trimmingResult.nonVariantLeftFlankRegion().ifPresent(flank -> result.addAll(referenceModelForNoVariation(flank)));
+
                 result.addAll(referenceConfidenceModel.calculateRefConfidence(assemblyResult.getReferenceHaplotype(),
                         calledHaplotypes.getCalledHaplotypes(), assemblyResult.getPaddedReferenceLoc(), regionForGenotyping,
                         readLikelihoods, new HomogeneousPloidyModel(samplesList, 2), calledHaplotypes.getCalls()));
-                // output right-flanking non-variant section:
-                if (trimmingResult.hasRightFlankingRegion()) {
-                    result.addAll(referenceModelForNoVariation(trimmingResult.nonVariantRightFlankRegion()));
-                }
+
+                trimmingResult.nonVariantRightFlankRegion().ifPresent(flank -> result.addAll(referenceModelForNoVariation(flank)));
+
                 return result;
             }
         }
@@ -308,7 +307,7 @@ public final class Mutect2Engine implements AssemblyRegionEvaluator {
                 .anyMatch(Genotype::isCalled);
     }
 
-    private void writeBamOutput(AssemblyResultSet assemblyResult, ReadLikelihoods<Haplotype> readLikelihoods, CalledHaplotypes calledHaplotypes, Locatable callableRegion) {
+    private void writeBamOutput(final AssemblyResultSet assemblyResult, final AlleleLikelihoods<GATKRead, Haplotype> readLikelihoods, final CalledHaplotypes calledHaplotypes, final Locatable callableRegion) {
         if ( haplotypeBAMWriter.isPresent() ) {
             final Set<Haplotype> calledHaplotypeSet = new HashSet<>(calledHaplotypes.getCalledHaplotypes());
             haplotypeBAMWriter.get().writeReadsAlignedToHaplotypes(
@@ -355,13 +354,9 @@ public final class Mutect2Engine implements AssemblyRegionEvaluator {
     }
 
     @Override
-    public ActivityProfileState isActive(final AlignmentContext context, final ReferenceContext ref, final FeatureContext featureContext) {
-        if ( forceCallingAllelesPresent ) {
-            final VariantContext vcFromGivenAlleles = GenotypingGivenAllelesUtils.composeGivenAllelesVariantContextFromVariantList(featureContext,
-                    ref.getInterval(), MTAC.genotypeFilteredAlleles, MTAC.alleles);
-            if( vcFromGivenAlleles != null ) {
-                return new ActivityProfileState(ref.getInterval(), 1.0);
-            }
+    public ActivityProfileState isActive(final AlignmentContext context, final ReferenceContext ref, final FeatureContext features) {
+        if ( forceCallingAllelesPresent && features.getValues(MTAC.alleles, ref).stream().anyMatch(vc -> MTAC.forceCallFiltered || vc.isNotFiltered())) {
+            return new ActivityProfileState(ref.getInterval(), 1.0);
         }
 
         final byte refBase = ref.getBase();
@@ -391,7 +386,7 @@ public final class Mutect2Engine implements AssemblyRegionEvaluator {
                 return new ActivityProfileState(refInterval, 0.0);
             }
         } else if (!MTAC.genotypeGermlineSites) {
-            final List<VariantContext> germline = featureContext.getValues(MTAC.germlineResource, refInterval);
+            final List<VariantContext> germline = features.getValues(MTAC.germlineResource, refInterval);
             if (!germline.isEmpty()){
                 final VariantContext germlineVariant = germline.get(0);
                 final List<Double> germlineAlleleFrequencies = getAttributeAsDoubleList(germlineVariant, VCFConstants.ALLELE_FREQUENCY_KEY, 0.0);
@@ -401,7 +396,7 @@ public final class Mutect2Engine implements AssemblyRegionEvaluator {
             }
         }
 
-        if (!MTAC.genotypePonSites && !featureContext.getValues(MTAC.pon, new SimpleInterval(context.getContig(), (int) context.getPosition(), (int) context.getPosition())).isEmpty()) {
+        if (!MTAC.genotypePonSites && !features.getValues(MTAC.pon, new SimpleInterval(context.getContig(), (int) context.getPosition(), (int) context.getPosition())).isEmpty()) {
             return new ActivityProfileState(refInterval, 0.0);
         }
 
@@ -443,7 +438,7 @@ public final class Mutect2Engine implements AssemblyRegionEvaluator {
     private List<VariantContext> referenceModelForNoVariation(final AssemblyRegion region) {
         // don't correct overlapping base qualities because we did that upstream
         AssemblyBasedCallerUtils.finalizeRegion(region, false, true, (byte)9, header, samplesList, false);  //take off soft clips and low Q tails before we calculate likelihoods
-        final SimpleInterval paddedLoc = region.getExtendedSpan();
+        final SimpleInterval paddedLoc = region.getPaddedSpan();
         final Haplotype refHaplotype = AssemblyBasedCallerUtils.createReferenceHaplotype(region, paddedLoc, referenceReader);
         final List<Haplotype> haplotypes = Collections.singletonList(refHaplotype);
         return referenceConfidenceModel.calculateRefConfidence(refHaplotype, haplotypes,
@@ -480,20 +475,28 @@ public final class Mutect2Engine implements AssemblyRegionEvaluator {
         return result;
     }
 
-    private static double logLikelihoodRatio(final int refCount, final List<Byte> altQuals) {
+    public static double logLikelihoodRatio(final int refCount, final List<Byte> altQuals) {
         return logLikelihoodRatio(refCount, altQuals, 1);
     }
 
-    // this implements the isActive() algorithm described in docs/mutect/mutect.pdf
-    // the multiplicative factor is for the special case where we pass a singleton list
-    // of alt quals and want to duplicate that alt qual over multiple reads
-    @VisibleForTesting
-    static double logLikelihoodRatio(final int nRef, final List<Byte> altQuals, final int repeatFactor) {
+
+
+    /**
+     *  this implements the isActive() algorithm described in docs/mutect/mutect.pdf
+     *  the multiplicative factor is for the special case where we pass a singleton list
+     *  of alt quals and want to duplicate that alt qual over multiple reads
+     * @param nRef          ref read count
+     * @param altQuals      Phred-scaled qualities of alt-supporting reads
+     * @param repeatFactor  Number of times each alt qual is duplicated
+     * @param afPrior       Beta prior on alt allele fraction
+     * @return
+     */
+    public static double logLikelihoodRatio(final int nRef, final List<Byte> altQuals, final int repeatFactor, final Optional<BetaDistributionShape> afPrior) {
         final int nAlt = repeatFactor * altQuals.size();
         final int n = nRef + nAlt;
 
         final double fTildeRatio = FastMath.exp(MathUtils.digamma(nRef + 1) - MathUtils.digamma(nAlt + 1));
-        final double betaEntropy = MathUtils.log10ToLog(-MathUtils.log10Factorial(n+1) + MathUtils.log10Factorial(nAlt) + MathUtils.log10Factorial(nRef));
+
 
         double readSum = 0;
         for (final byte qual : altQuals) {
@@ -504,8 +507,21 @@ public final class Mutect2Engine implements AssemblyRegionEvaluator {
             readSum += zBarAlt * (logOneMinusEpsilon - logEpsilon) + MathUtils.fastBernoulliEntropy(zBarAlt);
         }
 
+        final double betaEntropy;
+        if (afPrior.isPresent()) {
+            final double alpha = afPrior.get().getAlpha();
+            final double beta = afPrior.get().getBeta();
+            betaEntropy = Gamma.logGamma(alpha + beta) - Gamma.logGamma(alpha) - Gamma.logGamma(beta)
+                    - Gamma.logGamma(alpha + beta + n) + Gamma.logGamma(alpha + nAlt) + Gamma.logGamma(beta + nRef);
+        } else {
+            betaEntropy = MathUtils.log10ToLog(-MathUtils.log10Factorial(n + 1) + MathUtils.log10Factorial(nAlt) + MathUtils.log10Factorial(nRef));
+        }
         return betaEntropy + readSum * repeatFactor;
+    }
 
+    // the default case of a flat Beta(1,1) prior on allele fraction
+    public static double logLikelihoodRatio(final int nRef, final List<Byte> altQuals, final int repeatFactor) {
+        return logLikelihoodRatio(nRef, altQuals, repeatFactor, Optional.empty());
     }
 
     // same as above but with a constant error probability for several alts

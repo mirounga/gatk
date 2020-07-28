@@ -234,10 +234,10 @@ public final class FuncotatorEngine implements AutoCloseable {
      * @return The requested {@link OutputRenderer} based on the given {@code funcotatorArgs}.
      */
     OutputRenderer createOutputRenderer(final LinkedHashMap<String, String> annotationDefaultsMap,
-                                               final LinkedHashMap<String, String> annotationOverridesMap,
-                                               final VCFHeader headerForVariants,
-                                               final Set<VCFHeaderLine> defaultToolVcfHeaderLines,
-                                               final GATKTool gatkToolInstance) {
+                                        final LinkedHashMap<String, String> annotationOverridesMap,
+                                        final VCFHeader headerForVariants,
+                                        final Set<VCFHeaderLine> defaultToolVcfHeaderLines,
+                                        final GATKTool gatkToolInstance) {
 
         final OutputRenderer outputRenderer;
 
@@ -255,7 +255,7 @@ public final class FuncotatorEngine implements AutoCloseable {
                         unaccountedForDefaultAnnotations,
                         unaccountedForOverrideAnnotations,
                         defaultToolVcfHeaderLines.stream().map(Object::toString).collect(Collectors.toCollection(LinkedHashSet::new)),
-                        funcotatorArgs.referenceVersion.toString(),
+                        funcotatorArgs.referenceVersion,
                         funcotatorArgs.excludedFields,
                         gatkToolInstance.getVersion()
                 );
@@ -286,7 +286,7 @@ public final class FuncotatorEngine implements AutoCloseable {
 
                                     new GeneListOutputRenderer(new File(funcotatorArgs.outputFile.getAbsolutePath() + GENE_LIST_FILE_SUFFIX).toPath(),
                                         unaccountedForDefaultAnnotations, unaccountedForOverrideAnnotations,
-                                        funcotatorArgs.excludedFields, gatkToolInstance.getVersion())
+                                        funcotatorArgs.excludedFields, gatkToolInstance.getVersion(), funcotatorArgs.minNumBasesForValidSegment)
                         ), gatkToolInstance.getVersion());
                 break;
             default:
@@ -472,7 +472,7 @@ public final class FuncotatorEngine implements AutoCloseable {
         boolean mustConvertInputContigsToHg19 = false;
 
         if ( funcotatorArgs.forceB37ToHg19ContigNameConversion ||
-                ( funcotatorArgs.referenceVersion.equals(BaseFuncotatorArgumentCollection.FuncotatorReferenceVersion.hg19) &&
+                ( funcotatorArgs.referenceVersion.equals(BaseFuncotatorArgumentCollection.FuncotatorReferenceVersionHg19) &&
                         FuncotatorUtils.isSequenceDictionaryUsingB37Reference(sequenceDictionaryForDrivingVariants) )) {
 
             // NOTE AND WARNING:

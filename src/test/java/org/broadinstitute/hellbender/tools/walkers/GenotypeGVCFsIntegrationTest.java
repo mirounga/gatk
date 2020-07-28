@@ -1,29 +1,31 @@
 package org.broadinstitute.hellbender.tools.walkers;
 
 import htsjdk.samtools.seekablestream.SeekablePathStream;
+import htsjdk.samtools.util.FileExtensions;
 import htsjdk.samtools.util.Locatable;
-import htsjdk.tribble.Tribble;
 import htsjdk.variant.utils.VCFHeaderReader;
 import htsjdk.variant.variantcontext.Allele;
 import htsjdk.variant.variantcontext.Genotype;
 import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.vcf.VCFHeader;
+import htsjdk.variant.vcf.VCFHeaderLineCount;
 import org.apache.commons.codec.digest.DigestUtils;
-import org.apache.commons.collections.IteratorUtils;
 import org.broadinstitute.barclay.argparser.CommandLineException;
 import org.broadinstitute.hellbender.CommandLineProgramTest;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
-import org.broadinstitute.hellbender.engine.FeatureDataSource;
+import org.broadinstitute.hellbender.exceptions.UserException;
+import org.broadinstitute.hellbender.testutils.ArgumentsBuilder;
+import org.broadinstitute.hellbender.testutils.GenomicsDBTestUtils;
+import org.broadinstitute.hellbender.testutils.VariantContextTestUtils;
+import org.broadinstitute.hellbender.tools.genomicsdb.GenomicsDBArgumentCollection;
 import org.broadinstitute.hellbender.tools.genomicsdb.GenomicsDBImport;
-import org.broadinstitute.hellbender.utils.GATKProtectedVariantContextUtils;
+import org.broadinstitute.hellbender.tools.walkers.annotator.RMSMappingQuality;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
 import org.broadinstitute.hellbender.utils.runtime.ProcessController;
-import org.broadinstitute.hellbender.testutils.ArgumentsBuilder;
-import org.broadinstitute.hellbender.testutils.GenomicsDBTestUtils;
-import org.broadinstitute.hellbender.testutils.VariantContextTestUtils;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
+import org.broadinstitute.hellbender.utils.variant.VariantContextGetters;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
@@ -55,7 +57,7 @@ public class GenotypeGVCFsIntegrationTest extends CommandLineProgramTest {
             "AS_QD",
             "QD",//TODO QD and AS_QD have cap values and anything that reaches that is randomized.  It's difficult to reproduce the same random numbers across gatk3 -> 4
             "FS");//TODO There's some bug in either gatk3 or gatk4 fisherstrand that's making them not agree still, I'm not sure which is correct
-    private static final List<String> ATTRIBUTES_TO_IGNORE = Arrays.asList("AS_QD","QD","FS","RAW_MQ","RGQ","MQ"); //MQ data format and key have changed since GATK3
+    private static final List<String> ATTRIBUTES_TO_IGNORE = Arrays.asList("FS","RAW_MQ","RGQ","MQ"); //MQ data format and key have changed since GATK3
 
     private static final String ALLELE_SPECIFIC_DIRECTORY = toolsTestDir + "walkers/annotator/allelespecific";
 
@@ -96,10 +98,11 @@ public class GenotypeGVCFsIntegrationTest extends CommandLineProgramTest {
                 //Tests for Allele-Specific Annotations
                 {new File(ALLELE_SPECIFIC_DIRECTORY, "NA12878.AS.chr20snippet.g.vcf"), getTestFile( "AS_Annotations.gatk3.7_30_ga4f720357.expected.vcf"), Arrays.asList( "-A", "ClippingRankSumTest", "-G", "AS_StandardAnnotation", "-G", "StandardAnnotation"), b37_reference_20_21},
                 {new File(ALLELE_SPECIFIC_DIRECTORY, "NA12878.AS.chr20snippet.g.vcf"), getTestFile( "AS_Annotations.keepRawCombined.expected.vcf"), Arrays.asList( "-A", "ClippingRankSumTest", "-G", "AS_StandardAnnotation", "-G", "StandardAnnotation", "-keep-combined"), b37_reference_20_21},
+                //input GVCF doesn't have AS annotations, just new RAW_MQandDP format; expected output annotations include AS_QD because that can be calculated from genotypes; definitely should have MQ and retain F1R2:F2R1 for OxoG in FORMAT
                 {getTestFile( "withOxoGReadCounts.g.vcf"), getTestFile( "withOxoGReadCounts.vcf"), Arrays.asList("-G", "AS_StandardAnnotation", "-G", "StandardAnnotation"), b37_reference_20_21},
                 {getTestFile( "multiSamples.g.vcf"), getTestFile( "multiSamples.GATK3expected.g.vcf"), Arrays.asList( "-A", "ClippingRankSumTest", "-G", "AS_StandardAnnotation", "-G", "StandardAnnotation"), b37_reference_20_21},
                 {getTestFile( "testAlleleSpecificAnnotations.CombineGVCF.output.g.vcf"), getTestFile( "testAlleleSpecificAnnotations.CombineGVCF.expected.g.vcf"), Arrays.asList( "-A", "ClippingRankSumTest", "-G", "AS_StandardAnnotation", "-G", "StandardAnnotation"), b37_reference_20_21},
-                
+
                 // all sites/--include-non-variant-sites tests
                 // The results from these tests differ from GATK3 in the following ways:
                 //  - sites where the only alternate allele is a spanning deletion are emitted by GATK3, but not emitted by GATK4
@@ -210,15 +213,14 @@ public class GenotypeGVCFsIntegrationTest extends CommandLineProgramTest {
 
     @Test(dataProvider = "gvcfsToGenotype")
     public void testGenotypesOnly(File input, File expected, List<String> extraArgs, String reference) throws IOException {
-        assertGenotypesMatch(input, expected, extraArgs, reference);
+        final List<String> extra = new ArrayList<>(extraArgs);
+        assertGenotypesMatch(input, expected, extra, reference);
     }
 
     @DataProvider
     //this is different from the above data provider because we can currently only load a single interval into a genomics db in a sane way
     //so we need to provide a list of intervals and then look at each one
     public Object[][] getGVCFsForGenomicsDB(){
-
-
         return new Object[][]{
                 {getTestFile(BASE_PAIR_GVCF), getTestFile(BASE_PAIR_EXPECTED), new SimpleInterval("20", 1, 11_000_000), b37_reference_20_21},
                 {CEUTRIO_20_21_GATK3_4_G_VCF, getTestFile("CEUTrio.20.gatk3.7_30_ga4f720357.expected.vcf"), new SimpleInterval("20", 1, 11_000_000), b37_reference_20_21},
@@ -241,10 +243,26 @@ public class GenotypeGVCFsIntegrationTest extends CommandLineProgramTest {
 
     //this only tests single-sample
     @Test(dataProvider = "getGVCFsForGenomicsDB", timeOut = 1000000)
-    public void assertMatchingGenotypesFromTileDB(File input, File expected, Locatable interval, String reference) throws IOException {
+    public void assertMatchingGenotypesFromGenomicsDB(File input, File expected, Locatable interval, String reference) throws IOException {
         final File tempGenomicsDB = GenomicsDBTestUtils.createTempGenomicsDB(input, interval);
         final String genomicsDBUri = GenomicsDBTestUtils.makeGenomicsDBUri(tempGenomicsDB);
         runGenotypeGVCFSAndAssertSomething(genomicsDBUri, expected, NO_EXTRA_ARGS, VariantContextTestUtils::assertVariantContextsHaveSameGenotypes, reference);
+
+        // The default option with GenomicsDB input uses VCFCodec for decoding, test BCFCodec explicitly
+        final List<String> args = new ArrayList<String>();
+        args.add("--"+GenomicsDBArgumentCollection.USE_BCF_CODEC_LONG_NAME);
+        runGenotypeGVCFSAndAssertSomething(genomicsDBUri, expected, args, VariantContextTestUtils::assertVariantContextsHaveSameGenotypes, reference);
+    }
+
+    private void runAndCheckGenomicsDBOutput(final ArgumentsBuilder args, final File expected, final File output) {
+        Utils.resetRandomGenerator();
+        runCommandLine(args);
+
+        // Note that if this isn't working it will take *FOREVER*
+        // runs in 0.06 minutes with no input intervals specfied
+        final List<VariantContext> expectedVC = VariantContextTestUtils.getVariantContexts(expected);
+        final List<VariantContext> actualVC = VariantContextTestUtils.getVariantContexts(output);
+        assertForEachElementInLists(actualVC, expectedVC, VariantContextTestUtils::assertVariantContextsHaveSameGenotypes);
     }
 
     @Test(dataProvider = "getGVCFsForGenomicsDBOverMultipleIntervals")
@@ -256,21 +274,17 @@ public class GenotypeGVCFsIntegrationTest extends CommandLineProgramTest {
 
         final ArgumentsBuilder args = new ArgumentsBuilder();
         args.addReference(new File(reference))
-                .addArgument("V", genomicsDBUri)
-                .addOutput(output);
+                .add("V", genomicsDBUri);
+        args.addOutput(output);
         intervals.forEach(args::addInterval);
-        args.add("--" + GenomicsDBImport.MERGE_INPUT_INTERVALS_LONG_NAME);
-        args.add("--only-output-calls-starting-in-intervals");  //note that this will restrict calls to just the specified intervals
+        args.addRaw("--" + GenomicsDBImport.MERGE_INPUT_INTERVALS_LONG_NAME);
+        args.addRaw("--only-output-calls-starting-in-intervals");  //note that this will restrict calls to just the specified intervals
 
-        Utils.resetRandomGenerator();
-        runCommandLine(args);
+        runAndCheckGenomicsDBOutput(args, expected, output);
 
-        //Note that if this isn't working it will take *FOREVER*
-        // runs in 0.06 minutes with no input intervals specfied
-        final List<VariantContext> expectedVC = getVariantContexts(expected);
-        final List<VariantContext> actualVC = getVariantContexts(output);
-        assertForEachElementInLists(actualVC, expectedVC, VariantContextTestUtils::assertVariantContextsHaveSameGenotypes);
-
+        // The default option with GenomicsDB input uses VCFCodec for decoding, test BCFCodec explicitly
+        args.addRaw("--"+GenomicsDBArgumentCollection.USE_BCF_CODEC_LONG_NAME);
+        runAndCheckGenomicsDBOutput(args, expected, output);
     }
 
     //this tests single-sample with new MQ format
@@ -280,8 +294,13 @@ public class GenotypeGVCFsIntegrationTest extends CommandLineProgramTest {
         final String genomicsDBUri = GenomicsDBTestUtils.makeGenomicsDBUri(tempGenomicsDB);
 
         final VCFHeader header = VCFHeaderReader.readHeaderFrom(new SeekablePathStream(IOUtils.getPath(expected.getAbsolutePath())));
-        final List<String> attributesToIgnore = Stream.concat(ATTRIBUTES_WITH_JITTER.stream(), ATTRIBUTES_TO_IGNORE.stream()).collect(Collectors.toList());
-        runGenotypeGVCFSAndAssertSomething(genomicsDBUri, expected, NO_EXTRA_ARGS, (a, e) -> VariantContextTestUtils.assertVariantContextsAreEqualAlleleOrderIndependent(a, e, attributesToIgnore, header), reference);
+        final List<String> attributesToFilter = Stream.concat(ATTRIBUTES_WITH_JITTER.stream(), ATTRIBUTES_TO_IGNORE.stream()).collect(Collectors.toList());
+        runGenotypeGVCFSAndAssertSomething(genomicsDBUri, expected, NO_EXTRA_ARGS, (a, e) -> VariantContextTestUtils.assertVariantContextsAreEqualAlleleOrderIndependent(a, e, ATTRIBUTES_TO_IGNORE, ATTRIBUTES_WITH_JITTER, header), reference);
+
+        // The default option with GenomicsDB input uses VCFCodec for decoding, test BCFCodec explicitly
+        final List<String> args = new ArrayList<String>();
+        args.add("--"+GenomicsDBArgumentCollection.USE_BCF_CODEC_LONG_NAME);
+        runGenotypeGVCFSAndAssertSomething(genomicsDBUri, expected, args, (a, e) -> VariantContextTestUtils.assertVariantContextsAreEqualAlleleOrderIndependent(a, e, ATTRIBUTES_TO_IGNORE, ATTRIBUTES_WITH_JITTER, header), reference);
     }
 
     @Test(dataProvider = "gvcfsToGenotype")
@@ -292,7 +311,7 @@ public class GenotypeGVCFsIntegrationTest extends CommandLineProgramTest {
     private void assertVariantContextsMatch(File input, File expected, List<String> extraArgs, String reference) throws IOException {
         try {
             final VCFHeader header = VCFHeaderReader.readHeaderFrom(new SeekablePathStream(IOUtils.getPath(expected.getAbsolutePath())));
-            runGenotypeGVCFSAndAssertSomething(input, expected, extraArgs, (a, e) -> VariantContextTestUtils.assertVariantContextsAreEqualAlleleOrderIndependent(a, e, ATTRIBUTES_TO_IGNORE, header), reference);
+            runGenotypeGVCFSAndAssertSomething(input, expected, extraArgs, (a, e) -> VariantContextTestUtils.assertVariantContextsAreEqualAlleleOrderIndependent(a, e, ATTRIBUTES_TO_IGNORE, ATTRIBUTES_WITH_JITTER, header), reference);
         } catch (java.io.IOException e) {
             throw new AssertionError("There was a problem reading your expected input file");
         }
@@ -308,11 +327,25 @@ public class GenotypeGVCFsIntegrationTest extends CommandLineProgramTest {
         runGenotypeGVCFSAndAssertSomething(input, expected, extraArgs, VariantContextTestUtils::assertGenotypePosteriorsAttributeWasRemoved, reference);
     }
 
+    @Test(expectedExceptions = UserException.BadInput.class)
+    public void assertDeprecatedMQThrowsUserException() {
+        final File output = createTempFile("genotypegvcf", ".vcf");
+        // This old gatk3 output file contains the old MQ format
+        final File inputWithOldArgument = getTestFile( "combined.single.sample.pipeline.gatk3.vcf");
+        final ArgumentsBuilder args = new ArgumentsBuilder();
+        args.addReference(new File(b37_reference_20_21))
+                .add("V", inputWithOldArgument.getAbsolutePath())
+                .addOutput(output);
+
+        // This is expected to fail because RMSMappingQuality.RMS_MAPPING_QUALITY_OLD_BEHAVIOR_OVERRIDE_ARGUMENT is not specified to allow old format MQ calculations.
+        runCommandLine(args);
+    }
+
     //this test is separate because all the others use old data and ignore the MQ annotations
     @Test(dataProvider = "GVCFsWithNewMQFormat")
     public void assertNewMQWorks(File input, File expected, Locatable interval, String reference) throws IOException {
         final VCFHeader header = VCFHeaderReader.readHeaderFrom(new SeekablePathStream(IOUtils.getPath(expected.getAbsolutePath())));
-        runGenotypeGVCFSAndAssertSomething(input, expected, NO_EXTRA_ARGS, (a, e) -> VariantContextTestUtils.assertVariantContextsAreEqualAlleleOrderIndependent(a, e, ATTRIBUTES_WITH_JITTER, header), reference);
+        runGenotypeGVCFSAndAssertSomething(input, expected, NO_EXTRA_ARGS, (a, e) -> VariantContextTestUtils.assertVariantContextsAreEqualAlleleOrderIndependent(a, e, ATTRIBUTES_TO_IGNORE, ATTRIBUTES_WITH_JITTER, header), reference);
     }
 
     private void runGenotypeGVCFSAndAssertSomething(File input, File expected, List<String> additionalArguments, BiConsumer<VariantContext, VariantContext> assertion, String reference) throws IOException {
@@ -325,43 +358,34 @@ public class GenotypeGVCFsIntegrationTest extends CommandLineProgramTest {
 
         final ArgumentsBuilder args = new ArgumentsBuilder();
         args.addReference(new File(reference))
-                .addArgument("V", input)
+                .add("V", input)
+                .addFlag(RMSMappingQuality.RMS_MAPPING_QUALITY_OLD_BEHAVIOR_OVERRIDE_ARGUMENT)
                 .addOutput(output);
 
-        additionalArguments.forEach(args::add);
+        additionalArguments.forEach(args::addRaw);
 
         Utils.resetRandomGenerator();
         runCommandLine(args);
 
-        final List<VariantContext> expectedVC = getVariantContexts(expected);
-        final List<VariantContext> actualVC = getVariantContexts(output);
-        assertForEachElementInLists(actualVC, expectedVC, assertion);
-    }
-
-    /**
-     * Returns a list of VariantContext records from a VCF file
-     *
-     * @param vcfFile VCF file
-     * @return list of VariantContext records
-     * @throws IOException if the file does not exist or can not be opened
-     */
-    @SuppressWarnings({"unchecked"})
-    private static List<VariantContext> getVariantContexts(final File vcfFile) {
-        try(final FeatureDataSource<VariantContext> variantContextFeatureDataSource = new FeatureDataSource<>(vcfFile)) {
-            return IteratorUtils.toList(variantContextFeatureDataSource.iterator());
+        final List<VariantContext> expectedVC = VariantContextTestUtils.getVariantContexts(expected);
+        final List<VariantContext> actualVC = VariantContextTestUtils.getVariantContexts(output);
+        try {
+            assertForEachElementInLists(actualVC, expectedVC, assertion);
+        } catch (final AssertionError error) {
+            throw error;
         }
     }
 
     @Test
     public void testIndexIsCreated(){
         final File output = createTempFile("test", ".vcf");
-        final File index = new File(output.getAbsolutePath() + Tribble.STANDARD_INDEX_EXTENSION);
+        final File index = new File(output.getAbsolutePath() + FileExtensions.TRIBBLE_INDEX);
         Assert.assertFalse(index.exists());
         final ArgumentsBuilder args = new ArgumentsBuilder()
                 .addVCF(getTestFile(BASE_PAIR_GVCF))
                 .addOutput(output)
                 .addReference(new File(b37_reference_20_21))
-                .addArgument(StandardArgumentDefinitions.CREATE_OUTPUT_VARIANT_INDEX_LONG_NAME, "true");
+                .add(StandardArgumentDefinitions.CREATE_OUTPUT_VARIANT_INDEX_LONG_NAME, "true");
 
         runCommandLine(args);
         Assert.assertTrue(index.exists());
@@ -373,10 +397,10 @@ public class GenotypeGVCFsIntegrationTest extends CommandLineProgramTest {
                 .addVCF(getTestFile("leadingDeletion.g.vcf"))
                 .addReference(new File(b37_reference_20_21))
                 .addOutput( createTempFile("tmp",".vcf"))
-                .addBooleanArgument(GenotypeGVCFs.ONLY_OUTPUT_CALLS_STARTING_IN_INTERVALS_FULL_NAME, true);
+                .add(GenotypeGVCFs.ONLY_OUTPUT_CALLS_STARTING_IN_INTERVALS_FULL_NAME, true);
 
         Assert.assertThrows(CommandLineException.MissingArgument.class, () -> runCommandLine(args));
-        args.addArgument("L", "20:69512-69513");
+        args.add("L", "20:69512-69513");
         runCommandLine(args);
     }
 
@@ -393,13 +417,13 @@ public class GenotypeGVCFsIntegrationTest extends CommandLineProgramTest {
                 .addVCF(getTestFile("threeSamples.MT.g.vcf"))
                 .addReference(new File(b37Reference))
                 .addOutput(output)
-                .addBooleanArgument(CombineGVCFs.SOMATIC_INPUT_LONG_NAME, true);
+                .add(CombineGVCFs.SOMATIC_INPUT_LONG_NAME, true);
         runCommandLine(args);
 
         //compared with the combined GVCF, this output should have called GTs and no alts with LODs less than TLOD_THRESHOLD
         //uncalled alleles should be removed
 
-        final List<VariantContext> results = getVariantContexts(output);
+        final List<VariantContext> results = VariantContextTestUtils.getVariantContexts(output);
 
         //qualitative match
         for (final VariantContext vc : results) {
@@ -416,9 +440,9 @@ public class GenotypeGVCFsIntegrationTest extends CommandLineProgramTest {
             //MT:302 has an alphabet soup of alleles in the GVCF -- make sure the ones we keep are good
             if (vc.getStart() == 302) {
                 Assert.assertEquals(vc.getNAlleles(), 6);
-                double[] sample0LODs = GATKProtectedVariantContextUtils.getAttributeAsDoubleArray(vc.getGenotype(0), GATKVCFConstants.TUMOR_LOG_10_ODDS_KEY, () -> null, 0.0);
-                double[] sample1LODs = GATKProtectedVariantContextUtils.getAttributeAsDoubleArray(vc.getGenotype(1), GATKVCFConstants.TUMOR_LOG_10_ODDS_KEY, () -> null, 0.0);
-                double[] sample2LODs = GATKProtectedVariantContextUtils.getAttributeAsDoubleArray(vc.getGenotype(2), GATKVCFConstants.TUMOR_LOG_10_ODDS_KEY, () -> null, 0.0);
+                double[] sample0LODs = VariantContextGetters.getAttributeAsDoubleArray(vc.getGenotype(0), GATKVCFConstants.TUMOR_LOG_10_ODDS_KEY, () -> null, 0.0);
+                double[] sample1LODs = VariantContextGetters.getAttributeAsDoubleArray(vc.getGenotype(1), GATKVCFConstants.TUMOR_LOG_10_ODDS_KEY, () -> null, 0.0);
+                double[] sample2LODs = VariantContextGetters.getAttributeAsDoubleArray(vc.getGenotype(2), GATKVCFConstants.TUMOR_LOG_10_ODDS_KEY, () -> null, 0.0);
                 for (int i = 0; i < vc.getNAlleles() - 1; i++) {
                     Assert.assertTrue(sample0LODs[i] > TLOD_THRESHOLD || sample1LODs[i] > TLOD_THRESHOLD || sample2LODs[i] > TLOD_THRESHOLD);
                 }
@@ -446,10 +470,10 @@ public class GenotypeGVCFsIntegrationTest extends CommandLineProgramTest {
 
         //exact match
         final File expectedFile = getTestFile("threeSamples.MT.vcf");
-        final List<VariantContext> expected = getVariantContexts(expectedFile);
+        final List<VariantContext> expected = VariantContextTestUtils.getVariantContexts(expectedFile);
         final VCFHeader header = VCFHeaderReader.readHeaderFrom(new SeekablePathStream(IOUtils.getPath(expectedFile.getAbsolutePath())));
         assertForEachElementInLists(results, expected,
-                (a, e) -> VariantContextTestUtils.assertVariantContextsAreEqualAlleleOrderIndependent(a, e, ATTRIBUTES_TO_IGNORE, header));
+                (a, e) -> VariantContextTestUtils.assertVariantContextsAreEqualAlleleOrderIndependent(a, e, ATTRIBUTES_TO_IGNORE, ATTRIBUTES_WITH_JITTER, header));
 
     }
 
@@ -460,15 +484,184 @@ public class GenotypeGVCFsIntegrationTest extends CommandLineProgramTest {
                 .addVCF(new File(getToolTestDataDir() + "../CombineGVCFs/twoSamples.MT.g.vcf"))
                 .addReference(new File(b37Reference))
                 .addOutput(output)
-                .addBooleanArgument(CombineGVCFs.SOMATIC_INPUT_LONG_NAME, true)
-                .addArgument("max-alternate-alleles", "2")
+                .add(CombineGVCFs.SOMATIC_INPUT_LONG_NAME, true)
+                .add("max-alternate-alleles", "2")
                 .addInterval(new SimpleInterval("MT:73"));
         runCommandLine(args);
 
-        List<VariantContext> results = getVariantContexts(output);
+        List<VariantContext> results = VariantContextTestUtils.getVariantContexts(output);
         //MT:302 originally had 5 alts
         for (final VariantContext vc : results) {
             Assert.assertTrue(vc.getNAlleles() <= 3);  //NAlleles includes ref
+        }
+    }
+
+    @Test
+    public void testRawAndFinalizedAlleleSpecificAnnotationsThoroughly() {
+        final File output = createTempFile("tmp", ".vcf");
+        ArgumentsBuilder args =   new ArgumentsBuilder()
+                .addVCF(new File(ALLELE_SPECIFIC_DIRECTORY, "NA12878.AS.chr20snippet.g.vcf"))
+                .addReference(new File(b37Reference))
+                .addOutput(output)
+                .add("keep-combined", true)
+                .add("A", "ClippingRankSumTest")
+                .add("G", "AS_StandardAnnotation")
+                .add("G", "StandardAnnotation")
+                .add("allow-old-rms-mapping-quality-annotation-data", true);
+        runCommandLine(args);
+
+        List<VariantContext> results = VariantContextTestUtils.getVariantContexts(output);
+        //there are only about 25 VCs here so we can read them all into memory
+        for (final VariantContext vc : results) {
+            VariantContextTestUtils.assertAlleleSpecificAnnotationLengthsCorrect(vc, GATKVCFConstants.AS_RAW_RMS_MAPPING_QUALITY_KEY,
+                    VCFHeaderLineCount.R);
+            VariantContextTestUtils.assertAlleleSpecificAnnotationLengthsCorrect(vc, GATKVCFConstants.AS_RMS_MAPPING_QUALITY_KEY,
+                    VCFHeaderLineCount.A, false);
+            VariantContextTestUtils.assertAlleleSpecificAnnotationLengthsCorrect(vc, GATKVCFConstants.AS_RAW_MAP_QUAL_RANK_SUM_KEY,
+                    VCFHeaderLineCount.R);
+            VariantContextTestUtils.assertAlleleSpecificAnnotationLengthsCorrect(vc, GATKVCFConstants.AS_MAP_QUAL_RANK_SUM_KEY,
+                    VCFHeaderLineCount.A, false);
+            VariantContextTestUtils.assertAlleleSpecificAnnotationLengthsCorrect(vc, GATKVCFConstants.AS_RAW_READ_POS_RANK_SUM_KEY,
+                    VCFHeaderLineCount.R);
+            VariantContextTestUtils.assertAlleleSpecificAnnotationLengthsCorrect(vc, GATKVCFConstants.AS_READ_POS_RANK_SUM_KEY,
+                    VCFHeaderLineCount.A, false);
+            VariantContextTestUtils.assertAlleleSpecificAnnotationLengthsCorrect(vc, GATKVCFConstants.AS_SB_TABLE_KEY,
+                    VCFHeaderLineCount.R);
+            VariantContextTestUtils.assertAlleleSpecificAnnotationLengthsCorrect(vc, GATKVCFConstants.AS_FISHER_STRAND_KEY,
+                    VCFHeaderLineCount.A, false);
+            VariantContextTestUtils.assertAlleleSpecificAnnotationLengthsCorrect(vc, GATKVCFConstants.AS_STRAND_ODDS_RATIO_KEY,
+                    VCFHeaderLineCount.A, false);
+        }
+
+    }
+
+    @Test
+    public void testForceOutput() {
+        final File input = getTestFile( "combine.single.sample.pipeline.1.vcf");
+        final File output1 = createTempFile("output", ".vcf");
+
+        final ArgumentsBuilder argsWithoutForceCalling = new ArgumentsBuilder()
+                .addReference(b37Reference)
+                .addVCF(input)
+                .add(GenotypeGVCFs.FORCE_OUTPUT_INTERVALS_NAME, "20")
+                .addInterval(new SimpleInterval("20", 10000000, 10010000))
+                .add(RMSMappingQuality.RMS_MAPPING_QUALITY_OLD_BEHAVIOR_OVERRIDE_ARGUMENT, true)
+                .addOutput(output1);
+
+        Utils.resetRandomGenerator();
+        runCommandLine(argsWithoutForceCalling);
+
+        final List<VariantContext> actualVC = VariantContextTestUtils.getVariantContexts(output1);
+
+        // every site has output
+        Assert.assertEquals(actualVC.size(), 10001);
+
+        final File output2 = createTempFile("output", ".vcf");
+
+        final ArgumentsBuilder argsWithForceCalling = new ArgumentsBuilder()
+                .addReference(b37Reference)
+                .addVCF(input)
+                .add(GenotypeGVCFs.FORCE_OUTPUT_INTERVALS_NAME, "20:10000100")
+                .addInterval(new SimpleInterval("20", 10000000, 10010000))
+                .add(RMSMappingQuality.RMS_MAPPING_QUALITY_OLD_BEHAVIOR_OVERRIDE_ARGUMENT, true)
+                .addOutput(output2);
+
+        Utils.resetRandomGenerator();
+        runCommandLine(argsWithForceCalling);
+
+        final List<VariantContext> actualVC2 = VariantContextTestUtils.getVariantContexts(output2);
+
+        // one requested site and one variant site have output
+        Assert.assertEquals(actualVC2.size(), 2);
+        Assert.assertEquals(actualVC2.get(0).getStart(), 10000100);
+        Assert.assertTrue(actualVC2.get(0).isMonomorphicInSamples());
+        Assert.assertTrue(actualVC2.get(1).isPolymorphicInSamples());
+    }
+
+    /**
+     * This tests whether NON_REF alleles are properly removed, including multi-allelic sites
+     */
+    @Test
+    public void testForceOutputNonRef() {
+        final File input = new File(getToolTestDataDir() + "../CombineGVCFs/NA12878.AS.chr20snippet.g.vcf");
+
+        // No sites should be output
+        final File output1 = createTempFile("output", ".vcf");
+        final ArgumentsBuilder argsWithoutForceSpecificSites = new ArgumentsBuilder()
+                .addReference(b37Reference)
+                .addVCF(input)
+                .add(RMSMappingQuality.RMS_MAPPING_QUALITY_OLD_BEHAVIOR_OVERRIDE_ARGUMENT, true)
+                .addOutput(output1);
+
+        Utils.resetRandomGenerator();
+        runCommandLine(argsWithoutForceSpecificSites);
+
+        final List<VariantContext> actualVC = VariantContextTestUtils.getVariantContexts(output1);
+
+        Assert.assertEquals(actualVC.size(), 24);
+
+        // No sites should output
+        final File output2 = createTempFile("output2", ".vcf");
+        final ArgumentsBuilder argsWithSpecificSites = new ArgumentsBuilder()
+                .addReference(b37Reference)
+                .addVCF(input)
+                .add(GenotypeGVCFs.FORCE_OUTPUT_INTERVALS_NAME, "20:10433049")
+                .add(GenotypeGVCFs.FORCE_OUTPUT_INTERVALS_NAME, "20:10433197")
+                .add(GenotypeGVCFs.FORCE_OUTPUT_INTERVALS_NAME, "20:10433312")
+                .add(GenotypeGVCFs.FORCE_OUTPUT_INTERVALS_NAME, "20:10684106")
+                .add(RMSMappingQuality.RMS_MAPPING_QUALITY_OLD_BEHAVIOR_OVERRIDE_ARGUMENT, true)
+                .addOutput(output2);
+
+        Utils.resetRandomGenerator();
+        runCommandLine(argsWithSpecificSites);
+
+        final List<VariantContext> actualVC2 = VariantContextTestUtils.getVariantContexts(output2);
+
+        Assert.assertEquals(actualVC2.size(), 28);
+        actualVC2.forEach(vc -> {
+            Assert.assertTrue(!vc.getAlleles().contains(Allele.NON_REF_ALLELE));
+        });
+
+        for (VariantContext vc : actualVC2) {
+            //If non-used alleles are pruned, this will be true
+            Assert.assertEquals(!vc.isPolymorphicInSamples(), vc.getAlleles().size() == 1);
+            Assert.assertEquals(vc.getAlleles(), vc.subContextFromSamples(vc.getSampleNames(), true).getAlleles());
+
+            if (vc.getStart() == 10433049) {
+                Assert.assertEquals(vc.getAlleles(), Arrays.asList(Allele.REF_C));
+            }
+            else if (vc.getStart() == 10433197) {
+                Assert.assertEquals(vc.getAlleles(), Arrays.asList(Allele.REF_C));
+            }
+            else if (vc.getStart() == 10433312) {
+                Assert.assertEquals(vc.getAlleles(), Arrays.asList(Allele.create("CAAAAAAA", true)));
+            }
+            else if (vc.getStart() == 10684106) {
+                Assert.assertEquals(vc.getAlleles(), Arrays.asList(Allele.create("CCTTTCTTTCTTT", true)));
+            }
+        }
+    }
+
+    @Test
+    public void testForceOutputWithSpanningDeletion() {
+        final File input = getTestFile("leadingDeletion.g.vcf");
+        final File output = createTempFile("genotypegvcf", ".vcf");
+
+        final ArgumentsBuilder args = new ArgumentsBuilder();
+        args.addReference(b37Reference)
+                .addVCF(input)
+                .add(GenotypeGVCFs.FORCE_OUTPUT_INTERVALS_NAME, "20")
+                .addInterval(new SimpleInterval("20", 69511, 69515))
+                .addOutput(output);
+
+        Utils.resetRandomGenerator();
+        runCommandLine(args);
+
+        final List<VariantContext> actualVC = VariantContextTestUtils.getVariantContexts(output);
+
+        Assert.assertEquals(actualVC.size(), 5);
+        for (final int n : new int[] {1, 2, 3}) {
+            Assert.assertTrue(actualVC.get(n).getAlternateAlleles().stream().anyMatch(a -> a == Allele.SPAN_DEL));
         }
     }
 }

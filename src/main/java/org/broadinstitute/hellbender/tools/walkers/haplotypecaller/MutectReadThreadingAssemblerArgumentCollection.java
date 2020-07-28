@@ -22,15 +22,21 @@ public class MutectReadThreadingAssemblerArgumentCollection extends ReadThreadin
     public ReadThreadingAssembler makeReadThreadingAssembler() {
         final ReadThreadingAssembler assemblyEngine = new ReadThreadingAssembler(maxNumHaplotypesInPopulation, kmerSizes,
                 dontIncreaseKmerSizesForCycles, allowNonUniqueKmersInRef, numPruningSamples, disableAdaptivePruning ? minPruneFactor : 0,
-                !disableAdaptivePruning, initialErrorRateForPruning, pruningLogOddsThreshold, maxUnprunedVariants);
+                !disableAdaptivePruning, initialErrorRateForPruning, pruningLogOddsThreshold, maxUnprunedVariants, useLinkedDeBruijnGraph);
         assemblyEngine.setDebugGraphTransformations(debugGraphTransformations);
         assemblyEngine.setRecoverDanglingBranches(true);
         assemblyEngine.setRecoverAllDanglingBranches(recoverAllDanglingBranches);
         assemblyEngine.setMinDanglingBranchLength(minDanglingBranchLength);
+        assemblyEngine.setArtificialHaplotypeRecoveryMode(disableArtificialHaplotypeRecovery);
 
         if ( graphOutput != null ) {
             assemblyEngine.setGraphWriter(new File(graphOutput));
         }
+        if ( haplotypeHistogramOutput != null ) {
+            assemblyEngine.setDebugHistogramOutput(new File(haplotypeHistogramOutput));
+        }
+
+
 
         return assemblyEngine;
     }

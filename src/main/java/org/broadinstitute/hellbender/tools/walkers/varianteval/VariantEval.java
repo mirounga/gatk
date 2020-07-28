@@ -19,6 +19,7 @@ import org.broadinstitute.hellbender.engine.*;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.tools.walkers.varianteval.evaluators.*;
+import org.broadinstitute.hellbender.tools.walkers.varianteval.stratifications.AlleleFrequency.*;
 import org.broadinstitute.hellbender.tools.walkers.varianteval.stratifications.IntervalStratification;
 import org.broadinstitute.hellbender.tools.walkers.varianteval.stratifications.VariantStratifier;
 import org.broadinstitute.hellbender.tools.walkers.varianteval.stratifications.manager.StratificationManager;
@@ -39,6 +40,8 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.PrintStream;
 import java.util.*;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  *
@@ -140,7 +143,7 @@ public class VariantEval extends MultiVariantWalker {
     /**
      * The variant file(s) to compare against.
      */
-    @Argument(fullName="comp", shortName = "comp", doc="Input comparison file(s)", optional=true)
+    @Argument(fullName = StandardArgumentDefinitions.COMPARISON_LONG_NAME, shortName = StandardArgumentDefinitions.COMPARISON_SHORT_NAME, doc="Input comparison file(s)", optional=true)
     public List<FeatureInput<VariantContext>> compsProvided = new ArrayList<>();
     private List<FeatureInput<VariantContext>> comps = new ArrayList<>();
 
@@ -183,7 +186,7 @@ public class VariantEval extends MultiVariantWalker {
      * List of feature tracks to be used for specifying "known" variants other than dbSNP.
      */
     @Argument(shortName="known-name", doc="Name of feature bindings containing variant sites that should be treated as known when splitting eval features into known and novel subsets", optional=true)
-    protected HashSet<String> KNOWN_NAMES = new HashSet<String>();
+    protected Set<String> KNOWN_NAMES = new HashSet<String>();
     List<FeatureInput<VariantContext>> knowns = new ArrayList<>();
 
     // Stratification arguments
@@ -196,7 +199,7 @@ public class VariantEval extends MultiVariantWalker {
     /**
      * See the -list argument to view available modules.
      */
-    @Argument(fullName="eval-module", shortName="EV", doc="One or more specific eval modules to apply to the eval track(s) (in addition to the standard modules, unless -noEV is specified)", optional=true)
+    @Argument(fullName="eval-module", shortName="EV", doc="One or more specific eval modules to apply to the eval track(s) (in addition to the standard modules, unless -no-ev is specified)", optional=true)
     protected List<String> MODULES_TO_USE = new ArrayList<>();
 
     @Argument(fullName="do-not-use-all-standard-modules", shortName="no-ev", doc="Do not use the standard modules by default (instead, only those that are specified with the -EV option)", optional=true)
@@ -218,7 +221,7 @@ public class VariantEval extends MultiVariantWalker {
     private boolean requireStrictAlleleMatch = false;
 
     @Argument(fullName="keep-ac0", shortName="keep-ac0", doc="If provided, modules that track polymorphic sites will not require that a site have AC > 0 when the input eval has genotypes", optional=true)
-    private boolean keepSitesWithAC0 = false;
+    protected boolean keepSitesWithAC0 = false;
 
     @Hidden
     @Argument(fullName="num-samples", doc="If provided, modules that track polymorphic sites will not require that a site have AC > 0 when the input eval has genotypes", optional=true)
@@ -242,6 +245,9 @@ public class VariantEval extends MultiVariantWalker {
      */
     @Argument(fullName="known-cnvs", shortName="known-cnvs", doc="File containing tribble-readable features describing a known list of copy number variants", optional=true)
     public FeatureInput<Feature> knownCNVsFile = null;
+
+    protected StratifyingScale AFScale = StratifyingScale.LINEAR;
+    protected boolean useCompAFStratifier = false;
 
     @Override
     protected MultiVariantInputArgumentCollection getMultiVariantInputArgumentCollection() {
@@ -313,7 +319,7 @@ public class VariantEval extends MultiVariantWalker {
         sampleDB = initializeSampleDB();
 
         comps.addAll(compsProvided);
-        compsProvided.forEach(x -> inputToNameMap.put(x, x.hasUserSuppliedName() ? x.getName() : "comp"));
+        compsProvided.forEach(x -> inputToNameMap.put(x, x.hasUserSuppliedName() ? x.getName() : StandardArgumentDefinitions.COMPARISON_SHORT_NAME));
         if ( dbsnp.dbsnp != null ) {
             comps.add(dbsnp.dbsnp);
             inputToNameMap.put(dbsnp.dbsnp, "dbsnp");
@@ -406,6 +412,24 @@ public class VariantEval extends MultiVariantWalker {
                 throw new GATKException(String.format("The ancestral alignments file, '%s', could not be found", ancestralAlignmentsFile.getAbsolutePath()));
             }
         }
+
+        assertThatTerritoryIsSpecifiedIfNecessary();
+    }
+
+    private void assertThatTerritoryIsSpecifiedIfNecessary() {
+        final Set<String> evaluatorsWhichRequireTerritory = stratManager.values()
+                .stream()
+                .flatMap(ctx -> ctx.getVariantEvaluators().stream())
+                .filter(Objects::nonNull)
+                .filter(VariantEvaluator::requiresTerritoryToBeSpecified)
+                .map(VariantEvaluator::getSimpleName)
+                .collect(Collectors.toSet());
+        if(!evaluatorsWhichRequireTerritory.isEmpty() && getTraversalIntervals() == null){
+            throw new UserException("You specified evaluators which require a covered territory to be specified.  " +
+                    "\nPlease specify intervals or a reference file or disable all of the following evaluators:" +
+                    evaluatorsWhichRequireTerritory.stream()
+                            .collect(Collectors.joining(", ")));
+        }
     }
 
     private void checkForIncompatibleEvaluatorsAndStratifiers( final List<VariantStratifier> stratificationObjects,
@@ -414,7 +438,7 @@ public class VariantEval extends MultiVariantWalker {
             for ( Class<? extends VariantEvaluator> ec : evaluationClasses )
                 if ( vs.getIncompatibleEvaluators().contains(ec) )
                     throw new CommandLineException.BadArgumentValue("ST and ET",
-                            "The selected stratification " + vs.getName() + 
+                            "The selected stratification " + vs.getName() +
                                     " and evaluator " + ec.getSimpleName() +
                                     " are incompatible due to combinatorial memory requirements." +
                                     " Please disable one");
@@ -427,9 +451,19 @@ public class VariantEval extends MultiVariantWalker {
 
         logger.info("Creating " + stratManager.size() + " combinatorial stratification states");
         for ( int i = 0; i < stratManager.size(); i++ ) {
-            EvaluationContext ec = new EvaluationContext(this, evaluationObjects);
+            EvaluationContext ec = createEvaluationContext(evaluationObjects);
             stratManager.set(i, ec);
         }
+    }
+
+    /**
+     * Create the EvaluationContext (new instance) for the provided set of VariantEvaluators.
+     *
+     * @param evaluationObjects The list of VariantEvaluator classes
+     * @return The EvaluationContext for this set of VariantEvaluator classes
+     */
+    protected EvaluationContext createEvaluationContext(final Set<Class<? extends VariantEvaluator>> evaluationObjects) {
+        return new EvaluationContext(this, evaluationObjects);
     }
 
     private class PositionAggregator {
@@ -767,6 +801,11 @@ public class VariantEval extends MultiVariantWalker {
 
     public Set<SortableJexlVCMatchExp> getJexlExpressions() { return jexlExpressions; }
 
+
+    public StratifyingScale getAFScale() { return AFScale; }
+    public boolean getCompAFStratifier() { return useCompAFStratifier; }
+
+
     public Set<String> getContigNames() {
         final TreeSet<String> contigs = new TreeSet<>();
         for( final SAMSequenceRecord r :  getSequenceDictionaryForDrivingVariants().getSequences()) {
@@ -799,7 +838,21 @@ public class VariantEval extends MultiVariantWalker {
         return sampleDB;
     }
 
+    /**
+     * If an evaluator calls this method it must override {@link VariantEvaluator#requiresTerritoryToBeSpecified()} to return true.
+     * @return either the size of the interval list given to the tool or the size of the reference given to the tool
+     */
     public long getnProcessedLoci() {
+        if(getTraversalIntervals() == null){
+            throw new GATKException("BUG: One of the evaluators used should have overriden requiresTerritoryToBeSpecified, please report this to the developers." +
+                    "\nEvaluators: " + stratManager.values()
+                    .stream()
+                    .flatMap(evaluator -> evaluator.getVariantEvaluators().stream())
+                    .map(VariantEvaluator::getSimpleName)
+                    .sorted()
+                    .distinct()
+                    .collect(Collectors.joining(", ")));
+        }
         return getTraversalIntervals().stream().mapToLong(SimpleInterval::size).sum();
     }
 

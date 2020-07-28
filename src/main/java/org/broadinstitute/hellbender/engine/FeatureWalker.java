@@ -35,7 +35,7 @@ public abstract class FeatureWalker<F extends Feature> extends WalkerBase {
     @Override
     void initializeFeatures() {
         features = new FeatureManager(this, FeatureDataSource.DEFAULT_QUERY_LOOKAHEAD_BASES, cloudPrefetchBuffer, cloudIndexPrefetchBuffer,
-                                      referenceArguments.getReferencePath());
+                                      getGenomicsDBOptions());
         initializeDrivingFeatures();
     }
 
@@ -56,7 +56,7 @@ public abstract class FeatureWalker<F extends Feature> extends WalkerBase {
     @SuppressWarnings("unchecked")
     private void initializeDrivingFeatures() {
         final File drivingFile = getDrivingFeatureFile();
-        final FeatureCodec<? extends Feature, ?> codec = FeatureManager.getCodecForFile(drivingFile);
+        final FeatureCodec<? extends Feature, ?> codec = FeatureManager.getCodecForFile(drivingFile.toPath());
         if (isAcceptableFeatureType(codec.getFeatureType())) {
             drivingFeatures = new FeatureDataSource<>(new FeatureInput<>(drivingFile.getAbsolutePath()), FeatureDataSource.DEFAULT_QUERY_LOOKAHEAD_BASES, null, cloudPrefetchBuffer, cloudIndexPrefetchBuffer, referenceArguments.getReferencePath());
 

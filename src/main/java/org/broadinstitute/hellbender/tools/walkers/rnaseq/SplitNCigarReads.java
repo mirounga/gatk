@@ -1,17 +1,15 @@
 package org.broadinstitute.hellbender.tools.walkers.rnaseq;
 
-import htsjdk.samtools.CigarElement;
-import htsjdk.samtools.CigarOperator;
-import htsjdk.samtools.SAMFileHeader;
-import htsjdk.samtools.TextCigarCodec;
+import htsjdk.samtools.*;
 import htsjdk.samtools.reference.ReferenceSequenceFile;
 import org.broadinstitute.barclay.argparser.Advanced;
 import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
 import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.engine.FeatureContext;
+import org.broadinstitute.hellbender.engine.GATKPath;
+import org.broadinstitute.hellbender.engine.MultiplePassReadWalker;
 import org.broadinstitute.hellbender.engine.ReferenceContext;
-import org.broadinstitute.hellbender.engine.TwoPassReadWalker;
 import org.broadinstitute.hellbender.engine.filters.ReadFilter;
 import org.broadinstitute.hellbender.engine.filters.ReadFilterLibrary;
 import org.broadinstitute.hellbender.exceptions.UserException;
@@ -22,14 +20,12 @@ import org.broadinstitute.hellbender.utils.GenomeLocParser;
 import org.broadinstitute.hellbender.utils.SATagBuilder;
 import org.broadinstitute.hellbender.utils.clipping.ReadClipper;
 import org.broadinstitute.hellbender.utils.fasta.CachingIndexedFastaSequenceFile;
-import org.broadinstitute.hellbender.utils.io.IOUtils;
 import org.broadinstitute.hellbender.utils.read.ArtificialReadUtils;
 import org.broadinstitute.hellbender.utils.read.CigarUtils;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.read.SAMFileGATKReadWriter;
 import picard.cmdline.programgroups.ReadDataManipulationProgramGroup;
 
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -71,7 +67,7 @@ import static org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions.
         oneLineSummary = "Split Reads with N in Cigar",
         programGroup = ReadDataManipulationProgramGroup.class
 )
-public final class SplitNCigarReads extends TwoPassReadWalker {
+public final class SplitNCigarReads extends MultiplePassReadWalker {
 
     // A list of tags that break upon splitting on N. These will be removed from reads in the output.
     // NOTE: for future developers who want to use these tags. For each tag you remove from this list corresponding
@@ -80,7 +76,7 @@ public final class SplitNCigarReads extends TwoPassReadWalker {
     static final String MATE_CIGAR_TAG = "MC";
 
     @Argument(fullName = OUTPUT_LONG_NAME, shortName = OUTPUT_SHORT_NAME, doc="Write output to this BAM filename")
-    String OUTPUT;
+    GATKPath OUTPUT;
 
     /**
      * This flag tells GATK to refactor cigar string with NDN elements to one element. It intended primarily for use in
@@ -171,24 +167,19 @@ public final class SplitNCigarReads extends TwoPassReadWalker {
         header = getHeaderForSAMWriter();
         referenceReader = new CachingIndexedFastaSequenceFile(referenceArguments.getReferencePath());
         GenomeLocParser genomeLocParser = new GenomeLocParser(getBestAvailableSequenceDictionary());
-        outputWriter = createSAMWriter(IOUtils.getPath(OUTPUT), false);
+        outputWriter = createSAMWriter(OUTPUT, false);
         overhangManager = new OverhangFixingManager(header, outputWriter, genomeLocParser, referenceReader, MAX_RECORDS_IN_MEMORY, MAX_MISMATCHES_IN_OVERHANG, MAX_BASES_TO_CLIP, doNotFixOverhangs, processSecondaryAlignments);
     }
 
     @Override
-    protected void firstPassApply(GATKRead read, ReferenceContext bytes, FeatureContext featureContext) {
-        splitNCigarRead(read,overhangManager, true, header, processSecondaryAlignments);
-    }
-
-    @Override
-    protected void secondPassApply(GATKRead read, ReferenceContext bytes, FeatureContext featureContext) {
-        splitNCigarRead(read,overhangManager, true, header, processSecondaryAlignments);
-    }
-
-    // Activates writing in the manager, which destinguishes each pass
-    @Override
-    protected void afterFirstPass() {
+    public void traverseReads() {
+        forEachRead((GATKRead read, ReferenceContext reference, FeatureContext features) ->
+                splitNCigarRead(read, overhangManager,true, header, processSecondaryAlignments)
+        );
         overhangManager.activateWriting();
+        forEachRead((GATKRead read, ReferenceContext reference, FeatureContext features) ->
+                splitNCigarRead(read, overhangManager,true, header, processSecondaryAlignments)
+        );
     }
 
     @Override
@@ -197,10 +188,9 @@ public final class SplitNCigarReads extends TwoPassReadWalker {
         if (outputWriter != null ) { outputWriter.close(); }
         try {if (referenceReader != null) { referenceReader.close(); } }
         catch (IOException ex) {
-            throw new UserException.MissingReference("Could not find reference file");
+            throw new UserException.MissingReference("Could not find reference file.", true);
         }
     }
-
 
     /**
      * Goes through the cigar string of the read and create new reads for each consecutive non-N elements (while soft clipping the rest of the read) that are supplemental to each other.
@@ -303,12 +293,13 @@ public final class SplitNCigarReads extends TwoPassReadWalker {
 
         // we keep only the section of the read that is aligned to the reference between startRefIndex and stopRefIndex (inclusive).
         // the other sections of the read are clipped:
-        final int startRefIndex = read.getUnclippedStart() + CigarUtils.countRefBasesBasedOnUnclippedAlignment(read, 0, cigarFirstIndex); //goes through the prefix of the cigar (up to cigarStartIndex) and move the reference index.
-        final int stopRefIndex = startRefIndex + CigarUtils.countRefBasesBasedOnUnclippedAlignment(read,cigarFirstIndex,cigarSecondIndex)-1; //goes through a consecutive non-N section of the cigar (up to cigarEndIndex) and move the reference index.
+        final List<CigarElement> elements = read.getCigarElements();
+        final int startRefIndex = read.getUnclippedStart() + CigarUtils.countRefBasesAndClips(elements, 0, cigarFirstIndex); //goes through the prefix of the cigar (up to cigarStartIndex) and move the reference index.
+        final int stopRefIndex = startRefIndex + CigarUtils.countRefBasesAndClips(elements, cigarFirstIndex,cigarSecondIndex)-1; //goes through a consecutive non-N section of the cigar (up to cigarEndIndex) and move the reference index.
 
         if ( forSplitPositions != null ) {
             final String contig = read.getContig();
-            final int splitStart = startRefIndex + CigarUtils.countRefBasesBasedOnUnclippedAlignment(read,cigarFirstIndex,cigarEndIndex);  //we use cigarEndIndex instead of cigarSecondIndex so we won't take into account the D's at the end.
+            final int splitStart = startRefIndex + CigarUtils.countRefBasesAndClips(elements,cigarFirstIndex,cigarEndIndex);  //we use cigarEndIndex instead of cigarSecondIndex so we won't take into account the D's at the end.
             final int splitEnd = splitStart + read.getCigarElement(cigarEndIndex).getLength() - 1;
             forSplitPositions.addSplicePosition(contig, splitStart, splitEnd);
         }

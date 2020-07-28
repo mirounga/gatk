@@ -14,7 +14,7 @@ import org.broadinstitute.hellbender.engine.AssemblyRegion;
 import org.broadinstitute.hellbender.tools.walkers.genotyper.PloidyModel;
 import org.broadinstitute.hellbender.tools.walkers.variantutils.PosteriorProbabilitiesUtils;
 import org.broadinstitute.hellbender.utils.*;
-import org.broadinstitute.hellbender.utils.genotyper.ReadLikelihoods;
+import org.broadinstitute.hellbender.utils.genotyper.AlleleLikelihoods;
 import org.broadinstitute.hellbender.utils.genotyper.SampleList;
 import org.broadinstitute.hellbender.utils.haplotype.Haplotype;
 import org.broadinstitute.hellbender.utils.pileup.PileupElement;
@@ -41,6 +41,9 @@ public class ReferenceConfidenceModel {
     private final SampleList samples;
     private final int indelInformativeDepthIndelSize;
     private final int numRefSamplesForPrior;
+
+    @VisibleForTesting
+    protected static final String NON_REF_ALLELE_DESCRIPTION = "Represents any possible alternative allele not already represented at this location by REF and ALT";
 
     private final PosteriorProbabilitiesUtils.PosteriorProbabilitiesOptions options;
 
@@ -132,7 +135,7 @@ public class ReferenceConfidenceModel {
      */
     public Set<VCFHeaderLine> getVCFHeaderLines() {
         final Set<VCFHeaderLine> headerLines = new LinkedHashSet<>();
-        headerLines.add(new VCFSimpleHeaderLine(GATKVCFConstants.SYMBOLIC_ALLELE_DEFINITION_HEADER_TAG, GATKVCFConstants.NON_REF_SYMBOLIC_ALLELE_NAME, "Represents any possible alternative allele at this location"));
+        headerLines.add(new VCFSimpleHeaderLine(GATKVCFConstants.SYMBOLIC_ALLELE_DEFINITION_HEADER_TAG, GATKVCFConstants.NON_REF_SYMBOLIC_ALLELE_NAME, NON_REF_ALLELE_DESCRIPTION));
         return headerLines;
     }
 
@@ -140,7 +143,7 @@ public class ReferenceConfidenceModel {
                                                        final Collection<Haplotype> calledHaplotypes,
                                                        final SimpleInterval paddedReferenceLoc,
                                                        final AssemblyRegion activeRegion,
-                                                       final ReadLikelihoods<Haplotype> readLikelihoods,
+                                                       final AlleleLikelihoods<GATKRead, Haplotype> readLikelihoods,
                                                        final PloidyModel ploidyModel,
                                                        final List<VariantContext> variantCalls) {
         return calculateRefConfidence(refHaplotype, calledHaplotypes, paddedReferenceLoc, activeRegion, readLikelihoods,
@@ -172,7 +175,7 @@ public class ReferenceConfidenceModel {
                                                        final Collection<Haplotype> calledHaplotypes,
                                                        final SimpleInterval paddedReferenceLoc,
                                                        final AssemblyRegion activeRegion,
-                                                       final ReadLikelihoods<Haplotype> readLikelihoods,
+                                                       final AlleleLikelihoods<GATKRead, Haplotype> readLikelihoods,
                                                        final PloidyModel ploidyModel,
                                                        final List<VariantContext> variantCalls,
                                                        final boolean applyPriors,
@@ -184,7 +187,7 @@ public class ReferenceConfidenceModel {
         Utils.nonNull(activeRegion, "activeRegion cannot be null");
         Utils.nonNull(readLikelihoods, "readLikelihoods cannot be null");
         Utils.validateArg(readLikelihoods.numberOfSamples() == 1, () -> "readLikelihoods must contain exactly one sample but it contained " + readLikelihoods.numberOfSamples());
-        Utils.validateArg( refHaplotype.length() == activeRegion.getExtendedSpan().size(), () -> "refHaplotype " + refHaplotype.length() + " and activeRegion location size " + activeRegion.getSpan().size() + " are different");
+        Utils.validateArg( refHaplotype.length() == activeRegion.getPaddedSpan().size(), () -> "refHaplotype " + refHaplotype.length() + " and activeRegion location size " + activeRegion.getSpan().size() + " are different");
         Utils.nonNull(ploidyModel, "the ploidy model cannot be null");
         final int ploidy = ploidyModel.samplePloidy(0); // the first sample = the only sample in reference-confidence mode.
 
@@ -194,7 +197,7 @@ public class ReferenceConfidenceModel {
         final List<VariantContext> results = new ArrayList<>(refSpan.size());
         final String sampleName = readLikelihoods.getSample(0);
 
-        final int globalRefOffset = refSpan.getStart() - activeRegion.getExtendedSpan().getStart();
+        final int globalRefOffset = refSpan.getStart() - activeRegion.getPaddedSpan().getStart();
         // Note, we use an indexed for-loop here because this method has a large impact on the profile of HaplotypeCaller runtime in GVCF mode
         final int refPileupsSize = refPileups.size();
         for (int i = 0; i < refPileupsSize; i++) {
@@ -221,7 +224,7 @@ public class ReferenceConfidenceModel {
         // This is important as if multiple reference blocks are computed for a low complexity active region some reads may incorrectly
         // be using caching values computed for a different reference block.
         if (USE_CACHED_READ_INDEL_INFORMATIVENESS_VALUES) {
-            readLikelihoods.sampleReads(0).forEach(r -> r.clearTransientAttribute(INDEL_INFORMATIVE_BASES_CACHE_ATTRIBUTE_NAME));
+            readLikelihoods.sampleEvidence(0).forEach(r -> r.clearTransientAttribute(INDEL_INFORMATIVE_BASES_CACHE_ATTRIBUTE_NAME));
         }
 
         return results;
@@ -410,7 +413,7 @@ public class ReferenceConfidenceModel {
                             nonRefLikelihood + MathUtils.log10(i));
         }
         if (isAlt && hqSoftClips != null && element.isNextToSoftClip()) {
-            hqSoftClips.add(AlignmentUtils.calcNumHighQualitySoftClips(element.getRead(), HQ_BASE_QUALITY_SOFTCLIP_THRESHOLD));
+            hqSoftClips.add(AlignmentUtils.countHighQualitySoftClips(element.getRead(), HQ_BASE_QUALITY_SOFTCLIP_THRESHOLD));
         }
     }
 
@@ -750,7 +753,7 @@ public class ReferenceConfidenceModel {
         Utils.nonNull(refBases, "null refBases");
         Utils.nonNull(paddedReferenceLoc, "null paddedReferenceLoc");
 
-        final int alignmentStart = activeRegion.getExtendedSpan().getStart() - paddedReferenceLoc.getStart();
+        final int alignmentStart = activeRegion.getPaddedSpan().getStart() - paddedReferenceLoc.getStart();
         if ( alignmentStart < 0 ) {
             throw new IllegalStateException("Bad alignment start in createReferenceHaplotype " + alignmentStart);
         }

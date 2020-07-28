@@ -11,6 +11,8 @@ import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.vcf.VCF3Codec;
 import htsjdk.variant.vcf.VCFCodec;
 import org.broadinstitute.barclay.argparser.Argument;
+import org.broadinstitute.barclay.argparser.ArgumentDefinition;
+import org.broadinstitute.barclay.argparser.CommandLineArgumentParser;
 import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
 import org.broadinstitute.hellbender.cmdline.TestProgramGroup;
 import org.broadinstitute.hellbender.cmdline.CommandLineProgram;
@@ -44,13 +46,13 @@ public final class FeatureManagerUnitTest extends GATKBaseTest {
 
     @Test(dataProvider = "DetectCorrectFileFormatTestData")
     public void testDetectCorrectFileFormat( final File file, final Class<? extends FeatureCodec<? extends Feature, ?>> expectedCodecClass ) throws Exception {
-        Assert.assertEquals(FeatureManager.getCodecForFile(file).getClass(), expectedCodecClass,
+        Assert.assertEquals(FeatureManager.getCodecForFile(file.toPath()).getClass(), expectedCodecClass,
                             "Wrong codec selected for file " + file.getAbsolutePath());
 
         // We should also get the correct codec if we pass in the explicit expected Feature type to getCodecForFile()
         @SuppressWarnings("unchecked")
-        final Class<? extends Feature> expectedCodecFeatureType = expectedCodecClass.newInstance().getFeatureType();
-        Assert.assertEquals(FeatureManager.getCodecForFile(file, expectedCodecFeatureType).getClass(), expectedCodecClass,
+        final Class<? extends Feature> expectedCodecFeatureType = expectedCodecClass.getDeclaredConstructor().newInstance().getFeatureType();
+        Assert.assertEquals(FeatureManager.getCodecForFile(file.toPath(), expectedCodecFeatureType).getClass(), expectedCodecClass,
                 "Wrong codec selected for file " + file.getAbsolutePath() + " after subsetting to the expected Feature type");
     }
 
@@ -62,7 +64,7 @@ public final class FeatureManagerUnitTest extends GATKBaseTest {
         Assert.assertTrue(unsupportedFile.canRead(), "Cannot test detection of unsupported file formats on an unreadable file");
 
         // Should throw, since the file exists and is readable, but is in an unsupported format
-        FeatureManager.getCodecForFile(unsupportedFile);
+        FeatureManager.getCodecForFile(unsupportedFile.toPath());
     }
 
     @Test(expectedExceptions = UserException.WrongFeatureType.class)
@@ -70,7 +72,7 @@ public final class FeatureManagerUnitTest extends GATKBaseTest {
         final File vcf = new File(FEATURE_MANAGER_TEST_DIRECTORY + "minimal_vcf4_file.vcf");
 
         // If we require BED Features from this vcf file, we should get a type mismatch exception
-        FeatureManager.getCodecForFile(vcf, BEDFeature.class);
+        FeatureManager.getCodecForFile(vcf.toPath(), BEDFeature.class);
     }
 
     @DataProvider(name = "IsFeatureFileTestData")
@@ -150,7 +152,12 @@ public final class FeatureManagerUnitTest extends GATKBaseTest {
 
     @Test(dataProvider = "DetectFeatureTypeFromFeatureInputFieldTestData")
     public void testDetectFeatureTypeFromFeatureInputField( final String fieldName, final Class<?> expectedFeatureType ) throws NoSuchFieldException {
-        Assert.assertEquals(FeatureManager.getFeatureTypeForFeatureInputField(ValidFeatureArgumentSource.class.getDeclaredField(fieldName)),
+        final ValidFeatureArgumentSource validFeatureSource = new ValidFeatureArgumentSource();
+        final CommandLineArgumentParser clp = new CommandLineArgumentParser(validFeatureSource);
+        final ArgumentDefinition fieldArgumentDefinition =
+                clp.getNamedArgumentDefinitions().stream().filter(argDef -> argDef.getFullName().equals(fieldName)).findFirst().get();
+        Assert.assertNotNull(fieldArgumentDefinition);
+        Assert.assertEquals(FeatureManager.getFeatureTypeForFeatureInputArgument(fieldArgumentDefinition),
                             expectedFeatureType,
                             "Wrong Feature type detected for field " + fieldName);
     }
@@ -166,7 +173,12 @@ public final class FeatureManagerUnitTest extends GATKBaseTest {
     @Test(dataProvider = "DetectParameterlessFeatureInputsTestData", expectedExceptions = GATKException.class)
     public void testDetectParameterlessFeatureInputs( final String fieldName ) throws NoSuchFieldException {
         // FeatureInput fields that lack a type parameter should cause a GATKException to be thrown
-        FeatureManager.getFeatureTypeForFeatureInputField(InvalidFeatureArgumentSource.class.getDeclaredField(fieldName));
+        final InvalidFeatureArgumentSource invalidFeatureSource = new InvalidFeatureArgumentSource();
+        final CommandLineArgumentParser clp = new CommandLineArgumentParser(invalidFeatureSource);
+        final ArgumentDefinition fieldArgumentDefinition =
+                clp.getNamedArgumentDefinitions().stream().filter(argDef -> argDef.getFullName().equals(fieldName)).findFirst().get();
+        Assert.assertNotNull(fieldArgumentDefinition);
+        FeatureManager.getFeatureTypeForFeatureInputArgument(fieldArgumentDefinition);
     }
 
     @Test

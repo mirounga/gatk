@@ -4,6 +4,7 @@ import com.google.common.collect.Lists;
 import org.broadinstitute.barclay.argparser.Advanced;
 import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.barclay.argparser.Hidden;
+import org.broadinstitute.hellbender.engine.spark.AssemblyRegionArgumentCollection;
 import org.broadinstitute.hellbender.tools.walkers.haplotypecaller.readthreading.ReadThreadingAssembler;
 import org.broadinstitute.hellbender.utils.MathUtils;
 
@@ -19,40 +20,12 @@ public abstract class ReadThreadingAssemblerArgumentCollection implements Serial
     public static final double DEFAULT_PRUNING_LOG_ODDS_THRESHOLD = MathUtils.log10ToLog(1.0);
 
     public static final String ERROR_CORRECT_READS_LONG_NAME = "error-correct-reads";
+    public static final String PILEUP_ERROR_CORRECTION_LOG_ODDS_NAME = "error-correction-log-odds";
 
     public static final String CAPTURE_ASSEMBLY_FAILURE_BAM_LONG_NAME = "capture-assembly-failure-bam";
-
-
-    //---------------------------------------------------------------------------------------------------------------
-    //
-    // Assembly Region Trimming Parameters
-    //
-    // ---------------------------------------------------------------------------------------------------------------
-    @Advanced
-    @Argument(fullName="dont-trim-active-regions", doc="If specified, we will not trim down the active region from the full region (active + extension) to just the active interval for genotyping", optional = true)
-    protected boolean dontTrimActiveRegions = false;
-
-    /**
-     * the maximum extent into the full active region extension that we're willing to go in genotyping our events
-     */
-    @Hidden
-    @Argument(fullName="max-disc-ar-extension", doc = "the maximum extent into the full active region extension that we're willing to go in genotyping our events for discovery", optional = true)
-    protected int discoverExtension = 25;
-
-    @Hidden
-    @Argument(fullName="max-gga-ar-extension", doc = "the maximum extent into the full active region extension that we're willing to go in genotyping our events for GGA mode", optional = true)
-    protected int ggaExtension = 300;
-
-    /**
-     * Include at least this many bases around an event for calling it
-     */
-    @Hidden
-    @Argument(fullName="padding-around-indels", doc = "Include at least this many bases around an event for calling indels", optional = true)
-    public int indelPadding = 150;
-
-    @Hidden
-    @Argument(fullName="padding-around-snps", doc = "Include at least this many bases around an event for calling snps", optional = true)
-    public int snpPadding = 20;
+    public static final String KMER_SIZE_LONG_NAME = "kmer-size";
+    public static final String DONT_INCREASE_KMER_SIZE_LONG_NAME = "dont-increase-kmer-sizes-for-cycles";
+    public static final String LINKED_DE_BRUIJN_GRAPH_LONG_NAME = "linked-de-bruijn-graph";
 
     // -----------------------------------------------------------------------------------------------
     // arguments to control internal behavior of the read threading assembler
@@ -62,15 +35,15 @@ public abstract class ReadThreadingAssemblerArgumentCollection implements Serial
      * Multiple kmer sizes can be specified, using e.g. `--kmer-size 10 --kmer-size 25`.
      */
     @Advanced
-    @Argument(fullName="kmer-size", doc="Kmer size to use in the read threading assembler", optional = true)
-    public List<Integer> kmerSizes = Lists.newArrayList(10,25);
+    @Argument(fullName= KMER_SIZE_LONG_NAME, doc="Kmer size to use in the read threading assembler", optional = true)
+    public List<Integer> kmerSizes = Lists.newArrayList(10, 25);
 
     /**
      * When graph cycles are detected, the normal behavior is to increase kmer sizes iteratively until the cycles are
      * resolved. Disabling this behavior may cause the program to give up on assembling the ActiveRegion.
      */
     @Advanced
-    @Argument(fullName="dont-increase-kmer-sizes-for-cycles", doc="Disable iterating over kmer sizes when graph cycles are detected", optional = true)
+    @Argument(fullName= DONT_INCREASE_KMER_SIZE_LONG_NAME, doc="Disable iterating over kmer sizes when graph cycles are detected", optional = true)
     public boolean dontIncreaseKmerSizesForCycles = false;
 
     /**
@@ -152,6 +125,25 @@ public abstract class ReadThreadingAssemblerArgumentCollection implements Serial
     @Argument(fullName="max-unpruned-variants", doc = "Maximum number of variants in graph the adaptive pruner will allow", optional = true)
     public int maxUnprunedVariants = 100;
 
+    /**
+     * Disables graph simplification into a seq graph, opts to construct a proper De Bruijn graph with potential loops
+     *
+     * NOTE: --linked-de-bruijn-graph is currently an experimental feature that does not directly match with
+     *        the regular HaplotypeCaller. Specifically the haplotype finding code does not perform correctly at complicated
+     *        sites. Use this mode at your own risk.
+     */
+    @Hidden
+    @Argument(fullName= LINKED_DE_BRUIJN_GRAPH_LONG_NAME, doc = "If enabled, the Assembly Engine will construct a Linked De Bruijn graph to recover better haplotypes", optional = true)
+    public boolean useLinkedDeBruijnGraph = false;
+
+    /**
+     * This is used to disable the recovery of paths that were dropped in the graph based on the junction trees. Disabling this
+     * will affect sensitivity but improve phasing and runtime somewhat.
+     */
+    @Hidden
+    @Argument(fullName="disable-artificial-haplotype-recovery", doc = "If in 'linked-de-bruijn-graph' mode, disable recovery of haplotypes based on graph edges that are not in junction trees", optional = true)
+    public boolean disableArtificialHaplotypeRecovery = false;
+
     @Advanced
     @Argument(fullName="debug-assembly", shortName="debug", doc="Print out verbose debug information about each assembly region", optional = true)
     public boolean debugAssembly;
@@ -166,6 +158,13 @@ public abstract class ReadThreadingAssemblerArgumentCollection implements Serial
     @Argument(fullName="graph-output", shortName="graph", doc="Write debug assembly graph information to this file", optional = true)
     public String graphOutput = null;
 
+    /**
+     * This argument is meant for debugging and is not immediately useful for normal analysis use.
+     */
+    @Hidden
+    @Argument(fullName="haplotype-debug-histogram-output", doc="Write debug assembly graph information to this file", optional = true)
+    public String haplotypeHistogramOutput = null;
+
     @Hidden
     @Argument(fullName = CAPTURE_ASSEMBLY_FAILURE_BAM_LONG_NAME, doc = "Write a BAM called assemblyFailure.bam capturing all of the reads that were in the active region when the assembler failed for any reason", optional = true)
     public boolean captureAssemblyFailureBAM = false;
@@ -175,6 +174,15 @@ public abstract class ReadThreadingAssemblerArgumentCollection implements Serial
     // Read Error Corrector Related Parameters
     //
     // ---------------------------------------------------------------------------------------------------------------
+
+    /**
+     * Enabling this argument may cause fundamental problems with the assembly graph itself.
+     */
+    @Hidden
+    @Argument(fullName = PILEUP_ERROR_CORRECTION_LOG_ODDS_NAME, doc = "Log odds threshold for pileup error correction.  Off by default", optional = true)
+    public double pileupErrorCorrectionLogOdds = Double.NEGATIVE_INFINITY;
+
+
     /**
      * Enabling this argument may cause fundamental problems with the assembly graph itself.
      */
@@ -194,6 +202,4 @@ public abstract class ReadThreadingAssemblerArgumentCollection implements Serial
     public int minObservationsForKmerToBeSolid = 20;
 
     public abstract ReadThreadingAssembler makeReadThreadingAssembler();
-
-    public boolean consensusMode() { return false; }
 }

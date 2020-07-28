@@ -1,14 +1,12 @@
 package org.broadinstitute.hellbender.tools.walkers.annotator;
 
-import htsjdk.variant.vcf.VCFInfoHeaderLine;
+import htsjdk.variant.variantcontext.VariantContext;
 import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.help.HelpConstants;
-import org.broadinstitute.hellbender.utils.pileup.PileupElement;
 import org.broadinstitute.hellbender.utils.read.AlignmentUtils;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
-import org.broadinstitute.hellbender.utils.variant.GATKVCFHeaderLines;
 
 import java.util.Collections;
 import java.util.List;
@@ -36,15 +34,9 @@ public final class ClippingRankSumTest extends RankSumTest {
     public List<String> getKeyNames() { return Collections.singletonList(GATKVCFConstants.CLIPPING_RANK_SUM_KEY); }
 
     @Override
-    protected OptionalDouble getElementForRead(final GATKRead read, final int refLoc) {
+    protected OptionalDouble getElementForRead(final GATKRead read, final VariantContext vc) {
         Utils.nonNull(read);
         return OptionalDouble.of(AlignmentUtils.getNumHardClippedBases(read));
     }
 
-    @Override
-    protected OptionalDouble getElementForPileupElement(final PileupElement p, final int refLoc) {
-        Utils.nonNull(p);
-        // default to returning the same value
-        return getElementForRead(p.getRead(),refLoc);
-    }
- }
+}

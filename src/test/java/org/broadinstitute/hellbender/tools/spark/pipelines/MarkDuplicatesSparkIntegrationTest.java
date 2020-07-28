@@ -7,6 +7,7 @@ import org.broadinstitute.hellbender.cmdline.CommandLineProgram;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.cmdline.argumentcollections.MarkDuplicatesSparkArgumentCollection;
 import org.broadinstitute.hellbender.engine.ReadsDataSource;
+import org.broadinstitute.hellbender.engine.ReadsPathDataSource;
 import org.broadinstitute.hellbender.engine.spark.GATKSparkTool;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.testutils.ArgumentsBuilder;
@@ -120,17 +121,17 @@ public class MarkDuplicatesSparkIntegrationTest extends AbstractMarkDuplicatesCo
 
         ArgumentsBuilder args = new ArgumentsBuilder();
         for (File input : inputFiles) {
-            args.addArgument(StandardArgumentDefinitions.INPUT_LONG_NAME,input.getPath());
+            args.add(StandardArgumentDefinitions.INPUT_LONG_NAME,input.getPath());
         }
-        args.addArgument(StandardArgumentDefinitions.OUTPUT_LONG_NAME);
+        args.addFlag(StandardArgumentDefinitions.OUTPUT_LONG_NAME);
 
         File outputFile = createTempFile("markdups", ".bam");
         outputFile.delete();
-        args.add(outputFile.getAbsolutePath());
+        args.addRaw(outputFile.getAbsolutePath());
 
-        args.add("--"+StandardArgumentDefinitions.METRICS_FILE_LONG_NAME);
+        args.addRaw("--"+StandardArgumentDefinitions.METRICS_FILE_LONG_NAME);
         File metricsFile = createTempFile("markdups_metrics", ".txt");
-        args.add(metricsFile.getAbsolutePath());
+        args.addRaw(metricsFile.getAbsolutePath());
 
         runCommandLine(args.getArgsArray());
 
@@ -138,7 +139,7 @@ public class MarkDuplicatesSparkIntegrationTest extends AbstractMarkDuplicatesCo
 
         int totalReads = 0;
         int duplicateReads = 0;
-        try ( final ReadsDataSource outputReads = new ReadsDataSource(outputFile.toPath()) ) {
+        try ( final ReadsDataSource outputReads = new ReadsPathDataSource(outputFile.toPath()) ) {
             for ( GATKRead read : outputReads ) {
                 ++totalReads;
 
@@ -207,20 +208,20 @@ public class MarkDuplicatesSparkIntegrationTest extends AbstractMarkDuplicatesCo
 
         ArgumentsBuilder args = new ArgumentsBuilder();
         for (File input : inputFiles) {
-            args.addArgument(StandardArgumentDefinitions.INPUT_LONG_NAME,input.getPath());
+            args.add(StandardArgumentDefinitions.INPUT_LONG_NAME,input.getPath());
         }
-        args.add("--" + StandardArgumentDefinitions.OUTPUT_LONG_NAME);
+        args.addRaw("--" + StandardArgumentDefinitions.OUTPUT_LONG_NAME);
 
         File outputFile = createTempFile("markdups", ".bam");
         outputFile.delete();
-        args.add(outputFile.getAbsolutePath());
+        args.addRaw(outputFile.getAbsolutePath());
 
-        args.add("--" + StandardArgumentDefinitions.METRICS_FILE_LONG_NAME);
+        args.addRaw("--" + StandardArgumentDefinitions.METRICS_FILE_LONG_NAME);
         File metricsFile = createTempFile("markdups_metrics", ".txt");
-        args.add(metricsFile.getAbsolutePath());
+        args.addRaw(metricsFile.getAbsolutePath());
 
-        args.add("--" + MarkDuplicatesSparkArgumentCollection.DUPLICATE_TAGGING_POLICY_LONG_NAME);
-        args.add(MarkDuplicates.DuplicateTaggingPolicy.OpticalOnly);
+        args.addRaw("--" + MarkDuplicatesSparkArgumentCollection.DUPLICATE_TAGGING_POLICY_LONG_NAME);
+        args.addRaw(MarkDuplicates.DuplicateTaggingPolicy.OpticalOnly);
 
         runCommandLine(args.getArgsArray());
 
@@ -239,7 +240,7 @@ public class MarkDuplicatesSparkIntegrationTest extends AbstractMarkDuplicatesCo
 
         int totalReads = 0;
         int duplicateReads = 0;
-        try (final ReadsDataSource outputReads = new ReadsDataSource(outputFile.toPath())) {
+        try (final ReadsDataSource outputReads = new ReadsPathDataSource(outputFile.toPath())) {
             for (GATKRead read : outputReads) {
                 ++totalReads;
 
@@ -272,20 +273,20 @@ public class MarkDuplicatesSparkIntegrationTest extends AbstractMarkDuplicatesCo
 
         ArgumentsBuilder args = new ArgumentsBuilder();
         for (File input : inputFiles) {
-            args.addArgument(StandardArgumentDefinitions.INPUT_LONG_NAME,input.getPath());
+            args.add(StandardArgumentDefinitions.INPUT_LONG_NAME,input.getPath());
         }
-        args.add("--" + StandardArgumentDefinitions.OUTPUT_LONG_NAME);
+        args.addRaw("--" + StandardArgumentDefinitions.OUTPUT_LONG_NAME);
 
         File outputFile = createTempFile("markdups", ".bam");
         outputFile.delete();
-        args.add(outputFile.getAbsolutePath());
+        args.addRaw(outputFile.getAbsolutePath());
 
-        args.add("--" + StandardArgumentDefinitions.METRICS_FILE_LONG_NAME);
+        args.addRaw("--" + StandardArgumentDefinitions.METRICS_FILE_LONG_NAME);
         File metricsFile = createTempFile("markdups_metrics", ".txt");
-        args.add(metricsFile.getAbsolutePath());
+        args.addRaw(metricsFile.getAbsolutePath());
 
-        args.add("--" + MarkDuplicatesSparkArgumentCollection.DUPLICATE_TAGGING_POLICY_LONG_NAME);
-        args.add(MarkDuplicates.DuplicateTaggingPolicy.All);
+        args.addRaw("--" + MarkDuplicatesSparkArgumentCollection.DUPLICATE_TAGGING_POLICY_LONG_NAME);
+        args.addRaw(MarkDuplicates.DuplicateTaggingPolicy.All);
 
         runCommandLine(args.getArgsArray());
 
@@ -305,7 +306,7 @@ public class MarkDuplicatesSparkIntegrationTest extends AbstractMarkDuplicatesCo
 
         int totalReads = 0;
         int duplicateReads = 0;
-        try (final ReadsDataSource outputReads = new ReadsDataSource(outputFile.toPath())) {
+        try (final ReadsDataSource outputReads = new ReadsPathDataSource(outputFile.toPath())) {
             for (GATKRead read : outputReads) {
                 ++totalReads;
 
@@ -344,19 +345,19 @@ public class MarkDuplicatesSparkIntegrationTest extends AbstractMarkDuplicatesCo
 
         ArgumentsBuilder args = new ArgumentsBuilder();
         for (File input : inputFiles) {
-            args.addArgument(StandardArgumentDefinitions.INPUT_LONG_NAME,input.getPath());
+            args.add(StandardArgumentDefinitions.INPUT_LONG_NAME,input.getPath());
         }
-        args.add("--"+StandardArgumentDefinitions.OUTPUT_LONG_NAME);
+        args.addRaw("--"+StandardArgumentDefinitions.OUTPUT_LONG_NAME);
 
         File outputFile = createTempFile("markdups", ".bam");
         outputFile.delete();
-        args.add(outputFile.getAbsolutePath());
+        args.addRaw(outputFile.getAbsolutePath());
 
-        args.add("--"+StandardArgumentDefinitions.METRICS_FILE_LONG_NAME);
+        args.addRaw("--"+StandardArgumentDefinitions.METRICS_FILE_LONG_NAME);
         File metricsFile = createTempFile("markdups_metrics", ".txt");
-        args.add(metricsFile.getAbsolutePath());
+        args.addRaw(metricsFile.getAbsolutePath());
 
-        args.add("--"+MarkDuplicatesSparkArgumentCollection.REMOVE_ALL_DUPLICATE_READS);
+        args.addRaw("--"+MarkDuplicatesSparkArgumentCollection.REMOVE_ALL_DUPLICATE_READS);
 
         runCommandLine(args.getArgsArray());
 
@@ -364,7 +365,7 @@ public class MarkDuplicatesSparkIntegrationTest extends AbstractMarkDuplicatesCo
 
         int totalReads = 0;
         int duplicateReads = 0;
-        try ( final ReadsDataSource outputReads = new ReadsDataSource(outputFile.toPath()) ) {
+        try ( final ReadsDataSource outputReads = new ReadsPathDataSource(outputFile.toPath()) ) {
             for ( GATKRead read : outputReads ) {
                 ++totalReads;
 
@@ -399,19 +400,19 @@ public class MarkDuplicatesSparkIntegrationTest extends AbstractMarkDuplicatesCo
 
         ArgumentsBuilder args = new ArgumentsBuilder();
         for (File input : inputFiles) {
-            args.addArgument(StandardArgumentDefinitions.INPUT_LONG_NAME,input.getPath());
+            args.add(StandardArgumentDefinitions.INPUT_LONG_NAME,input.getPath());
         }
-        args.add("--" + StandardArgumentDefinitions.OUTPUT_LONG_NAME);
+        args.addRaw("--" + StandardArgumentDefinitions.OUTPUT_LONG_NAME);
 
         File outputFile = createTempFile("markdups", ".bam");
         outputFile.delete();
-        args.add(outputFile.getAbsolutePath());
+        args.addRaw(outputFile.getAbsolutePath());
 
-        args.add("--" + StandardArgumentDefinitions.METRICS_FILE_LONG_NAME);
+        args.addRaw("--" + StandardArgumentDefinitions.METRICS_FILE_LONG_NAME);
         File metricsFile = createTempFile("markdups_metrics", ".txt");
-        args.add(metricsFile.getAbsolutePath());
+        args.addRaw(metricsFile.getAbsolutePath());
 
-        args.add("--" + MarkDuplicatesSparkArgumentCollection.REMOVE_SEQUENCING_DUPLICATE_READS);
+        args.addRaw("--" + MarkDuplicatesSparkArgumentCollection.REMOVE_SEQUENCING_DUPLICATE_READS);
 
         runCommandLine(args.getArgsArray());
 
@@ -419,7 +420,7 @@ public class MarkDuplicatesSparkIntegrationTest extends AbstractMarkDuplicatesCo
 
         int totalReads = 0;
         int duplicateReads = 0;
-        try (final ReadsDataSource outputReads = new ReadsDataSource(outputFile.toPath())) {
+        try (final ReadsDataSource outputReads = new ReadsPathDataSource(outputFile.toPath())) {
             for (GATKRead read : outputReads) {
                 ++totalReads;
 
@@ -460,7 +461,7 @@ public class MarkDuplicatesSparkIntegrationTest extends AbstractMarkDuplicatesCo
         args.addInput(getTestFile("hashCollisionedReads.bam"));
         runCommandLine(args);
 
-        try ( final ReadsDataSource outputReadsSource = new ReadsDataSource(output.toPath()) ) {
+        try ( final ReadsDataSource outputReadsSource = new ReadsPathDataSource(output.toPath()) ) {
             final List<GATKRead> actualReads = new ArrayList<>();
             for ( final GATKRead read : outputReadsSource ) {
                 Assert.assertFalse(read.isDuplicate());
@@ -480,6 +481,28 @@ public class MarkDuplicatesSparkIntegrationTest extends AbstractMarkDuplicatesCo
         args.addOutput(output);
         args.addInput(new File(TEST_DATA_DIR,"optical_dupes.bam"));
         args.addInput(new File(TEST_DATA_DIR,"example.chr1.1-1K.unmarkedDups.noDups.bam"));
+        runCommandLine(args);
+    }
+
+    @Test
+    public void testAssertCorrectSortOrderMultipleBamsOverriding() {
+        final File output = createTempFile("supplementaryReadUnmappedMate", "bam");
+        final ArgumentsBuilder args = new ArgumentsBuilder();
+        args.addOutput(output);
+        args.addInput(new File(TEST_DATA_DIR,"optical_dupes.bam"));
+        args.addInput(new File(TEST_DATA_DIR,"example.chr1.1-1K.unmarkedDups.noDups.bam"));
+        args.addFlag(MarkDuplicatesSpark.ALLOW_MULTIPLE_SORT_ORDERS_IN_INPUT_ARG);
+        runCommandLine(args);
+    }
+
+    @Test
+    public void testAssertAssumeUnsortedFilesAreQueryGroupedFiles() {
+        final File output = createTempFile("supplementaryReadUnmappedMate", "bam");
+        final ArgumentsBuilder args = new ArgumentsBuilder();
+        args.addOutput(output);
+        args.addInput(new File(TEST_DATA_DIR,"optical_dupes.queryname.bam"));
+        args.addInput(new File(TEST_DATA_DIR,"optical_dupes.unsorted.querygrouped.sam"));
+        args.addFlag(MarkDuplicatesSpark.TREAT_UNSORTED_AS_ORDERED);
         runCommandLine(args);
     }
 }

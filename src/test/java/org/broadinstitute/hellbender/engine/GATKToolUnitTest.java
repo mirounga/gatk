@@ -13,7 +13,6 @@ import htsjdk.variant.vcf.VCFHeaderLine;
 import htsjdk.variant.vcf.VCFIDHeaderLine;
 import org.broadinstitute.barclay.argparser.*;
 import org.broadinstitute.hellbender.GATKBaseTest;
-import org.broadinstitute.hellbender.cmdline.GATKPlugin.testpluggables.TestAnnotation;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.cmdline.TestProgramGroup;
 import org.broadinstitute.hellbender.exceptions.UserException;
@@ -379,7 +378,7 @@ public final class GATKToolUnitTest extends GATKBaseTest {
         final TestGATKToolWithReads tool = new TestGATKToolWithReads();
         final CommandLineParser clp = new CommandLineArgumentParser(tool);
         final File bamFile = new File(publicTestDir + "org/broadinstitute/hellbender/engine/reads_data_source_test1.bam");
-        final File intervalsFile = new File(publicTestDir + "picard_intervals.list");
+        final File intervalsFile = new File(publicTestDir + "picard_intervals.interval_list");
         final String[] args = {
                 "-I", bamFile.getCanonicalPath(),
                 "-L", intervalsFile.getCanonicalPath()
@@ -897,10 +896,10 @@ public final class GATKToolUnitTest extends GATKBaseTest {
 
         args.addInput(inputFile);
         args.addOutput(outputFile);
-        args.add("--" + StandardArgumentDefinitions.CREATE_OUTPUT_VARIANT_INDEX_LONG_NAME); args.add(Boolean.toString(createIndex));
-        args.add("--" + StandardArgumentDefinitions.CREATE_OUTPUT_VARIANT_MD5_LONG_NAME); args.add(Boolean.toString(createMD5));
+        args.addRaw("--" + StandardArgumentDefinitions.CREATE_OUTPUT_VARIANT_INDEX_LONG_NAME); args.addRaw(Boolean.toString(createIndex));
+        args.addRaw("--" + StandardArgumentDefinitions.CREATE_OUTPUT_VARIANT_MD5_LONG_NAME); args.addRaw(Boolean.toString(createMD5));
         if (lenient) {
-            args.add("--lenient");
+            args.addRaw("--lenient");
         }
 
         final CommandLineParser clp = new CommandLineArgumentParser(tool);

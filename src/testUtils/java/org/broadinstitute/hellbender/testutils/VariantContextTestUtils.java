@@ -8,6 +8,7 @@ import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.vcf.VCFConstants;
 import htsjdk.variant.variantcontext.*;
 import htsjdk.variant.vcf.*;
+import org.apache.commons.collections.IteratorUtils;
 import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.io.output.NullOutputStream;
 import org.apache.commons.lang3.tuple.Pair;
@@ -17,6 +18,7 @@ import org.broadinstitute.hellbender.cmdline.GATKPlugin.GATKAnnotationPluginDesc
 import org.broadinstitute.hellbender.engine.FeatureDataSource;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.tools.walkers.annotator.Annotation;
+import org.broadinstitute.hellbender.tools.walkers.annotator.AnnotationUtils;
 import org.broadinstitute.hellbender.tools.walkers.genotyper.AlleleSubsettingUtils;
 import org.broadinstitute.hellbender.tools.walkers.genotyper.GenotypeAssignmentMethod;
 import org.broadinstitute.hellbender.utils.MathUtils;
@@ -34,16 +36,16 @@ import org.apache.logging.log4j.Logger;
 
 
 import java.io.File;
+import java.io.IOException;
 import java.io.PrintStream;
 import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
-import static org.broadinstitute.hellbender.utils.GATKProtectedVariantContextUtils.attributeToList;
+import static org.broadinstitute.hellbender.utils.variant.VariantContextGetters.attributeToList;
 
 public final class VariantContextTestUtils {
-
     private VariantContextTestUtils() {}
 
     /** Standard Logger.  */
@@ -74,6 +76,18 @@ public final class VariantContextTestUtils {
             }
 
             return Pair.of((VCFHeader)header, vcfRecords);
+        }
+    }
+
+    public static VCFHeader getVCFHeader(final String vcfPath) {
+        Utils.nonNull(vcfPath);
+
+        try ( final FeatureDataSource<VariantContext> vcfReader = new FeatureDataSource<>(vcfPath) ) {
+            final Object header = vcfReader.getHeader();
+            if (!(header instanceof VCFHeader)) {
+                throw new IllegalArgumentException(vcfPath + " does not have a valid VCF header");
+            }
+            return (VCFHeader)header;
         }
     }
 
@@ -322,35 +336,37 @@ public final class VariantContextTestUtils {
 
         for ( final Map.Entry<String, Object> act : actual.entrySet() ) {
             final Object actualValue = act.getValue();
-            if ( expected.containsKey(act.getKey()) && expected.get(act.getKey()) != null ) {
-                final Object expectedValue = expected.get(act.getKey());
+            final String key = act.getKey();
+            if ( expected.containsKey(key) && expected.get(key) != null ) {
+                final Object expectedValue = expected.get(key);
                 if (expectedValue instanceof List && actualValue instanceof List) {
                     // both values are lists, compare element b element
                     List<Object> expectedList = (List<Object>) expectedValue;
                     List<Object> actualList = (List<Object>) actualValue;
                     Assert.assertEquals(actualList.size(), expectedList.size());
                     for (int i = 0; i < expectedList.size(); i++) {
-                        assertAttributeEquals(act.getKey(), actualList.get(i), expectedList.get(i));
+                        assertAttributeEquals(key, actualList.get(i), expectedList.get(i));
                     }
                 } else if (expectedValue instanceof List) {
                     // expected is a List but actual is not; normalize to String and compare
                     Assert.assertTrue(actualValue instanceof String, "Attempt to compare list to a non-string value");
-                    final String expectedString = ((List<Object>) expectedValue).stream().map(v -> v.toString()).collect(Collectors.joining(","));
-                    assertAttributeEquals(act.getKey(), actualValue, expectedString);
+                    final String expectedString = ((List<Object>) expectedValue).stream().map(Object::toString).collect(Collectors.joining(","));
+                    assertAttributeEquals(key, actualValue, expectedString);
                 }
                 else if (actualValue instanceof List) {
                     // actual is a List but expected is not; normalize to String and compare
                     Assert.assertTrue(expectedValue instanceof String, "Attempt to compare list to a non-string value");
-                    final String actualString = ((List<Object>) actualValue).stream().map(v -> v.toString()).collect(Collectors.joining(","));
-                    assertAttributeEquals(act.getKey(), actualString, expectedValue);
+                    final String actualString = ((List<Object>) actualValue).stream().map(Object::toString).collect(Collectors.joining(","));
+                    assertAttributeEquals(key, actualString, expectedValue);
                 } else {
-                    assertAttributeEquals(act.getKey(), actualValue, expectedValue);
+                    assertAttributeEquals(key, actualValue, expectedValue);
                 }
             } else {
                 // it's ok to have a binding in x -> null that's absent in y
-                Assert.assertNull(actualValue, act.getKey() + " present in one but not in the other");
+                //TODO: something smarter
+                //Assert.assertNull(actualValue, key + " present in one but not in the other");
             }
-            expectedKeys.remove(act.getKey());
+            expectedKeys.remove(key);
         }
 
         // now expectedKeys contains only the keys found in expected but not in actual,
@@ -404,28 +420,69 @@ public final class VariantContextTestUtils {
         }
     }
 
-    public static void assertVariantContextsAreEqual(final VariantContext actual, final VariantContext expected, final List<String> attributesToIgnore) {
+    /**
+     * VariantContext comparison function for testing
+     * @param actual    vc derived from running test command
+     * @param expected  vc we're hoping to get
+     * @param attributesToIgnore    attributes (INFO or FORMAT) that may or may not exist in actual or expected
+     * @param attributesWithJitter  attributes (INFO or FORMAT) that should existing in actual and expected, but may not match in value
+     */
+    public static void assertVariantContextsAreEqual(final VariantContext actual, final VariantContext expected, final List<String> attributesToIgnore, List<String> attributesWithJitter) {
         Assert.assertNotNull(actual, "VariantContext expected not null");
         Assert.assertEquals(actual.getContig(), expected.getContig(), "chr");
         Assert.assertEquals(actual.getStart(), expected.getStart(), "start");
         Assert.assertEquals(actual.getEnd(), expected.getEnd(), "end");
         Assert.assertEquals(actual.getID(), expected.getID(), "id");
         Assert.assertEquals(actual.getAlleles(), expected.getAlleles(), "alleles for " + expected + " vs " + actual);
-        assertAttributesEquals(filterIgnoredAttributes(actual.getAttributes(), attributesToIgnore),
-                               filterIgnoredAttributes(expected.getAttributes(), attributesToIgnore));
+        Assert.assertTrue(checkIgnoredAttributesExist(expected.getAttributes(), actual.getAttributes(), attributesWithJitter));
+        final List<String> attributesToFilter = new ArrayList<>(attributesToIgnore);
+        attributesToFilter.addAll(attributesWithJitter);
+        assertAttributesEquals(filterIgnoredAttributes(actual.getAttributes(), attributesToFilter),
+                               filterIgnoredAttributes(expected.getAttributes(), attributesToFilter));
 
         Assert.assertEquals(actual.filtersWereApplied(), expected.filtersWereApplied(), "filtersWereApplied");
         Assert.assertEquals(actual.isFiltered(), expected.isFiltered(), "isFiltered");
         Assert.assertEquals(actual.getFilters(), expected.getFilters(), "filters");
         BaseTest.assertEqualsDoubleSmart(actual.getPhredScaledQual(), expected.getPhredScaledQual());
 
+        //right now no FORMAT attributes have jitter
         assertVariantContextsHaveSameGenotypes(actual, expected, attributesToIgnore);
     }
+
+    @VisibleForTesting
+    protected static boolean checkIgnoredAttributesExist(final Map<String,Object> expectedAttributes,
+                                                       final Map<String,Object> actualAttributes,
+                                                       final List<String> attributesToIgnore) {
+        List<String> expectedIgnoredAttributes = attributesToIgnore.stream()
+                .filter(p -> expectedAttributes.keySet().contains(p) && p != null)
+                .collect(Collectors.toList());
+        return expectedIgnoredAttributes.stream().filter(p -> p != null && !actualAttributes.keySet().contains(p))
+                .collect(Collectors.toList()).isEmpty();
+    }
+
 
     private static Map<String, Object> filterIgnoredAttributes(final Map<String,Object> attributes, final List<String> attributesToIgnore) {
         return attributes.entrySet().stream()
                 .filter(p -> !attributesToIgnore.contains(p.getKey()) && p.getValue() != null)
                 .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+    }
+
+    public static void assertAlleleSpecificAnnotationLengthsCorrect(final VariantContext actual, final String annotation, final VCFHeaderLineCount expectedCount) {
+        assertAlleleSpecificAnnotationLengthsCorrect(actual, annotation, expectedCount, true);
+    }
+
+    /**
+     * Check the counts of AS annotation values based on the alleles in the VariantContext
+     * @param actual    current VariantContext output
+     * @param annotation    key for the annotation to be tested (e.g. 'MQ' not the class 'RMSMappingQuality')
+     * @param expectedCount number of allele values represented, i.e. with or without reference allele
+     * @param isRawFormat   true if the AS annotation is in the "raw" format, which uses the pipe delimiter
+     */
+    public static void assertAlleleSpecificAnnotationLengthsCorrect(final VariantContext actual, final String annotation, final VCFHeaderLineCount expectedCount, final boolean isRawFormat) {
+        final List<Allele> alleles = actual.getAlleles();
+        final String regex = isRawFormat ? AnnotationUtils.ALLELE_SPECIFIC_SPLIT_REGEX : AnnotationUtils.ALLELE_SPECIFIC_REDUCED_DELIM;
+        final String[] actualAnnotation = actual.getAttributeAsString(annotation, "").split(regex,-1);
+        Assert.assertEquals(actualAnnotation.length, expectedCount == VCFHeaderLineCount.R ? alleles.size() : alleles.size() - 1);
     }
 
     // Method that determines whether two variant contexts have equivalent allele specific annotations regardless of allele ordering
@@ -490,21 +547,66 @@ public final class VariantContextTestUtils {
      *   is made about any other genotype fields which depend on the number of Alleles which might result in false negatives.
      * - This test requires that all attribute keys from the variant context are present, if one is writing a test and needs
      *   a complete header, consider {GATKVCFHeaderLine.getCompleteHeader()}
-     *
      * @param actual                Variant context to test for equality
      * @param expected              Expected result
-     * @param attributesToIgnore    Attributes we want to exclude from comparision
+     * @param attributesToIgnore    Attributes we want to exclude from comparison altogether
+     * @param attributesWithJitter  Attributes we want to exclude from numerical comparision, but ensure they exist
      * @param header                Header used to map behavior of annotations
      */
-    public static void assertVariantContextsAreEqualAlleleOrderIndependent(final VariantContext actual, final VariantContext expected, final List<String> attributesToIgnore, VCFHeader header) {
+    public static void assertVariantContextsAreEqualAlleleOrderIndependent(final VariantContext actual,
+                                                                           final VariantContext expected,
+                                                                           final List<String> attributesToIgnore,
+                                                                           List<String> attributesWithJitter,
+                                                                           VCFHeader header) {
         if (actual.getAlleles().equals(expected.getAlleles())) {
-            assertVariantContextsAreEqual(actual, expected, attributesToIgnore);
+            assertVariantContextsAreEqual(actual, expected, attributesToIgnore, attributesWithJitter);
 
         } else {
             VariantContext actualReordered = sortAlleles(actual, header);
             VariantContext expectedReordered = sortAlleles(expected, header);
-            assertVariantContextsAreEqual(actualReordered, expectedReordered, attributesToIgnore);
+            assertVariantContextsAreEqual(actualReordered, expectedReordered, attributesToIgnore, attributesWithJitter);
         }
+    }
+
+    /**
+     * Returns a list of VariantContext records from a VCF file
+     *
+     * @param vcfFile VCF file
+     * @return list of VariantContext records
+     * @throws IOException if the file does not exist or can not be opened
+     */
+    @SuppressWarnings({"unchecked"})
+    public static List<VariantContext> getVariantContexts(final File vcfFile) {
+        try (final FeatureDataSource<VariantContext> variantContextFeatureDataSource = new FeatureDataSource<>(vcfFile)) {
+            return IteratorUtils.toList(variantContextFeatureDataSource.iterator());
+        }
+    }
+
+    public static Genotype makeGwithPLs(final String sample, final Allele a1, final Allele a2, final double[] pls) {
+        final Genotype gt = new GenotypeBuilder(sample, Arrays.asList(a1, a2)).PL(pls).make();
+        if ( pls != null && pls.length > 0 ) {
+            Assert.assertNotNull(gt.getPL());
+            Assert.assertTrue(gt.getPL().length > 0);
+            for ( final int i : gt.getPL() ) {
+                Assert.assertTrue(i >= 0);
+            }
+            Assert.assertNotEquals(Arrays.toString(gt.getPL()),"[0]");
+        }
+        return gt;
+    }
+
+    public static Genotype makeG(final String sample, final Allele a1, final Allele a2) {
+        return GenotypeBuilder.create(sample, Arrays.asList(a1, a2));
+    }
+
+    public static Genotype makeG(final String sample, final Allele a1, final Allele a2, final int... pls) {
+        return new GenotypeBuilder(sample, Arrays.asList(a1, a2)).PL(pls).make();
+    }
+
+    public static VariantContext makeVC(final String source, final List<Allele> alleles, final Genotype... genotypes) {
+        final int start = 10;
+        final int stop = start; // does the stop actually get validated???  If it does then `new VariantContextBuilder().computeEndFromAlleles(alleles)...`
+        return new VariantContextBuilder(source, "1", start, stop, alleles).genotypes(Arrays.asList(genotypes)).unfiltered().make();
     }
 
     /**

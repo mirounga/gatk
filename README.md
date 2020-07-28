@@ -1,5 +1,4 @@
 [![Build Status](https://travis-ci.com/broadinstitute/gatk.svg?branch=master)](https://travis-ci.com/broadinstitute/gatk)
-[![codecov](https://codecov.io/gh/broadinstitute/gatk/branch/master/graph/badge.svg)](https://codecov.io/gh/broadinstitute/gatk)
 [![Maven Central](https://img.shields.io/maven-central/v/org.broadinstitute/gatk.svg)](https://maven-badges.herokuapp.com/maven-central/org.broadinstitute/gatk)
 [![License (3-Clause BSD)](https://img.shields.io/badge/license-BSD%203--Clause-blue.svg)](https://opensource.org/licenses/BSD-3-Clause)
 
@@ -25,6 +24,7 @@ releases of the toolkit.
     * [Passing JVM options to gatk](#jvmoptions)
     * [Passing a configuration file to gatk](#configFileOptions)
     * [Running GATK4 with inputs on Google Cloud Storage](#gcs)
+    * [Running GATK4 Spark tools locally](#sparklocal)
     * [Running GATK4 Spark tools on a Spark cluster](#sparkcluster)
     * [Running GATK4 Spark tools on Google Cloud Dataproc](#dataproc)
     * [Using R to generate plots](#R)
@@ -50,7 +50,11 @@ releases of the toolkit.
 
 ## <a name="requirements">Requirements</a>
 * To run GATK:
-    * Java 8
+    * Java 8 is needed to run or build GATK. 
+    We recommend either of the following:
+        * OpenJDK 8 with Hotspot from [AdoptOpenJdk](https://adoptopenjdk.net/)
+        * [OracleJDK 8](https://www.oracle.com/technetwork/java/javase/downloads/jdk8-downloads-2133151.html)
+    which requires an Oracle account to download and comes with restrictive [license conditions](https://www.oracle.com/downloads/licenses/javase-license1.html).
     * Python 2.6 or greater (required to run the `gatk` frontend script)
     * Python 3.6.2, along with a set of additional Python packages, is required to run some tools and workflows.
       See [Python Dependencies](#python) for more information.
@@ -65,7 +69,7 @@ releases of the toolkit.
       suite, you can skip this step since the build itself will use git-lfs to download the minimal set of large `lfs`
       resource files required to complete the build. The test resources will not be downloaded, but this greatly reduces
       the size of the download.
-    * Gradle 3.1 or greater. We recommend using the `./gradlew` script which will
+    * Gradle 5.6. We recommend using the `./gradlew` script which will
       download and use an appropriate gradle version automatically (see examples below).
     * R 3.2.5 (needed for running the test suite)
 * Pre-packaged Docker images with all needed dependencies installed can be found on
@@ -73,10 +77,11 @@ releases of the toolkit.
    docker client, which can be found on the [docker website](https://www.docker.com/get-docker).
 * Python Dependencies:<a name="python"></a>
     * GATK4 uses the [Conda](https://conda.io/docs/index.html) package manager to establish and manage the
-      Python environment and dependencies required by GATK tools that have a Python dependency. The ```gatk``` environment, 
+      Python environment and dependencies required by GATK tools that have a Python dependency. This environment also 
+      includes the R dependencies used for plotting in some of the tools. The ```gatk``` environment 
       requires hardware with AVX support for tools that depend on TensorFlow (e.g. CNNScoreVariant). The GATK Docker image 
       comes with the ```gatk``` environment pre-configured.
-    * To establish the  environment when not using the Docker image, a conda environment must first be "created", and
+    * To establish the environment when not using the Docker image, a conda environment must first be "created", and
       then "activated":
         * First, make sure [Miniconda or Conda](https://conda.io/docs/index.html) is installed (Miniconda is sufficient).
         * To "create" the conda environment:
@@ -141,6 +146,9 @@ You can download and run pre-built versions of GATK4 from the following places:
   This will keep a gradle daemon running in the background and avoid the ~6s gradle start up time on every command.
 
 * Gradle keeps a cache of dependencies used to build GATK.  By default this goes in `~/.gradle`.  If there is insufficient free space in your home directory, you can change the location of the cache by setting the `GRADLE_USER_HOME` environment variable.
+
+* The version number is automatically derived from the git history using `git describe`, you can override it by setting the `versionOverride` property.
+  ( `./gradlew -DversionOverride=my_weird_version printVersion` )
 
 ## <a name="running">Running GATK4</a>
 
@@ -226,6 +234,29 @@ You can download and run pre-built versions of GATK4 from the following places:
         ```
         * Done! GATK will pick up the service account. You can also do this in a VM if you'd like to override the default credentials.
 
+#### <a name="sparklocal">Running GATK4 Spark tools locally:</a>
+
+* GATK4 Spark tools can be run in local mode (without a cluster). In this mode, Spark will run the tool
+  in multiple parallel execution threads using the cores in your CPU. You can control how many threads
+  Spark will use via the `--spark-master` argument.
+  
+* Examples:
+
+  Run `PrintReadsSpark` with 4 threads on your local machine:
+  ``` 
+    ./gatk PrintReadsSpark -I src/test/resources/large/CEUTrio.HiSeq.WGS.b37.NA12878.20.21.bam -O output.bam \
+        -- \
+        --spark-runner LOCAL --spark-master 'local[4]'
+  ```
+  Run `PrintReadsSpark` with as many worker threads as there are logical cores on your local machine:
+  ``` 
+    ./gatk PrintReadsSpark -I src/test/resources/large/CEUTrio.HiSeq.WGS.b37.NA12878.20.21.bam -O output.bam \
+        -- \
+        --spark-runner LOCAL --spark-master 'local[*]'
+  ```   
+  
+* Note that the Spark-specific arguments are separated from the tool-specific arguments by a `--`.
+
 #### <a name="sparkcluster">Running GATK4 Spark tools on a Spark cluster:</a>
 
 **`./gatk ToolName toolArguments -- --spark-runner SPARK --spark-master <master_url> additionalSparkArguments`**
@@ -242,7 +273,7 @@ You can download and run pre-built versions of GATK4 from the following places:
       -- \
       --spark-runner SPARK --spark-master <master_url> \
       --num-executors 5 --executor-cores 2 --executor-memory 4g \
-      --conf spark.yarn.executor.memoryOverhead=600
+      --conf spark.executor.memoryOverhead=600
     ```
 
 * You can also omit the "--num-executors" argument to enable [dynamic allocation](https://spark.apache.org/docs/latest/job-scheduling.html#dynamic-resource-allocation) if you configure the cluster properly (see the Spark website for instructions).
@@ -296,24 +327,7 @@ You can download and run pre-built versions of GATK4 from the following places:
   * Dataproc Spark clusters are configured with [dynamic allocation](https://spark.apache.org/docs/latest/job-scheduling.html#dynamic-resource-allocation) so you can omit the "--num-executors" argument and let YARN handle it automatically.
 
 #### <a name="R">Using R to generate plots</a>
-Certain GATK tools may optionally generate plots if R is installed.  We recommend **R v3.2.5** if you want to produce plots.  If you are uninterested in plotting, R is still required by several of the unit tests.  Plotting is currently untested and should be viewed as a convenience rather than a primary output.
-
-R installation is not part of the gradle build.  See http://cran.r-project.org/ for general information on installing R for your system.
-* for ubuntu see these [ubuntu specific instructions](http://cran.r-project.org/bin/linux/ubuntu/README)
-* for OSX we recommend installation through [homebrew](http://brew.sh/)
-```
-brew install R
-```
-
-The plotting R scripts require certain R packages to be installed. You can install these by running `scripts/docker/gatkbase/install_R_packages.R`.  Either run it as superuser to force installation into the sites library or run interactively and create a local library.
-```
-sudo Rscript scripts/docker/gatkbase/install_R_packages.R
-```
-**or**
-```
-R 
-source("scripts/docker/gatkbase/install_R_packages.R")
-```
+Certain GATK tools may optionally generate plots using the R installation provided within the conda environment.  If you are uninterested in plotting, R is still required by several of the unit tests.  Plotting is currently untested and should be viewed as a convenience rather than a primary output.
 
 #### <a name="tab_completion">Bash Command-line Tab Completion (BETA)</a>
 
@@ -387,7 +401,7 @@ echo "source <PATH_TO>/gatk-completion.sh" >> ~/.bashrc
     * Test report is in `build/reports/tests/test/index.html`.
     * What will happen depends on the value of the `TEST_TYPE` environment variable: 
        * unset or any other value         : run non-cloud unit and integration tests, this is the default
-       * `cloud`, `unit`, `integration`, `spark`, `python`   : run only the cloud, unit, integration, python, or Spark tests
+       * `cloud`, `unit`, `integration`, `conda`, `spark`   : run only the cloud, unit, integration, conda (python + R), or Spark tests
        * `all`                            : run the entire test suite
     * Cloud tests require being logged into `gcloud` and authenticated with a project that has access
       to the cloud test data.  They also require setting several certain environment variables.
@@ -454,7 +468,7 @@ We use [git-lfs](https://git-lfs.github.com/) to version and distribute test dat
 
 * Select "Use auto-import" and "Use default gradle wrapper".
 
-* Make sure the Gradle JVM points to Java 1.8 
+* Make sure the Gradle JVM points to Java 1.8. You may need to set this manually after creating the project, to do so find the gradle settings by clicking the wrench icon in the gradle tab on the right bar, from there edit "Gradle JVM" argument to point to Java 1.8.
 
 * Click "Finish"
 
@@ -524,7 +538,8 @@ To perform an upload, use
 ./gradlew uploadArchives
 ```
 
-Currently all builds are considered snapshots.  The archive name is based off of `git describe`.
+Builds are considered snapshots by default.  You can mark a build as a release build by setting `-Drelease=true`.  
+The archive name is based off of `git describe`.
 
 #### <a name="docker_building">Building GATK4 Docker images</a>
 
@@ -580,8 +595,6 @@ or a [pull request](https://github.com/broadinstitute/gatk/pulls). If you're not
 need to [make a fork](https://help.github.com/articles/fork-a-repo/) of the gatk repository 
 and [issue a pull request](https://help.github.com/articles/be-social/) from your fork.
 
-To become a committer, you need to make several high-quality code contributions and be approved by the current committers.
-
 For ideas on what to contribute, check issues labeled ["Help wanted (Community)"](https://github.com/broadinstitute/gatk/issues?q=is%3Aopen+is%3Aissue+label%3A%22Help+Wanted+%28Community%29%22). Comment on the issue to indicate you're interested in contibuting code and for sharing your questions and ideas.
 
 To contribute a patch:
@@ -603,7 +616,7 @@ We tend to do fairly close readings of pull requests, and you may get a lot of c
 Thank you for getting involved!
 
 ## <a name="discussions">Discussions</a>
-* [GATK forum](http://gatkforums.broadinstitute.org/) for general discussions on how to use the GATK and support questions.
+* [GATK forum](https://gatk.broadinstitute.org/hc/en-us/community/topics) for general discussions on how to use the GATK and support questions.
 * [Issue tracker](https://github.com/broadinstitute/gatk/issues) to report errors and enhancement ideas. 
 * Discussions also take place in [GATK pull requests](https://github.com/broadinstitute/gatk/pulls)
 

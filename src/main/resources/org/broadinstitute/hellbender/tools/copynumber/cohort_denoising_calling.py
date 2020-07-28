@@ -1,13 +1,16 @@
 import os
-import shutil
 
 # set theano flags
-os.environ["THEANO_FLAGS"] = "device=cpu,floatX=float64,optimizer=fast_run,compute_test_value=ignore," + \
-                             "openmp=true,blas.ldflags=-lmkl_rt,openmp_elemwise_minsize=10"
+user_theano_flags = os.environ.get("THEANO_FLAGS")
+default_theano_flags = "device=cpu,floatX=float64,optimizer=fast_run,compute_test_value=ignore," + \
+                       "openmp=true,blas.ldflags=-lmkl_rt,openmp_elemwise_minsize=10"
+theano_flags = default_theano_flags + ("" if user_theano_flags is None else "," + user_theano_flags)
+os.environ["THEANO_FLAGS"] = theano_flags
 
 import logging
 import argparse
 import gcnvkernel
+import shutil
 
 logger = logging.getLogger("cohort_denoising_calling")
 
@@ -97,6 +100,17 @@ if __name__ == "__main__":
     args = parser.parse_args()
     gcnvkernel.cli_commons.set_logging_config_from_args(args)
 
+    logger.info("THEANO_FLAGS environment variable has been set to: {theano_flags}".format(theano_flags=theano_flags))
+
+    # copy the intervals to the model and calls paths
+    # (we do this early to avoid inadvertent cleanup of temporary files)
+    gcnvkernel.io_commons.assert_output_path_writable(args.output_model_path)
+    shutil.copy(args.modeling_interval_list,
+                os.path.join(args.output_model_path, gcnvkernel.io_consts.default_interval_list_filename))
+    gcnvkernel.io_commons.assert_output_path_writable(args.output_calls_path)
+    shutil.copy(args.modeling_interval_list,
+                os.path.join(args.output_calls_path, gcnvkernel.io_consts.default_interval_list_filename))
+
     # load modeling interval list
     modeling_interval_list = gcnvkernel.io_intervals_and_counts.load_interval_list_tsv_file(args.modeling_interval_list)
 
@@ -178,18 +192,10 @@ if __name__ == "__main__":
         shared_workspace, main_task.continuous_model, main_task.continuous_model_approx,
         args.output_model_path)()
 
-    # save a copy of targets in the model path
-    shutil.copy(args.modeling_interval_list,
-                os.path.join(args.output_model_path, gcnvkernel.io_consts.default_interval_list_filename))
-
     # save calls
     gcnvkernel.io_denoising_calling.SampleDenoisingAndCallingPosteriorsWriter(
         main_denoising_config, main_calling_config, shared_workspace, main_task.continuous_model,
         main_task.continuous_model_approx, args.output_calls_path)()
-
-    # save a copy of targets in the calls path
-    shutil.copy(args.modeling_interval_list,
-                os.path.join(args.output_calls_path, gcnvkernel.io_consts.default_interval_list_filename))
 
     # save optimizer state
     if hasattr(args, 'output_opt_path'):

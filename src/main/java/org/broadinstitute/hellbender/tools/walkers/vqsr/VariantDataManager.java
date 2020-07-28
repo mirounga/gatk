@@ -7,16 +7,17 @@ import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.variantcontext.VariantContextBuilder;
 import htsjdk.variant.vcf.VCFConstants;
 import org.apache.commons.lang.ArrayUtils;
+import org.apache.commons.lang3.AnnotationUtils;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.LogManager;
 
 import org.broadinstitute.hellbender.engine.FeatureContext;
 import org.broadinstitute.hellbender.exceptions.UserException;
-import org.broadinstitute.hellbender.utils.collections.ExpandingArrayList;
 import org.broadinstitute.hellbender.utils.MathUtils;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
+import org.broadinstitute.hellbender.utils.variant.GATKVariantContextUtils;
 
 import java.util.*;
 
@@ -221,10 +222,12 @@ public class VariantDataManager {
     }
 
     public List<VariantDatum> getTrainingData() {
-        final List<VariantDatum> trainingData = new ExpandingArrayList<>();
+        final List<VariantDatum> trainingData = new ArrayList<>();
         for( final VariantDatum datum : data ) {
             if( datum.atTrainingSite && !datum.failingSTDThreshold ) {
                 trainingData.add( datum );
+            } else if (datum.failingSTDThreshold && VRAC.debugStdevThresholding) {
+                logger.warn("Datum at " + datum.loc + " with ref " + datum.referenceAllele + " and alt " + datum.alternateAllele + " failing std thresholding: " + Arrays.toString(datum.annotations));
             }
         }
         logger.info( "Training with " + trainingData.size() + " variants after standard deviation thresholding." );
@@ -239,7 +242,7 @@ public class VariantDataManager {
     }
 
     public List<VariantDatum> selectWorstVariants() {
-        final List<VariantDatum> trainingData = new ExpandingArrayList<>();
+        final List<VariantDatum> trainingData = new ArrayList<>();
 
         for( final VariantDatum datum : data ) {
             if( datum != null && !datum.failingSTDThreshold && !Double.isInfinite(datum.lod) && datum.lod < VRAC.BAD_LOD_CUTOFF ) {
@@ -254,7 +257,7 @@ public class VariantDataManager {
     }
 
     public List<VariantDatum> getEvaluationData() {
-        final List<VariantDatum> evaluationData = new ExpandingArrayList<>();
+        final List<VariantDatum> evaluationData = new ArrayList<>();
 
         for( final VariantDatum datum : data ) {
             if( datum != null && !datum.failingSTDThreshold && !datum.atTrainingSite && !datum.atAntiTrainingSite ) {
@@ -279,7 +282,7 @@ public class VariantDataManager {
     }
 
     public List<VariantDatum> getRandomDataForPlotting( final int numToAdd, final List<VariantDatum> trainingData, final List<VariantDatum> antiTrainingData, final List<VariantDatum> evaluationData ) {
-        final List<VariantDatum> returnData = new ExpandingArrayList<>();
+        final List<VariantDatum> returnData = new ArrayList<>();
         Collections.shuffle(trainingData, Utils.getRandomGenerator());
         Collections.shuffle(antiTrainingData, Utils.getRandomGenerator());
         Collections.shuffle(evaluationData, Utils.getRandomGenerator());
@@ -338,6 +341,7 @@ public class VariantDataManager {
             //if we're in allele-specific mode and an allele-specific annotation has been requested, parse the appropriate value from the list
             if(vrac.useASannotations && annotationKey.startsWith(GATKVCFConstants.ALLELE_SPECIFIC_PREFIX)) {
                 final List<Object> valueList = vc.getAttributeAsList(annotationKey);
+                //FIXME: we need to look at the ref allele here too
                 if (vc.hasAllele(datum.alternateAllele)) {
                     final int altIndex = vc.getAlleleIndex(datum.alternateAllele)-1; //-1 is to convert the index from all alleles (including reference) to just alternate alleles
                     value = Double.parseDouble((String)valueList.get(altIndex));
@@ -353,7 +357,7 @@ public class VariantDataManager {
             if( jitter && (annotationKey.equalsIgnoreCase(GATKVCFConstants.FISHER_STRAND_KEY) || annotationKey.equalsIgnoreCase(GATKVCFConstants.AS_FILTER_STATUS_KEY)) && MathUtils.compareDoubles(value, 0.0, PRECISION) == 0 ) { value += 0.01 * Utils.getRandomGenerator().nextGaussian(); }
             if( jitter && annotationKey.equalsIgnoreCase(GATKVCFConstants.INBREEDING_COEFFICIENT_KEY) && MathUtils.compareDoubles(value, 0.0, PRECISION) == 0 ) { value += 0.01 * Utils.getRandomGenerator().nextGaussian(); }
             if( jitter && (annotationKey.equalsIgnoreCase(GATKVCFConstants.STRAND_ODDS_RATIO_KEY) || annotationKey.equalsIgnoreCase(GATKVCFConstants.AS_STRAND_ODDS_RATIO_KEY)) && MathUtils.compareDoubles(value, LOG_OF_TWO, PRECISION) == 0 ) { value += 0.01 * Utils.getRandomGenerator().nextGaussian(); }   //min SOR is 2.0, then we take ln
-            if( jitter && (annotationKey.equalsIgnoreCase(VCFConstants.RMS_MAPPING_QUALITY_KEY) || annotationKey.equalsIgnoreCase(GATKVCFConstants.AS_RMS_MAPPING_QUALITY_KEY))) {
+            if( jitter && (annotationKey.equalsIgnoreCase(VCFConstants.RMS_MAPPING_QUALITY_KEY))) {
                 if( vrac.MQ_CAP > 0) {
                     value = logitTransform(value, -SAFETY_OFFSET, vrac.MQ_CAP + SAFETY_OFFSET);
                     if (MathUtils.compareDoubles(value, logitTransform(vrac.MQ_CAP, -SAFETY_OFFSET, vrac.MQ_CAP + SAFETY_OFFSET), PRECISION) == 0 ) {
@@ -363,9 +367,11 @@ public class VariantDataManager {
                     value += vrac.MQ_JITTER * Utils.getRandomGenerator().nextGaussian();
                 }
             }
-        } catch( Exception e ) {
-            //TODO: what exception is this handling ? it seems overly broad
-            value = Double.NaN; // The VQSR works with missing data by marginalizing over the missing dimension when evaluating the Gaussian mixture model
+            if( jitter && (annotationKey.equalsIgnoreCase(GATKVCFConstants.AS_RMS_MAPPING_QUALITY_KEY))){
+                value += vrac.MQ_JITTER * Utils.getRandomGenerator().nextGaussian();
+            }
+        } catch( NumberFormatException e ) {
+            value = Double.NaN; // VQSR works with missing data by marginalizing over the missing dimension when evaluating the Gaussian mixture model
         }
 
         return value;
@@ -407,7 +413,10 @@ public class VariantDataManager {
 
     private boolean doAllelesMatch(final VariantContext trainVC, final VariantDatum datum) {
         //only do this check in the allele-specific case, where each datum represents one allele
-        return datum.alternateAllele == null || trainVC.getAlternateAlleles().contains(datum.alternateAllele);
+        if (datum.alternateAllele == null) {
+            return true;
+        }
+        return GATKVariantContextUtils.isAlleleInList(datum.referenceAllele, datum.alternateAllele, trainVC.getReference(), trainVC.getAlternateAlleles());
     }
 
     protected static boolean checkVariationClass( final VariantContext evalVC, final VariantContext trainVC ) {

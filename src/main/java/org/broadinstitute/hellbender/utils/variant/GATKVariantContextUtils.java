@@ -1,34 +1,35 @@
 package org.broadinstitute.hellbender.utils.variant;
 
 import htsjdk.samtools.SAMSequenceDictionary;
-import htsjdk.samtools.util.IOUtil;
 import htsjdk.samtools.util.Locatable;
 import htsjdk.tribble.TribbleException;
+import htsjdk.utils.ValidationUtils;
 import htsjdk.variant.variantcontext.*;
 import htsjdk.variant.variantcontext.writer.Options;
 import htsjdk.variant.variantcontext.writer.VariantContextWriter;
 import htsjdk.variant.variantcontext.writer.VariantContextWriterBuilder;
-import htsjdk.variant.vcf.VCFConstants;
-import htsjdk.variant.vcf.VCFHeaderLine;
-import htsjdk.variant.vcf.VCFSimpleHeaderLine;
-import htsjdk.variant.vcf.VCFStandardHeaderLines;
-import java.nio.file.Path;
+import htsjdk.variant.vcf.*;
 import org.apache.commons.io.FilenameUtils;
 import org.apache.commons.lang3.ArrayUtils;
+import org.apache.commons.lang3.Validate;
 import org.apache.commons.lang3.tuple.MutablePair;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.broadinstitute.hellbender.tools.walkers.annotator.AnnotationUtils;
+import org.broadinstitute.hellbender.tools.walkers.annotator.allelespecific.StrandBiasUtils;
 import org.broadinstitute.hellbender.tools.walkers.genotyper.*;
-import org.broadinstitute.hellbender.utils.BaseUtils;
-import org.broadinstitute.hellbender.utils.MathUtils;
-import org.broadinstitute.hellbender.utils.Utils;
+import org.broadinstitute.hellbender.utils.*;
 import org.broadinstitute.hellbender.utils.param.ParamUtils;
+import org.broadinstitute.hellbender.utils.pileup.PileupElement;
+import org.broadinstitute.hellbender.utils.read.AlignmentUtils;
 
 import java.io.Serializable;
+import java.nio.file.Path;
 import java.util.*;
 import java.util.function.BiFunction;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 public final class GATKVariantContextUtils {
 
@@ -147,6 +148,34 @@ public final class GATKVariantContextUtils {
     }
 
     /**
+     *  Does an allele match any in a list of alleles?
+     *  We don't assume that ref1/alt1 are in their minimal representation
+     * @param ref1
+     * @param alt1
+     * @param ref2
+     * @param altList
+     * @return
+     */
+    public static boolean isAlleleInList(final Allele ref1, final Allele alt1, final Allele ref2, final List<Allele> altList) {
+        final Allele commonRef;
+        if (ref1.equals(ref2)) {
+            return altList.contains(alt1);
+        } else {
+            commonRef = determineReferenceAllele(ref1, ref2);
+        }
+        final Map<Allele, Allele> alleleMap;
+        if (ref1.equals(commonRef)) {
+            alleleMap = GATKVariantContextUtils.createAlleleMapping(commonRef, ref2, altList);
+            return alleleMap.values().contains(alt1);
+        } else if (ref2.equals(commonRef)) {
+            alleleMap = GATKVariantContextUtils.createAlleleMapping(commonRef, ref1, Arrays.asList(alt1));
+            return altList.contains(alleleMap.get(alt1));
+        } else {
+            throw new IllegalStateException("Reference alleles " + ref1 + " and " + ref2 + " have common reference allele " + commonRef + " which is equal to neither.");
+        }
+    }
+
+    /**
      * Determines the common reference allele
      *
      * @param VCs    the list of VariantContexts
@@ -159,14 +188,28 @@ public final class GATKVariantContextUtils {
         for ( final VariantContext vc : VCs ) {
             if ( contextMatchesLoc(vc, loc) ) {
                 final Allele myRef = vc.getReference();
-                if ( ref == null || ref.length() < myRef.length() )
-                    ref = myRef;
-                else if ( ref.length() == myRef.length() && ! ref.equals(myRef) )
-                    throw new TribbleException(String.format("The provided variant file(s) have inconsistent references for the same position(s) at %s:%d, %s vs. %s", vc.getContig(), vc.getStart(), ref, myRef));
+                try {
+                    ref = determineReferenceAllele(ref, myRef);
+                } catch (TribbleException e) {
+                    throw new TribbleException(String.format("The provided variant file(s) have inconsistent references " +
+                            "for the same position(s) at %s:%d, %s vs. %s", vc.getContig(), vc.getStart(), ref, myRef));
+                }
             }
         }
-
         return ref;
+    }
+
+    public static Allele determineReferenceAllele(final Allele ref1, final Allele ref2) {
+        if ( ref1 == null || ref1.length() < ref2.length() ) {
+            return ref2;
+        } else if ( ref2 == null || ref2.length() < ref1.length()) {
+            return ref1;
+        }
+        else if ( ref1.length() == ref2.length() && ! ref1.equals(ref2) ) {
+            throw new TribbleException(String.format("The provided reference alleles do not appear to represent the same position, %s vs. %s", ref1, ref2));
+        } else {  //the lengths are the same and they're equal, so we could return ref1 or ref2
+            return ref1;
+        }
     }
 
     /**
@@ -235,7 +278,7 @@ public final class GATKVariantContextUtils {
                                         final List<Allele> allelesToUse,
                                         final List<Allele> originalGT) {
         if(originalGT == null && assignmentMethod == GenotypeAssignmentMethod.BEST_MATCH_TO_ORIGINAL) {
-            throw new IllegalArgumentException("origianlGT cannot be null if assignmentMethod is BEST_MATCH_TO_ORIGINAL");
+            throw new IllegalArgumentException("original GT cannot be null if assignmentMethod is BEST_MATCH_TO_ORIGINAL");
         }
         if (assignmentMethod == GenotypeAssignmentMethod.SET_TO_NO_CALL) {
             gb.alleles(noCallAlleles(ploidy)).noGQ();
@@ -247,7 +290,13 @@ public final class GATKVariantContextUtils {
                 final GenotypeLikelihoodCalculator glCalc = GL_CALCS.getInstance(ploidy, allelesToUse.size());
                 final GenotypeAlleleCounts alleleCounts = glCalc.genotypeAlleleCountsAt(maxLikelihoodIndex);
 
-                gb.alleles(alleleCounts.asAlleleList(allelesToUse));
+                final List<Allele> finalAlleles = alleleCounts.asAlleleList(allelesToUse);
+                if (finalAlleles.contains(Allele.NON_REF_ALLELE)) {
+                    gb.alleles(GATKVariantContextUtils.noCallAlleles(originalGT.size()));
+                    gb.PL(new int[genotypeLikelihoods.length]);
+                } else {
+                    gb.alleles(finalAlleles);
+                }
                 final int numAltAlleles = allelesToUse.size() - 1;
                 if ( numAltAlleles > 0 ) {
                     gb.log10PError(GenotypeLikelihoods.getGQLog10FromLikelihoods(maxLikelihoodIndex, genotypeLikelihoods));
@@ -261,7 +310,12 @@ public final class GATKVariantContextUtils {
             for (final Allele originalAllele : originalGT) {
                 best.add((allelesToUse.contains(originalAllele) || originalAllele.isNoCall()) ? originalAllele : ref);
             }
-            gb.alleles(best);
+            if (best.contains(Allele.NON_REF_ALLELE)) {
+                gb.alleles(GATKVariantContextUtils.noCallAlleles(2));
+                gb.PL(new int[genotypeLikelihoods.length]);
+            } else {
+                gb.alleles(best);
+            }
         }
     }
 
@@ -290,6 +344,255 @@ public final class GATKVariantContextUtils {
             }
         }
         return overlaps;
+    }
+
+    /**
+     * Determines whether the provided VariantContext has real alternate alleles.
+     *
+     * @param vc  the VariantContext to evaluate
+     * @return true if it has proper alternate alleles, false otherwise
+     */
+    public static boolean isProperlyPolymorphic(final VariantContext vc) {
+        //obvious cases
+        if (vc == null || vc.getAlternateAlleles().isEmpty()) {
+            return false;
+        } else if (vc.isBiallelic()) {
+            return !(GATKVCFConstants.isSpanningDeletion(vc.getAlternateAllele(0)) || vc.isSymbolic());
+        } else if (GATKVCFConstants.isSpanningDeletion(vc.getAlternateAllele(0)) && vc.getAlternateAllele(1).equals(Allele.NON_REF_ALLELE)){
+            return false;
+        } else {
+            return true;
+        }
+    }
+
+    /** This is lifted directly from htsjdk with some minor modifications!  However, it is a private method there.
+     *
+     * This method cannot return {@link VariantContext.Type} MIXED
+     *
+     * Please see https://github.com/samtools/htsjdk/issues/999
+     *
+     * <p>Here are some cases that will not work properly, though this may not be an issue in practice:  </p>
+     *  <ul>
+     *      <li>"CGT" --> "GGA" this will be a MNP, but really it is two SNPs.</li>
+     *      <li>Spanning deletions for alternate will show as {@link VariantContext.Type} NO_VARIATION</li>
+     *      <li>Spanning deletions for reference will throw exception. </li>
+     *      <li>Reference that is symbolic will throw an exception.</li>
+     *  </ul>
+     *
+     * @param ref reference allele. Never {@code null}
+     * @param allele alternate allele to compare. Never {@code null}
+     * @return
+     */
+    public static VariantContext.Type typeOfVariant(final Allele ref, final Allele allele) {
+        Utils.nonNull(ref);
+        Utils.nonNull(allele);
+
+        if ( ref.isSymbolic() )
+            throw new IllegalStateException("Unexpected error: encountered a record with a symbolic reference allele");
+
+        if ( allele.isSymbolic() )
+            return VariantContext.Type.SYMBOLIC;
+
+        if (allele.equals(Allele.SPAN_DEL)) {
+            return VariantContext.Type.NO_VARIATION;
+        }
+
+        if ( ref.equals(Allele.SPAN_DEL) )
+            throw new IllegalStateException("Unexpected error: encountered a record with a spanning deletion reference allele");
+
+        if ( ref.length() == allele.length() ) {
+            if (ref.basesMatch(allele)) {
+                return VariantContext.Type.NO_VARIATION;
+            } else if ( allele.length() == 1 )
+                return VariantContext.Type.SNP;
+
+            // If the two alleles are the same length and only differ by one base, then still a SNP.
+            else if (IntStream.range(0, ref.length()).filter(i -> ref.getBases()[i] != allele.getBases()[i]).count() == 1) {
+                return VariantContext.Type.SNP;
+            } else
+                return VariantContext.Type.MNP;
+        }
+
+        // Important note: previously we were checking that one allele is the prefix of the other.  However, that's not an
+        // appropriate check as can be seen from the following example:
+        // REF = CTTA and ALT = C,CT,CA
+        // This should be assigned the INDEL type but was being marked as a MIXED type because of the prefix check.
+        // In truth, it should be absolutely impossible to return a MIXED type from this method because it simply
+        // performs a pairwise comparison of a single alternate allele against the reference allele (whereas the MIXED type
+        // is reserved for cases of multiple alternate alleles of different types).  Therefore, if we've reached this point
+        // in the code (so we're not a SNP, MNP, or symbolic allele), we absolutely must be an INDEL.
+
+        return VariantContext.Type.INDEL;
+
+        // old incorrect logic:
+        // if (oneIsPrefixOfOther(ref, allele))
+        //     return Type.INDEL;
+        // else
+        //     return Type.MIXED;
+    }
+
+    /**
+     *  This method should only be run on variants that are known to be indels.  See {@code typeOfVariant}
+     *
+     *<p>Here are some cases that will not work properly, though this may not be an issue in practice:  </p>
+     *  <ul>
+     *      <li>"CT" --> "CATT" this is really just a simple AT insertion, but this will show up as complex.</li>
+     *  </ul>
+     * @param ref reference allele. Never {@code null}
+     * @param allele alternate allele to compare. Never {@code null}
+     * @return true if the indel is complex (for example, also includes a SNP), false if simple indel.  If the input alleles define a variant that is not
+     *  an indel, then the behavior of this method is undefined (though will probably just return false).
+     *
+     */
+    public static boolean isComplexIndel(final Allele ref, final Allele allele) {
+
+        Utils.nonNull(ref);
+        Utils.nonNull(allele);
+
+        // Symbolic --> false
+        if (ref.isSymbolic() || (ref.length() == 0)) {
+            return false;
+        }
+        if (allele.isSymbolic() || (allele.length() == 0)) {
+            return false;
+        }
+
+        // SNP, MNP, or no variation --> false
+        if ( ref.length() == allele.length() ) {
+            return false;
+        }
+
+        // obvious simple del or simple indel
+        if ((allele.length() == 1) || (ref.length() == 1)) {
+            return false;
+        }
+
+        // If the ref starts with the alt or vice versa, this is still simple.
+        if (allele.length() > ref.length()) {
+            final boolean isAltStartsWithRef = IntStream.range(0, ref.length()).allMatch(i -> ref.getBases()[i] == allele.getBases()[i]);
+            return !isAltStartsWithRef;
+        } else {
+            final boolean isRefStartsWithAlt = IntStream.range(0, allele.length()).allMatch(i -> ref.getBases()[i] == allele.getBases()[i]);
+            return !isRefStartsWithAlt;
+        }
+    }
+
+    /**
+     * Given a set of alleles (reference and alternate), choose the allele that is the best match for the given read (and offset)
+     * TODO: This method cannot recognize equivalent alleles (See https://github.com/broadinstitute/gatk/issues/5061)
+     * @param pileupElement read and offset.  Never {@code null}
+     * @param referenceAllele Reference allele.  Never {@code null}
+     * @param altAlleles List of candidate alternate alleles.  Never {@code null}
+     * @param minBaseQualityCutoff minimum base quality for the bases that match the allele in order to be counted.
+     *                             Must be positive or zero.  If you do not want any filtering, specify 0.
+     * @return The allele (reference or from the altAlleles) that matches.  {@code null} if none are a match or the base qualities
+     *      corresponding to the allele don't all exceed the minimum.
+     */
+    public static Allele chooseAlleleForRead(final PileupElement pileupElement, final Allele referenceAllele, final List<Allele> altAlleles, int minBaseQualityCutoff) {
+        Utils.nonNull(pileupElement);
+        Utils.nonNull(referenceAllele);
+        Utils.nonNull(altAlleles);
+        ParamUtils.isPositiveOrZero(minBaseQualityCutoff, "Minimum base quality must be positive or zero.");
+
+        final boolean isRef = referenceAllele.basesMatch(getBasesForAlleleInRead(pileupElement, referenceAllele))
+                && !pileupElement.isBeforeDeletionStart() && !pileupElement.isBeforeInsertion();
+
+        Allele pileupAllele = null;
+        if (!isRef) {
+
+            for (Allele altAllele : altAlleles) {
+                final VariantContext.Type variantType = typeOfVariant(referenceAllele, altAllele);
+
+                if (variantType == VariantContext.Type.INDEL) {
+                    if (isIndelInThePileupElement(pileupElement, referenceAllele, altAllele)) {
+                        pileupAllele = altAllele;
+                    }
+
+                } else if (variantType == VariantContext.Type.MNP || variantType == VariantContext.Type.SNP) {
+                    if (doesReadContainAllele(pileupElement, altAllele) == Trilean.TRUE) {
+                        pileupAllele = altAllele;
+                    }
+                }
+            }
+        } else {
+            pileupAllele = referenceAllele;
+        }
+
+        if ((pileupAllele != null) && (getMinBaseQualityForAlleleInRead(pileupElement, pileupAllele) < minBaseQualityCutoff)) {
+            pileupAllele = null;
+        }
+
+        return pileupAllele;
+    }
+
+    private static boolean isIndelInThePileupElement(final PileupElement pileupElement, final Allele referenceAllele, final Allele altAllele) {
+        boolean isAltAlleleInThePileup = false;
+
+        // Check insertion
+        if (pileupElement.isBeforeInsertion()) {
+            final String insertionBases = pileupElement.getBasesOfImmediatelyFollowingInsertion();
+            // edge case: ignore a deletion immediately preceding an insertion as p.getBasesOfImmediatelyFollowingInsertion() returns null [EB]
+            if ((insertionBases != null) && (Allele.extend(referenceAllele, insertionBases.getBytes()).basesMatch(altAllele))) {
+                isAltAlleleInThePileup = true;
+            }
+        } else if (pileupElement.isBeforeDeletionStart()) {
+            final int deletionLength = pileupElement.getLengthOfImmediatelyFollowingIndel();
+            if ((referenceAllele.getBases().length - altAllele.getBases().length) == deletionLength) {
+                isAltAlleleInThePileup = true;
+            }
+        }
+        return isAltAlleleInThePileup;
+    }
+
+    /**
+     * @param pileupElement pileup element representing the read.  Never {@code null}
+     * @param allele allele to get overlapping bases in read.  Never {@code null}
+     * @return array of the bytes that correspond to the allele in the pileup element.  Note that, if the read ends, this
+     * list can be smaller than the length of the allele.
+     */
+    private static byte[] getBasesForAlleleInRead(final PileupElement pileupElement, final Allele allele) {
+        Utils.nonNull(pileupElement);
+        Utils.nonNull(allele);
+        return ArrayUtils.subarray(pileupElement.getRead().getBases(), pileupElement.getOffset(), pileupElement.getOffset() + allele.getBases().length);
+    }
+
+    /**
+     * TODO: Test.  And make sure to test with reference alleles to make sure "*" is not included.
+     * @param pileupElement pileup element representing the read.  Never {@code null}
+     * @param allele query allele.  Never {@code null}
+     * @return Whether the read contains the allele.  Note that unknown can occur as well.
+     */
+    public static Trilean doesReadContainAllele(final PileupElement pileupElement, final Allele allele) {
+        Utils.nonNull(pileupElement);
+        Utils.nonNull(allele);
+
+        final byte[] readBases = ArrayUtils.subarray(pileupElement.getRead().getBases(), pileupElement.getOffset(), pileupElement.getOffset() + allele.getBases().length);
+
+        if (readBases.length < allele.getBases().length) {
+            return Trilean.UNKNOWN;
+        }
+
+        if (allele.basesMatch(readBases)) {
+            return Trilean.TRUE;
+        } else {
+            return Trilean.FALSE;
+        }
+    }
+
+    /**
+     * Find the minimum base quality for all bases in a read that correspond to a given allele.
+     *
+     * @param pileupElement pileup element representing the read.  Never {@code null}
+     * @param allele query allele.  Never {@code null}
+     * @return lowest base quality seen in the corresponding bases of the read
+     */
+    private static int getMinBaseQualityForAlleleInRead(final PileupElement pileupElement, final Allele allele) {
+        Utils.nonNull(pileupElement);
+        Utils.nonNull(allele);
+        final byte[] alleleBases = allele.getBases();
+        final byte[] pileupBaseQualities = ArrayUtils.subarray(pileupElement.getRead().getBaseQualities(), pileupElement.getOffset(), pileupElement.getOffset() + alleleBases.length);
+        final OptionalInt minQuality = IntStream.range(0, pileupBaseQualities.length).map(i -> Byte.toUnsignedInt(pileupBaseQualities[i])).min();
+        return minQuality.orElse(-1);
     }
 
     public enum GenotypeMergeType {
@@ -370,18 +673,19 @@ public final class GATKVariantContextUtils {
     /**
      *
      * @param vc
-     * @param refBasesStartingAtVCWithPad
+     * @param refBasesStartingAtVCWithoutPad    Ref bases excluding the initial base of the variant context where the alt matches the ref.
+     *                                          For example, if the reference sequence is GATCCACCACCAGTCGA and we have a deletion
+     *                                          of one STR unit CCA, it is represented as a variant context TCCA -> T, where the 'T' is
+     *                                          the padding base.  In this case, {@code refBasesStartingAtVCWithoutPad} is CCACCACCAGTCGA.
      * @return
      */
-    public static Pair<List<Integer>, byte[]> getNumTandemRepeatUnits(final VariantContext vc, final byte[] refBasesStartingAtVCWithPad) {
+    public static Pair<List<Integer>, byte[]> getNumTandemRepeatUnits(final VariantContext vc, final byte[] refBasesStartingAtVCWithoutPad) {
         Utils.nonNull(vc);
-        Utils.nonNull(refBasesStartingAtVCWithPad);
+        Utils.nonNull(refBasesStartingAtVCWithoutPad);
 
         if ( ! vc.isIndel() ){ // only indels are tandem repeats
             return null;
         }
-        final boolean VERBOSE = false;
-        final String refBasesStartingAtVCWithoutPad = new String(refBasesStartingAtVCWithPad).substring(1);
 
         final Allele refAllele = vc.getReference();
         final byte[] refAlleleBases = Arrays.copyOfRange(refAllele.getBases(), 1, refAllele.length());
@@ -390,7 +694,7 @@ public final class GATKVariantContextUtils {
         final List<Integer> lengths = new ArrayList<>();
 
         for ( final Allele allele : vc.getAlternateAlleles() ) {
-            Pair<int[],byte[]> result = getNumTandemRepeatUnits(refAlleleBases, Arrays.copyOfRange(allele.getBases(), 1, allele.length()), refBasesStartingAtVCWithoutPad.getBytes());
+            Pair<int[],byte[]> result = getNumTandemRepeatUnits(refAlleleBases, Arrays.copyOfRange(allele.getBases(), 1, allele.length()), refBasesStartingAtVCWithoutPad);
 
             final int[] repetitionCount = result.getLeft();
             // repetition count = 0 means allele is not a tandem expansion of context
@@ -403,12 +707,6 @@ public final class GATKVariantContextUtils {
             lengths.add(repetitionCount[1]);  // add this alt allele's length
 
             repeatUnit = result.getRight();
-            if (VERBOSE) {
-                System.out.println("RefContext:"+refBasesStartingAtVCWithoutPad);
-                System.out.println("Ref:"+refAllele.toString()+" Count:" + String.valueOf(repetitionCount[0]));
-                System.out.println("Allele:"+allele.toString()+" Count:" + String.valueOf(repetitionCount[1]));
-                System.out.println("RU:"+new String(repeatUnit));
-            }
         }
 
         return new MutablePair<>(lengths,repeatUnit);
@@ -708,7 +1006,7 @@ public final class GATKVariantContextUtils {
             nFiltered += vc.isFiltered() ? 1 : 0;
             if ( vc.isVariant() ) variantSources.add(vc.getSource());
 
-            AlleleMapper alleleMapping = resolveIncompatibleAlleles(refAllele, vc, alleles);
+            AlleleMapper alleleMapping = resolveIncompatibleAlleles(refAllele, vc);
 
             alleles.addAll(alleleMapping.values());
 
@@ -811,14 +1109,19 @@ public final class GATKVariantContextUtils {
         return loc == null || loc.getStart() == vc.getStart();
     }
 
-    public static AlleleMapper resolveIncompatibleAlleles(final Allele refAllele, final VariantContext vc, final LinkedHashSet<Allele> allAlleles) {
+    public static AlleleMapper resolveIncompatibleAlleles(final Allele refAllele, final VariantContext vc) {
         if ( refAllele.equals(vc.getReference()) )
             return new AlleleMapper(vc);
         else {
-            final Map<Allele, Allele> map = createAlleleMapping(refAllele, vc, allAlleles);
+            final Map<Allele, Allele> map = createAlleleMapping(refAllele, vc);
             map.put(vc.getReference(), refAllele);
             return new AlleleMapper(map);
         }
+    }
+
+    public static Map<Allele, Allele> createAlleleMapping(final Allele refAllele,
+                                                          final VariantContext oneVC) {
+        return createAlleleMapping(refAllele, oneVC.getReference(), oneVC.getAlternateAlleles());
     }
 
     //TODO as part of a larger refactoring effort {@link #createAlleleMapping} can be merged with {@link ReferenceConfidenceVariantContextMerger#remapAlleles}.
@@ -835,24 +1138,19 @@ public final class GATKVariantContextUtils {
      * myRef => refAllele and myAlt => AGA
      *
      * @param refAllele          the new (extended) reference allele
-     * @param oneVC              the Variant Context to extend
-     * @param currentAlleles     the list of alleles already created
+     * @param inputRef           the reference allele that may need to be extended
+     * @param inputAlts          the alternate alleles that may need to be extended
      * @return a non-null mapping of original alleles to new (extended) ones
      */
     public static Map<Allele, Allele> createAlleleMapping(final Allele refAllele,
-                                                           final VariantContext oneVC,
-                                                           final Collection<Allele> currentAlleles) {
-        final Allele myRef = oneVC.getReference();
-        Utils.validate(refAllele.length() > myRef.length(), () -> "BUG: myRef="+myRef+" is longer than refAllele="+refAllele);
-        final byte[] extraBases = Arrays.copyOfRange(refAllele.getBases(), myRef.length(), refAllele.length());
+                                                           final Allele inputRef, final List<Allele> inputAlts) {
+        Utils.validate( refAllele.length() > inputRef.length(), () -> "BUG: inputRef="+inputRef+" is longer than refAllele="+refAllele);
+        final byte[] extraBases = Arrays.copyOfRange(refAllele.getBases(), inputRef.length(), refAllele.length());
 
         final Map<Allele, Allele> map = new LinkedHashMap<>();
-        for ( final Allele a : oneVC.getAlternateAlleles() ) {
+        for ( final Allele a : inputAlts ) {
             if ( isNonSymbolicExtendableAllele(a) ) {
                 Allele extended = Allele.extend(a, extraBases);
-                for ( final Allele b : currentAlleles )
-                    if ( extended.equals(b) )
-                        extended = b;
                 map.put(a, extended);
             } else if (a.equals(Allele.SPAN_DEL)) {
                 map.put(a, a);
@@ -960,14 +1258,26 @@ public final class GATKVariantContextUtils {
     public static VariantContext trimAlleles(final VariantContext inputVC, final boolean trimForward, final boolean trimReverse) {
         Utils.nonNull(inputVC);
 
-        if ( inputVC.getNAlleles() <= 1 || inputVC.isSNP() )
+        if ( inputVC.getNAlleles() <= 1 || inputVC.getAlleles().stream().anyMatch(a -> a.length() == 1) ) {
             return inputVC;
+        }
 
-        // see whether we need to trim common reference base from all alleles
-        final int revTrim = trimReverse ? computeReverseClipping(inputVC.getAlleles(), inputVC.getReference().getDisplayString().getBytes()) : 0;
-        final VariantContext revTrimVC = trimAlleles(inputVC, -1, revTrim);
-        final int fwdTrim = trimForward ? computeForwardClipping(revTrimVC.getAlleles()) : -1;
-        return trimAlleles(revTrimVC, fwdTrim, 0);
+        final List<byte[]> sequences = inputVC.getAlleles().stream().filter(a -> !a.isSymbolic()).map(Allele::getBases).collect(Collectors.toList());
+        final List<IndexRange> ranges = inputVC.getAlleles().stream().filter(a -> !a.isSymbolic()).map(a -> new IndexRange(0, a.length())).collect(Collectors.toList());
+
+        final Pair<Integer, Integer> shifts = AlignmentUtils.normalizeAlleles(sequences, ranges, 0, true);
+        final int endTrim = shifts.getRight();
+        final int startTrim = -shifts.getLeft();
+
+        final boolean emptyAllele = ranges.stream().anyMatch(r -> r.size() == 0);
+        final boolean restoreOneBaseAtEnd = emptyAllele && startTrim == 0;
+        final boolean restoreOneBaseAtStart = emptyAllele && startTrim > 0;
+
+        // if the end trimming consumed all the bases, leave one base
+        final int endBasesToClip = restoreOneBaseAtEnd ? endTrim - 1 : endTrim;
+        final int startBasesToClip = restoreOneBaseAtStart ? startTrim - 1 : startTrim;
+
+        return trimAlleles(inputVC, (trimForward ? startBasesToClip : 0) - 1, trimReverse ? endBasesToClip : 0);
     }
 
     /**
@@ -1023,89 +1333,6 @@ public final class GATKVariantContextUtils {
         }
 
         return updatedGenotypes;
-    }
-
-    public static int computeReverseClipping(final List<Allele> unclippedAlleles, final byte[] ref) {
-        int clipping = 0;
-        boolean stillClipping = true;
-
-        while ( stillClipping ) {
-            for ( final Allele a : unclippedAlleles ) {
-                if ( a.isSymbolic() )
-                    continue;
-
-                // we need to ensure that we don't reverse clip out all of the bases from an allele because we then will have the wrong
-                // position set for the VariantContext (although it's okay to forward clip it all out, because the position will be fine).
-                if ( a.length() - clipping == 0 )
-                    return clipping - 1;
-
-                if ( a.length() - clipping <= 0 || a.length() == 0 ) {
-                    stillClipping = false;
-                }
-                else if ( ref.length == clipping ) {
-                    return -1;
-                }
-                else if ( a.getBases()[a.length()-clipping-1] != ref[ref.length-clipping-1] ) {
-                    stillClipping = false;
-                }
-            }
-            if ( stillClipping )
-                clipping++;
-        }
-
-        return clipping;
-    }
-
-    /**
-     * Clip out any unnecessary bases off the front of the alleles
-     *
-     * The VCF spec represents alleles as block substitutions, replacing AC with A for a
-     * 1 bp deletion of the C.  However, it's possible that we'd end up with alleles that
-     * contain extra bases on the left, such as GAC/GA to represent the same 1 bp deletion.
-     * This routine finds an offset among all alleles that can be safely trimmed
-     * off the left of each allele and still represent the same block substitution.
-     *
-     * A/C => A/C
-     * AC/A => AC/A
-     * ACC/AC => CC/C
-     * AGT/CAT => AGT/CAT
-     * <DEL>/C => <DEL>/C
-     *
-     * @param unclippedAlleles a non-null list of alleles that we want to clip
-     * @return the offset into the alleles where we can safely clip, inclusive, or
-     *   -1 if no clipping is tolerated.  So, if the result is 0, then we can remove
-     *   the first base of every allele.  If the result is 1, we can remove the
-     *   second base.
-     */
-    public static int computeForwardClipping(final List<Allele> unclippedAlleles) {
-        // cannot clip unless there's at least 1 alt allele
-        if ( unclippedAlleles.size() <= 1 )
-            return -1;
-
-        // we cannot forward clip any set of alleles containing a symbolic allele
-        int minAlleleLength = Integer.MAX_VALUE;
-        for ( final Allele a : unclippedAlleles ) {
-            if ( a.isSymbolic() )
-                return -1;
-            minAlleleLength = Math.min(minAlleleLength, a.length());
-        }
-
-        final byte[] firstAlleleBases = unclippedAlleles.get(0).getBases();
-        int indexOflastSharedBase = -1;
-
-        // the -1 to the stop is that we can never clip off the right most base
-        for ( int i = 0; i < minAlleleLength - 1; i++) {
-            final byte base = firstAlleleBases[i];
-
-            for ( final Allele allele : unclippedAlleles ) {
-                if ( allele.getBases()[i] != base )
-                    return indexOflastSharedBase;
-            }
-
-            indexOflastSharedBase = i;
-        }
-
-        return indexOflastSharedBase;
     }
 
     protected static class AlleleMapper {
@@ -1167,6 +1394,108 @@ public final class GATKVariantContextUtils {
             first = false;
         }
         return new VariantContextBuilder(name, contig, start, start+length-1, alleles).make();
+    }
+
+    public static List<VariantContext> splitSomaticVariantContextToBiallelics(final VariantContext vc, final boolean trimLeft, final VCFHeader outputHeader) {
+        Utils.nonNull(vc);
+
+        if (!vc.isVariant() || vc.isBiallelic()) {
+            // non variant or biallelics already satisfy the contract
+            return Collections.singletonList(vc);
+        } else {
+            final List<VariantContext> biallelics = new LinkedList<>();
+
+            List<String> attrsSpecialFormats = new ArrayList<String>(Arrays.asList(GATKVCFConstants.AS_FILTER_STATUS_KEY, GATKVCFConstants.AS_SB_TABLE_KEY));
+            List<Map<String, Object>> attributesByAllele = splitAttributesIntoPerAlleleLists(vc, attrsSpecialFormats, outputHeader);
+            splitASSBTable(vc, attributesByAllele);
+            splitASFilters(vc, attributesByAllele);
+
+            ListIterator<Map<String, Object>> attributesByAlleleIterator = attributesByAllele.listIterator();
+
+            for (final Allele alt : vc.getAlternateAlleles()) {
+                final VariantContextBuilder builder = new VariantContextBuilder(vc);
+
+                // make biallelic alleles
+                final List<Allele> alleles = Arrays.asList(vc.getReference(), alt);
+                builder.alleles(alleles);
+                Map<String, Object> attributes = attributesByAlleleIterator.next();
+                builder.attributes(attributes);
+
+                // now add the allele specific filters to the variant context
+                String filters = (String) attributes.get(GATKVCFConstants.AS_FILTER_STATUS_KEY);
+                // checking for . and PASS should be able to be removed. these were temporarily used to indicate no allele specific filter
+                if (filters != null && !filters.isEmpty() && !filters.equals(VCFConstants.EMPTY_INFO_FIELD) && !filters.equals(GATKVCFConstants.SITE_LEVEL_FILTERS) && !filters.equals((VCFConstants.PASSES_FILTERS_v4))) {
+                    AnnotationUtils.decodeAnyASList(filters).stream().forEach(filter -> builder.filter(filter));
+                }
+
+                int alleleIndex = vc.getAlleleIndex(alt);
+                builder.genotypes(AlleleSubsettingUtils.subsetSomaticAlleles(outputHeader, vc.getGenotypes(), alleles, new int[]{0, alleleIndex}));
+                final VariantContext trimmed = trimAlleles(builder.make(), trimLeft, true);
+                biallelics.add(trimmed);
+            }
+            return biallelics;
+        }
+    }
+
+    public static void splitASSBTable(VariantContext vc, List<Map<String, Object>> attrsByAllele) {
+        List<String> sbs = StrandBiasUtils.getSBsForAlleles(vc).stream().map(ints -> StrandBiasUtils.encode(ints)).collect(Collectors.toList());
+        new IndexRange(1, sbs.size()).forEach(i -> {
+            String newattrs = String.join(AnnotationUtils.ALLELE_SPECIFIC_RAW_DELIM, new ArrayList<String>(Arrays.asList(sbs.get(0), sbs.get(i))));
+            attrsByAllele.get(i - 1).put(GATKVCFConstants.AS_SB_TABLE_KEY, newattrs);
+        });
+    }
+
+    public static void splitASFilters(VariantContext vc, List<Map<String, Object>> attrsByAllele) {
+        // the reason we are getting as list and then joining on , is because the default getAttributeAsString for a list will add spaces between items which we don't
+        // want to have to trim out later in the code
+        String asfiltersStr = String.join(",", vc.getCommonInfo().getAttributeAsStringList(GATKVCFConstants.AS_FILTER_STATUS_KEY, GATKVCFConstants.SITE_LEVEL_FILTERS));
+        List<String> filtersList = AnnotationUtils.decodeAnyASListWithRawDelim(asfiltersStr);
+        new IndexRange(0, filtersList.size()).forEach(i -> attrsByAllele.get(i).put(GATKVCFConstants.AS_FILTER_STATUS_KEY, filtersList.get(i)));
+    }
+
+    public static List<Map<String, Object>> splitAttributesIntoPerAlleleLists(VariantContext vc, List<String> skipAttributes, VCFHeader outputHeader) {
+        List<Map<String, Object>> results = new ArrayList<>(vc.getNAlleles()-1);
+        vc.getAlternateAlleles().forEach(alt -> results.add(new HashMap<>()));
+
+        Map<String, Object> attributes = vc.getAttributes();
+        attributes.entrySet().stream().filter(entry -> !skipAttributes.contains(entry.getKey())).forEachOrdered(entry -> {
+            String key = entry.getKey();
+            // default to unbounded in case header is not found
+            VCFHeaderLineCount countType = VCFHeaderLineCount.UNBOUNDED;
+            try {
+                VCFInfoHeaderLine header = outputHeader.getInfoHeaderLine(key);
+                countType = header.getCountType();
+            } catch (IllegalStateException ex) {
+                // this happens for DP if we use GATKVCFHeaderLines.getInfoLine(key)
+                // shouldn't happen now that we use the generated output header
+                logger.warn("Could not find header info for key " + key);
+            }
+            // override count type for this attribute
+            if (key.equals(GATKVCFConstants.REPEATS_PER_ALLELE_KEY)) {
+                countType = VCFHeaderLineCount.R;
+            }
+            List<Object> attr;
+            switch (countType) {
+                case A:
+                    attr = vc.getCommonInfo().getAttributeAsList(key);
+                    ValidationUtils.validateArg(attr.size() == results.size(), "Incorrect attribute size for " + key);
+                    new IndexRange(0, attr.size()).forEach(i -> results.get(i).put(key, attr.get(i)));
+                    break;
+                case R:
+                    attr = vc.getCommonInfo().getAttributeAsList(key);
+                    ValidationUtils.validateArg(attr.size() == vc.getNAlleles(), "Incorrect attribute size for " + key);
+                    new IndexRange(1, attr.size()).forEach(i -> {
+                        List<Object> newattrs = new ArrayList<Object>(Arrays.asList(attr.get(0), attr.get(i)));
+                        results.get(i-1).put(key, newattrs);
+                    });
+                    break;
+                default:
+                    results.forEach(altMap -> altMap.put(key, entry.getValue()));
+
+            }
+
+        });
+        return results;
     }
 
     /**
@@ -1292,97 +1621,6 @@ public final class GATKVariantContextUtils {
             result.add(vc);
 
         return result;
-    }
-
-    /**
-     * Are vc1 and 2 equal including their position and alleles?
-     * @param vc1 non-null VariantContext
-     * @param vc2 non-null VariantContext
-     * @return true if vc1 and vc2 are equal, false otherwise
-     */
-    public static boolean equalSites(final VariantContext vc1, final VariantContext vc2) {
-        Utils.nonNull(vc1, "vc1 is null");
-        Utils.nonNull(vc2, "vc2 is null");
-
-        if ( vc1.getStart() != vc2.getStart() ) return false;
-        if ( vc1.getEnd() != vc2.getEnd() ) return false;
-        if ( !vc1.getContig().equals(vc2.getContig())) return false;
-        return vc1.getAlleles().equals(vc2.getAlleles());
-    }
-
-    /**
-     * Returns the absolute 0-based index of an allele.
-     *
-     * <p/>
-     * If the allele is equal to the reference, the result is 0, if it equal to the first alternative the result is 1
-     * and so forth.
-     * <p/>
-     * Therefore if you want the 0-based index within the alternative alleles you need to do the following:
-     *
-     * <p/>
-     * You can indicate whether the Java object reference comparator {@code ==} can be safelly used by setting {@code useEquals} to {@code false}.
-     *
-     * @param vc the target variant context.
-     * @param allele the target allele.
-     * @param ignoreRefState whether the reference states of the allele is important at all. Has no effect if {@code useEquals} is {@code false}.
-     * @param considerRefAllele whether the reference allele should be considered. You should set it to {@code false} if you are only interested in alternative alleles.
-     * @param useEquals whether equal method should be used in the search: {@link Allele#equals(Allele,boolean)}.
-     *
-     * @throws IllegalArgumentException if {@code allele} is {@code null}.
-     * @return {@code -1} if there is no such allele that satify those criteria, a value between 0 and {@link VariantContext#getNAlleles()} {@code -1} otherwise.
-     */
-    public static int indexOfAllele(final VariantContext vc, final Allele allele, final boolean ignoreRefState, final boolean considerRefAllele, final boolean useEquals) {
-        Utils.nonNull(allele);
-        return useEquals ? indexOfEqualAllele(vc,allele,ignoreRefState,considerRefAllele) : indexOfSameAllele(vc,allele,considerRefAllele);
-    }
-
-    /**
-     * Returns the relative 0-based index of an alternative allele.
-     * <p/>
-     * The the query allele is the same as the first alternative allele, the result is 0,
-     * if it is equal to the second 1 and so forth.
-     *
-     *
-     * <p/>
-     * Notice that the ref-status of the query {@code allele} is ignored.
-     *
-     * @param vc the target variant context.
-     * @param allele the query allele.
-     * @param useEquals  whether equal method should be used in the search: {@link Allele#equals(Allele,boolean)}.
-     *
-     * @throws IllegalArgumentException if {@code allele} is {@code null}.
-     *
-     * @return {@code -1} if there is no such allele that satisfy those criteria, a value between 0 and the number
-     *  of alternative alleles - 1.
-     */
-    public static int indexOfAltAllele(final VariantContext vc, final Allele allele, final boolean useEquals) {
-        final int absoluteIndex = indexOfAllele(vc,allele,true,false,useEquals);
-        return absoluteIndex == -1 ? -1 : absoluteIndex - 1;
-    }
-
-    // Implements index search using equals.
-    private static int indexOfEqualAllele(final VariantContext vc, final Allele allele, final boolean ignoreRefState,
-                                          final boolean considerRefAllele) {
-        int i = 0;
-        for (final Allele a : vc.getAlleles())
-            if (a.equals(allele,ignoreRefState))
-                return i == 0 ? (considerRefAllele ? 0 : -1) : i;
-            else
-                i++;
-        return -1;
-    }
-
-    // Implements index search using ==.
-    private static int indexOfSameAllele(final VariantContext vc, final Allele allele, final boolean considerRefAllele) {
-        int i = 0;
-
-        for (final Allele a : vc.getAlleles())
-            if (a == allele)
-                return i == 0 ? (considerRefAllele ? 0 : -1) : i;
-            else
-                i++;
-
-        return -1;
     }
 
     /**
@@ -1801,5 +2039,37 @@ public final class GATKVariantContextUtils {
 
         return true;
     }
+
+    public static <T> List<T> removeDataForSymbolicAltAlleles(VariantContext vc, List<T> data) {
+        return removeDataForSymbolicAlleles(vc, data, false);
+    }
+
+    public static <T> List<T> removeDataForSymbolicAlleles(VariantContext vc, List<T> data) {
+        return removeDataForSymbolicAlleles(vc, data, true);
+    }
+
+    protected static <T> List<T> removeDataForSymbolicAlleles(VariantContext vc, List<T> data, boolean dataContainsReference) {
+        if (vc.hasSymbolicAlleles()) {
+            List<Allele> symbolicAlleles = vc.getAlternateAlleles().stream().filter(allele -> allele.isSymbolic()).collect(Collectors.toList());
+            // convert allele index to index for data
+            int offset = dataContainsReference ? 0 : 1;
+            List<Integer> symAltIndexes = vc.getAlleleIndices(symbolicAlleles).stream().map(i -> i-offset).collect(Collectors.toList());
+            return removeItemsByIndex(data, symAltIndexes);
+        } else {
+            return data;
+        }
+    }
+
+    public static <T> List<T> removeItemsByIndex(List<T> data, List<Integer> indexesToRemove) {
+        List<T> updated = new ArrayList<>();
+        new IndexRange(0, data.size()).forEach(i -> {
+            if (!indexesToRemove.contains(i)) {
+                updated.add(data.get(i));
+            }
+        });
+        return updated;
+    }
+
+
 }
 

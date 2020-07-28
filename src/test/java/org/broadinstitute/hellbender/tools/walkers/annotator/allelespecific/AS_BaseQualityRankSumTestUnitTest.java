@@ -4,9 +4,10 @@ import htsjdk.variant.variantcontext.*;
 import org.broadinstitute.hellbender.engine.ReferenceContext;
 import org.broadinstitute.hellbender.tools.walkers.annotator.Annotation;
 import org.broadinstitute.hellbender.testutils.ArtificialAnnotationUtils;
+import org.broadinstitute.hellbender.tools.walkers.annotator.AnnotationUtils;
 import org.broadinstitute.hellbender.tools.walkers.annotator.BaseQualityRankSumTestUnitTest;
 import org.broadinstitute.hellbender.utils.MannWhitneyU;
-import org.broadinstitute.hellbender.utils.genotyper.ReadLikelihoods;
+import org.broadinstitute.hellbender.utils.genotyper.AlleleLikelihoods;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
 import org.testng.Assert;
@@ -67,7 +68,10 @@ public class AS_BaseQualityRankSumTestUnitTest extends ReducibleAnnotationBaseTe
         final List<GATKRead> refReads = Arrays.stream(refBaseQuals).mapToObj(i -> BaseQualityRankSumTestUnitTest.makeRead(i)).collect(Collectors.toList());
         final List<GATKRead> alt1Reads = Arrays.stream(alt1BaseQuals).mapToObj(i -> BaseQualityRankSumTestUnitTest.makeRead(i)).collect(Collectors.toList());
         final List<GATKRead> alt2Reads = Arrays.stream(alt2BaseQuals).mapToObj(i -> BaseQualityRankSumTestUnitTest.makeRead(i)).collect(Collectors.toList());
-        final ReadLikelihoods<Allele> likelihoods =
+        refReads.forEach(read -> read.setPosition("1", 10));
+        alt1Reads.forEach(read -> read.setPosition("1", 10));
+        alt2Reads.forEach(read -> read.setPosition("1", 10));
+        final AlleleLikelihoods<GATKRead, Allele> likelihoods =
                 ArtificialAnnotationUtils.makeTriAllelicLikelihoods(SAMPLE_1, refReads, alt1Reads, alt2Reads, new ArrayList<GATKRead>(), -100.0, -100.0, -100,0, REF, ALT1, ALT2);
 
         final ReferenceContext ref = null;
@@ -86,7 +90,7 @@ public class AS_BaseQualityRankSumTestUnitTest extends ReducibleAnnotationBaseTe
         String secondExpected = String.format("%.1f",Math.round(Math.floor((expectedAlt2.getZ() )/0.1))*0.1);
 
         // Note, when we output the raw annotated RankSum score, we output the MannWhitneyU test Z value as a histogram for each alt allele
-        final String expectedAnnotation = AS_RankSumTest.PRINT_DELIM + firstExpected + ",1" + AS_RankSumTest.PRINT_DELIM + secondExpected + ",1";
+        final String expectedAnnotation = AnnotationUtils.ALLELE_SPECIFIC_RAW_DELIM + firstExpected + ",1" + AnnotationUtils.ALLELE_SPECIFIC_RAW_DELIM + secondExpected + ",1";
 
         final MannWhitneyU.Result annotateResult = mannWhitneyU.test(Stream.concat(Arrays.stream(alt1BaseQuals).boxed(), Arrays.stream(alt2BaseQuals).boxed()).mapToDouble(i->(double)i).toArray(), Arrays.stream(refBaseQuals).asDoubleStream().toArray(), MannWhitneyU.TestType.FIRST_DOMINATES);
         final double annotateZScore = annotateResult.getZ();
@@ -109,7 +113,7 @@ public class AS_BaseQualityRankSumTestUnitTest extends ReducibleAnnotationBaseTe
         final int[] refBaseQuals = {50, 60};
         final List<GATKRead> refReads = Arrays.stream(refBaseQuals).mapToObj(i -> BaseQualityRankSumTestUnitTest.makeRead(i)).collect(Collectors.toList());
         final List<GATKRead> alt1Reads = Arrays.stream(alt1BaseQuals).mapToObj(i -> BaseQualityRankSumTestUnitTest.makeRead(i)).collect(Collectors.toList());
-        final ReadLikelihoods<Allele> likelihoods =
+        final AlleleLikelihoods<GATKRead, Allele> likelihoods =
                 ArtificialAnnotationUtils.makeLikelihoods(SAMPLE_1, refReads, alt1Reads,  -100.0, -100.0, REF, ALT1);
 
         final ReferenceContext ref = null;

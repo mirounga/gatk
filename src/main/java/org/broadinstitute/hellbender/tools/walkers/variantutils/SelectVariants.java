@@ -14,12 +14,15 @@ import htsjdk.variant.vcf.*;
 
 import java.nio.file.Path;
 import org.broadinstitute.barclay.argparser.Argument;
+import org.broadinstitute.barclay.argparser.ArgumentCollection;
 import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
 import org.broadinstitute.barclay.argparser.Hidden;
 import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
-import org.broadinstitute.hellbender.engine.GATKPathSpecifier;
+import org.broadinstitute.hellbender.engine.GATKPath;
 import org.broadinstitute.hellbender.engine.filters.*;
+import org.broadinstitute.hellbender.tools.genomicsdb.GenomicsDBArgumentCollection;
+import org.broadinstitute.hellbender.tools.genomicsdb.GenomicsDBOptions;
 import picard.cmdline.programgroups.VariantManipulationProgramGroup;
 import org.broadinstitute.hellbender.engine.FeatureInput;
 import org.broadinstitute.hellbender.engine.FeatureContext;
@@ -57,7 +60,7 @@ import java.util.stream.Collectors;
  *     <li>Specify criteria for inclusion that place thresholds on annotation values, e.g. "DP > 1000" (depth of
  *     coverage greater than 1000x), "AF < 0.25" (sites with allele frequency less than 0.25). These criteria are written
  *     as "JEXL expressions", which are documented in the
- *     <a href="https://www.broadinstitute.org/gatk/guide/article?id=1255">article about using JEXL expressions</a>.</li>
+ *     <a href="https://gatk.broadinstitute.org/hc/en-us/articles/360035891011-JEXL-filtering-expressions">article about using JEXL expressions</a>.</li>
  *     <li>Provide concordance or discordance tracks in order to include or exclude variants that are also present
  *     in other given callsets.</li>
  *     <li>Select variants based on criteria like their type (e.g. INDELs only), evidence of mendelian violation,
@@ -137,7 +140,7 @@ public final class SelectVariants extends VariantWalker {
     @Argument(fullName = StandardArgumentDefinitions.OUTPUT_LONG_NAME,
               shortName = StandardArgumentDefinitions.OUTPUT_SHORT_NAME,
               doc="Path to which variants should be written")
-    public GATKPathSpecifier vcfOutput = null;
+    public GATKPath vcfOutput = null;
 
     /**
      * This argument can be specified multiple times in order to provide multiple sample names, or to specify
@@ -420,6 +423,9 @@ public final class SelectVariants extends VariantWalker {
             doc="Suppress reference path in output for test result differencing")
     private boolean suppressReferencePath = false;
 
+    @ArgumentCollection
+    private GenomicsDBArgumentCollection genomicsdbArgs = new GenomicsDBArgumentCollection();
+
     private VariantContextWriter vcfWriter = null;
 
     private enum NumberAlleleRestriction {
@@ -450,6 +456,16 @@ public final class SelectVariants extends VariantWalker {
     private final List<Allele> diploidNoCallAlleles = GATKVariantContextUtils.noCallAlleles(2);
 
     private final Map<Integer, Integer> ploidyToNumberOfAlleles = new LinkedHashMap<Integer, Integer>();
+
+    @Override
+    protected GenomicsDBOptions getGenomicsDBOptions() {
+        if (genomicsDBOptions == null) {
+            genomicsDBOptions = new GenomicsDBOptions(referenceArguments.getReferencePath(), genomicsdbArgs);
+        }
+        return genomicsDBOptions;
+    }
+
+    final private PriorityQueue<VariantContext> pendingVariants = new PriorityQueue<>(Comparator.comparingInt(VariantContext::getStart));
 
     /**
      * Set up the VCF writer, the sample expressions and regexs, filters inputs, and the JEXL matcher
@@ -533,6 +549,14 @@ public final class SelectVariants extends VariantWalker {
     @Override
     public void apply(VariantContext vc, ReadsContext readsContext, ReferenceContext ref, FeatureContext featureContext) {
 
+        /*check for pending variants to write out
+        since variant starts will only be moved further right, we can write out a pending variant if the current variant start is after the pending variant start
+        variant record locations can move to the right due to allele trimming if preserveAlleles is false
+         */
+        while (!pendingVariants.isEmpty() && (pendingVariants.peek().getStart()<=vc.getStart() || !(pendingVariants.peek().getContig().equals(vc.getContig())))) {
+            vcfWriter.add(pendingVariants.poll());
+        }
+
         if (fullyDecode) {
             vc = vc.fullyDecode(getHeaderForVariants(), lenientVCFProcessing);
         }
@@ -580,11 +604,15 @@ public final class SelectVariants extends VariantWalker {
         initalizeAlleleAnyploidIndicesCache(vc);
 
         final VariantContext sub = subsetRecord(vc, preserveAlleles, removeUnusedAlternates);
-        final VariantContextBuilder builder = new VariantContextBuilder(vc);
+        final VariantContext filteredGenotypeToNocall;
+
         if ( setFilteredGenotypesToNocall ) {
+            final VariantContextBuilder builder = new VariantContextBuilder(sub);
             GATKVariantContextUtils.setFilteredGenotypeToNocall(builder, sub, setFilteredGenotypesToNocall, this::getGenotypeFilters);
+            filteredGenotypeToNocall = builder.make();
+        } else {
+            filteredGenotypeToNocall = sub;
         }
-        final VariantContext filteredGenotypeToNocall = setFilteredGenotypesToNocall ? builder.make(): sub;
 
         // Not excluding non-variants OR (subsetted polymorphic variants AND not spanning deletion) AND (including filtered loci OR subsetted variant) is not filtered
         // If exclude non-variants argument is not called, filtering will NOT occur.
@@ -617,9 +645,20 @@ public final class SelectVariants extends VariantWalker {
                     (!selectRandomFraction || Utils.getRandomGenerator().nextDouble() < fractionRandom)) {
                 //remove annotations being dropped and write variantcontext
                 final VariantContext variantContextToWrite = buildVariantContextWithDroppedAnnotationsRemoved(filteredGenotypeToNocall);
-                vcfWriter.add(variantContextToWrite);
+                pendingVariants.add(variantContextToWrite);
             }
         }
+    }
+
+    /**
+     * write out all remaining pending variants
+     */
+    @Override
+    public Object onTraversalSuccess() {
+        while(!pendingVariants.isEmpty()) {
+            vcfWriter.add(pendingVariants.poll());
+        }
+        return null;
     }
 
     private VariantContext buildVariantContextWithDroppedAnnotationsRemoved(final VariantContext vc) {
@@ -668,14 +707,15 @@ public final class SelectVariants extends VariantWalker {
      * Initialize the cache of PL index to a list of alleles for each ploidy.
      *
      * @param vc    Variant Context
-    */
+     */
     private void initalizeAlleleAnyploidIndicesCache(final VariantContext vc) {
         if (vc.getType() != VariantContext.Type.NO_VARIATION) { // Bypass if not a variant
             for (final Genotype g : vc.getGenotypes()) {
-                if (g.getPloidy() != 0) {
-                    // Make a new entry if the cache does not have an entry for the ploidy or the number of alleles for the cached ploidy is less
-                    // that the
-                    if (!ploidyToNumberOfAlleles.containsKey(g.getPloidy()) || ploidyToNumberOfAlleles.get(g.getPloidy()) < vc.getNAlleles()) {
+                // Make a new entry if the we have not yet cached a PL to allele indices map for this ploidy and allele count
+                // skip if there are no PLs -- this avoids hanging on high-allelic somatic samples, for example, where
+                // there's no need for the PL indices since they don't exist
+                if (g.getPloidy() != 0 && (!ploidyToNumberOfAlleles.containsKey(g.getPloidy()) || ploidyToNumberOfAlleles.get(g.getPloidy()) < vc.getNAlleles())) {
+                    if (vc.getGenotypes().stream().anyMatch(Genotype::hasLikelihoods)) {
                         GenotypeLikelihoods.initializeAnyploidPLIndexToAlleleIndices(vc.getNAlleles() - 1, g.getPloidy());
                         ploidyToNumberOfAlleles.put(g.getPloidy(), vc.getNAlleles());
                     }

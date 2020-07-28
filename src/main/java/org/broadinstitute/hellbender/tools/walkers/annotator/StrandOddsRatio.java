@@ -5,9 +5,9 @@ import htsjdk.variant.variantcontext.Allele;
 import htsjdk.variant.variantcontext.GenotypesContext;
 import htsjdk.variant.variantcontext.VariantContext;
 import org.broadinstitute.barclay.help.DocumentedFeature;
-import org.broadinstitute.hellbender.utils.genotyper.ReadLikelihoods;
+import org.broadinstitute.hellbender.utils.genotyper.AlleleLikelihoods;
 import org.broadinstitute.hellbender.utils.help.HelpConstants;
-import org.broadinstitute.hellbender.utils.pileup.PileupElement;
+import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
 
 import java.util.Collections;
@@ -39,21 +39,21 @@ import static java.lang.Math.min;
  *
  * <p>We can then represent the Odds Ratios with the equation:</p>
  *
- * <img src="http://latex.codecogs.com/svg.latex?$$ R = \frac{X[0][0] * X[1][1]}{X[0][1] * X[1][0]} $$" border="0"/>
+ * <img src="http://latex.codecogs.com/svg.latex?R = \frac{X[0][0] * X[1][1]}{X[0][1] * X[1][0]}" border="0"/>
  *
  * <p>and its inverse:</p>
  *
- * <img src="http://latex.codecogs.com/svg.latex?$$ \frac{1}{R} = \frac{X[0][1] * X[1][0]}{X[0][0] * X[1][1]} $$" border="0"/>
+ * <img src="http://latex.codecogs.com/svg.latex?\frac{1}{R} = \frac{X[0][1] * X[1][0]}{X[0][0] * X[1][1]}" border="0"/>
  *
  * <p>The sum R + 1/R is used to detect a difference in strand bias for REF and for ALT. The sum makes it symmetric.
  * A high value is indicative of large difference where one entry is very small compared to the others. A scale factor
  * of refRatio/altRatio where</p>
  *
- * <img src="http://latex.codecogs.com/svg.latex?$$ refRatio = \frac{min(X[0][0], X[0][1])}{max(X[0][0], X[0][1])} $$" border="0"/>
+ * <img src="http://latex.codecogs.com/svg.latex?refRatio = \frac{min(X[0][0], X[0][1])}{max(X[0][0], X[0][1])}" border="0"/>
  *
  * <p>and </p>
  *
- * <img src="http://latex.codecogs.com/svg.latex?$$ altRatio = \frac{min(X[1][0], X[1][1])}{max(X[1][0], X[1][1])} $$" border="0"/>
+ * <img src="http://latex.codecogs.com/svg.latex?altRatio = \frac{min(X[1][0], X[1][1])}{max(X[1][0], X[1][1])}" border="0"/>
  *
  * <p>ensures that the annotation value is large only. The final SOR annotation is given in natural log space.</p>
  *
@@ -84,18 +84,18 @@ import static java.lang.Math.min;
  *
  * <p>Calculate SOR with the following.</p>
  *
- * <p><img src="http://latex.codecogs.com/svg.latex?$$ SOR = ln(symmetricalRatio) + ln(refRatio) - ln(altRatio) $$" border="0"/></p>
+ * <p><img src="http://latex.codecogs.com/svg.latex?SOR = ln(symmetricalRatio) + ln(refRatio) - ln(altRatio)" border="0"/></p>
  *
  * <p>where</p>
  *
- * <p><img src="http://latex.codecogs.com/svg.latex?$$ symmetricalRatio = R + \frac{1}{R} $$" border="0"/></p>
- * <p><img src="http://latex.codecogs.com/svg.latex?$$ R = \frac{(\frac{refFw}{refRv})}{(\frac{altFw}{altRv})} = \frac{(refFw*altRv)}{(altFw*refRv)} $$" border="0"/></p>
+ * <p><img src="http://latex.codecogs.com/svg.latex?symmetricalRatio = R + \frac{1}{R}" border="0"/></p>
+ * <p><img src="http://latex.codecogs.com/svg.latex?R = \frac{(\frac{refFw}{refRv})}{(\frac{altFw}{altRv})} = \frac{(refFw*altRv)}{(altFw*refRv)}" border="0"/></p>
  *
- * <p><img src="http://latex.codecogs.com/svg.latex?$$ refRatio = \frac{(smaller\;of\;refFw\;and\;refRv)}{(larger\;of\;refFw\;and\;refRv)} $$" border="0"/></p>
+ * <p><img src="http://latex.codecogs.com/svg.latex?refRatio =\frac{(smaller\;of\;refFw\;and\;refRv)}{(larger\;of\;refFw\;and\;refRv)}" border="0"/></p>
  *
  * <p>and</p>
  *
- * <p><img src="http://latex.codecogs.com/svg.latex?$$ altRatio = \frac{(smaller\;of\;altFw\;and\;altRv)}{(larger\;of\;altFw\;and\;altRv)} $$" border="0"/></p>
+ * <p><img src="http://latex.codecogs.com/svg.latex?altRatio = \frac{(smaller\;of\;altFw\;and\;altRv)}{(larger\;of\;altFw\;and\;altRv)}" border="0"/></p>
  *
  * <p>Fill out the component equations with the example counts to calculate SOR.</p>
  *
@@ -129,17 +129,9 @@ public final class StrandOddsRatio extends StrandBiasTest implements StandardAnn
         return tableFromPerSampleAnnotations != null ? annotationForOneTable(calculateSOR(tableFromPerSampleAnnotations)) : null;
     }
 
-    @Override
-    protected Map<String, Object> calculateAnnotationFromStratifiedContexts(Map<String, List<PileupElement>> stratifiedContexts,
-                                                                            final VariantContext vc){
-        final int[][] tableNoFiltering = getPileupContingencyTable(stratifiedContexts, vc.getReference(), vc.getAlternateAlleles(), -1, MIN_COUNT);
-        final double ratio = calculateSOR(tableNoFiltering);
-        return annotationForOneTable(ratio);
-    }
-
 
     @Override
-    protected Map<String, Object> calculateAnnotationFromLikelihoods(final ReadLikelihoods<Allele> likelihoods, final VariantContext vc){
+    protected Map<String, Object> calculateAnnotationFromLikelihoods(final AlleleLikelihoods<GATKRead, Allele> likelihoods, final VariantContext vc){
         final int[][] table = getContingencyTable(likelihoods, vc, MIN_COUNT);
         return annotationForOneTable(calculateSOR(table));
     }

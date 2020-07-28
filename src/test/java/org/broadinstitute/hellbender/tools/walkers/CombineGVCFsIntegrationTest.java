@@ -33,6 +33,12 @@ import java.util.function.BiConsumer;
 import java.util.stream.Collectors;
 
 public class CombineGVCFsIntegrationTest extends CommandLineProgramTest {
+    // If true, update the expected outputs in tests that assert an exact match vs. prior output,
+    // instead of actually running the tests. Can be used with "./gradlew test -Dtest.single=HaplotypeCallerIntegrationTest"
+    // to update all of the exact-match tests at once. After you do this, you should look at the
+    // diffs in the new expected outputs in git to confirm that they are consistent with expectations.
+    public static final boolean UPDATE_EXACT_MATCH_EXPECTED_OUTPUTS = false;
+
     private static final List<String> NO_EXTRA_ARGS = Collections.emptyList();
     private static final List<String> ATTRIBUTES_TO_IGNORE = Arrays.asList(
             "RAW_MQ", //MQ data format and key have changed since GATK3
@@ -47,6 +53,14 @@ public class CombineGVCFsIntegrationTest extends CommandLineProgramTest {
 
             assertion.accept(actual.get(i), expected.get(i));
         }
+    }
+
+    /*
+     * Make sure that someone didn't leave the UPDATE_EXACT_MATCH_EXPECTED_OUTPUTS toggle turned on
+     */
+    @Test
+    public void assertThatExpectedOutputUpdateToggleIsDisabled() {
+        Assert.assertFalse(UPDATE_EXACT_MATCH_EXPECTED_OUTPUTS, "The toggle to update expected outputs should not be left enabled");
     }
 
     @DataProvider
@@ -134,8 +148,8 @@ public class CombineGVCFsIntegrationTest extends CommandLineProgramTest {
     }
 
     @Test(dataProvider = "gvcfsToCombine")
-    public void compareToGATK3ExpectedResults(File[] inputs, File outputFile, List<String> extraArgs, String reference) throws IOException, NoSuchAlgorithmException {
-        assertVariantContextsMatch(Arrays.asList(inputs), outputFile, extraArgs, reference, ATTRIBUTES_TO_IGNORE);
+    public void compareToExpectedResults(File[] inputs, File expected, List<String> extraArgs, String reference) throws IOException, NoSuchAlgorithmException {
+        assertVariantContextsMatch(Arrays.asList(inputs), expected, extraArgs, reference, ATTRIBUTES_TO_IGNORE);
     }
 
     public static void runProcess(ProcessController processController, String[] command) {
@@ -151,7 +165,7 @@ public class CombineGVCFsIntegrationTest extends CommandLineProgramTest {
         final VCFHeader header = getHeaderFromFile(expected);
 
         runCombineGVCFSandAssertSomething(inputs, expected, extraArgs, (a, e) -> {
-            VariantContextTestUtils.assertVariantContextsAreEqualAlleleOrderIndependent(a, e, attributesToIgnore, header);
+            VariantContextTestUtils.assertVariantContextsAreEqualAlleleOrderIndependent(a, e, attributesToIgnore, Collections.emptyList(), header);
         }, reference);
     }
 
@@ -161,21 +175,23 @@ public class CombineGVCFsIntegrationTest extends CommandLineProgramTest {
 
         final ArgumentsBuilder args = new ArgumentsBuilder();
         args.addReference(new File(reference))
-                .addOutput(output);
+                .addOutput(UPDATE_EXACT_MATCH_EXPECTED_OUTPUTS ? expected : output);
         for (File input: inputs) {
-            args.addArgument("V", input.getAbsolutePath());
+            args.add("V", input.getAbsolutePath());
         }
 
         // Handling a difference in syntax between GATK3 and GATK4 wrt. annotation groups
         additionalArguments = additionalArguments.stream().map(a -> a.contains("Standard") ? a + "Annotation" : a).collect(Collectors.toList());
-        additionalArguments.forEach(args::add);
+        additionalArguments.forEach(args::addRaw);
 
         Utils.resetRandomGenerator();
         runCommandLine(args);
 
-        final List<VariantContext> expectedVC = getVariantContexts(expected);
-        final List<VariantContext> actualVC = getVariantContexts(output);
-        assertForEachElementInLists(actualVC, expectedVC, assertion);
+        if (!UPDATE_EXACT_MATCH_EXPECTED_OUTPUTS) {
+            final List<VariantContext> expectedVC = getVariantContexts(expected);
+            final List<VariantContext> actualVC = getVariantContexts(output);
+            assertForEachElementInLists(actualVC, expectedVC, assertion);
+        }
     }
 
     /**
@@ -208,7 +224,7 @@ public class CombineGVCFsIntegrationTest extends CommandLineProgramTest {
                 .addOutput(output);
         args.addVCF(getTestFile("gvcfExample1.vcf"));
         args.addVCF(getTestFile("gvcfExample2.vcf"));
-        args.add(" -L 20:69485-69509");
+        args.addRaw(" -L 20:69485-69509");
 
         runCommandLine(args);
 
@@ -238,17 +254,17 @@ public class CombineGVCFsIntegrationTest extends CommandLineProgramTest {
         final ArgumentsBuilder args = new ArgumentsBuilder();
         args.addReference(new File(b37_reference_20_21))
                 .addOutput(output);
-        args.addArgument("variant",getToolTestDataDir()+"tetraploid-gvcf-1.vcf");
-        args.addArgument("variant",getToolTestDataDir()+"tetraploid-gvcf-2.vcf");
-        args.addArgument("variant",getToolTestDataDir()+"tetraploid-gvcf-3.vcf");
-        args.addArgument("intervals", getToolTestDataDir() + "tetraploid-gvcfs.intervals");
+        args.add("variant",getToolTestDataDir()+"tetraploid-gvcf-1.vcf");
+        args.add("variant",getToolTestDataDir()+"tetraploid-gvcf-2.vcf");
+        args.add("variant",getToolTestDataDir()+"tetraploid-gvcf-3.vcf");
+        args.add("intervals", getToolTestDataDir() + "tetraploid-gvcfs.interval_list");
 
         runCommandLine(args);
 
         final List<VariantContext> expectedVC = getVariantContexts(getTestFile("tetraploidRun.GATK3.g.vcf"));
         final List<VariantContext> actualVC = getVariantContexts(output);
         final VCFHeader header = getHeaderFromFile(output);
-        assertForEachElementInLists(actualVC, expectedVC, (a, e) -> VariantContextTestUtils.assertVariantContextsAreEqualAlleleOrderIndependent(a, e, Arrays.asList(), header));
+        assertForEachElementInLists(actualVC, expectedVC, (a, e) -> VariantContextTestUtils.assertVariantContextsAreEqualAlleleOrderIndependent(a, e, Arrays.asList(), Collections.emptyList(), header));
 
     }
 
@@ -261,7 +277,7 @@ public class CombineGVCFsIntegrationTest extends CommandLineProgramTest {
                 .addOutput(output);
         args.addVCF(getTestFile("gvcfExample1.vcf"));
         args.addVCF(getTestFile("gvcfExample2.vcf"));
-        args.add(" -L 20:69512-69634");
+        args.addRaw(" -L 20:69512-69634");
 
         runCommandLine(args);
 
@@ -280,7 +296,7 @@ public class CombineGVCFsIntegrationTest extends CommandLineProgramTest {
                 .addOutput(output);
         args.addVCF(getTestFile("gvcfExample1.vcf"));
         args.addVCF(getTestFile("gvcfExample2.vcf"));
-        args.add(" -L 1:69512-69634");
+        args.addRaw(" -L 1:69512-69634");
 
         runCommandLine(args);
 
@@ -299,7 +315,7 @@ public class CombineGVCFsIntegrationTest extends CommandLineProgramTest {
                 .addOutput(output);
         args.addVCF(getTestFile("gvcfExample1.vcf"));
         args.addVCF(getTestFile("gvcfExample2.vcf"));
-        args.add(" -L 20:69511");
+        args.addRaw(" -L 20:69511");
 
         runCommandLine(args);
 
@@ -320,8 +336,8 @@ public class CombineGVCFsIntegrationTest extends CommandLineProgramTest {
                 .addOutput(output);
         args.addVCF(getTestFile("gvcfExample1.vcf"));
         args.addVCF(getTestFile("gvcfExample2.vcf"));
-        args.add("--" + CombineGVCFs.IGNORE_VARIANTS_THAT_START_OUTSIDE_INTERVAL );
-        args.add(" -L 20:69635");
+        args.addRaw("--" + CombineGVCFs.IGNORE_VARIANTS_THAT_START_OUTSIDE_INTERVAL );
+        args.addRaw(" -L 20:69635");
 
         runCommandLine(args);
 
@@ -345,8 +361,8 @@ public class CombineGVCFsIntegrationTest extends CommandLineProgramTest {
                 .addOutput(output);
         args.addVCF(getTestFile("gvcfExample1.vcf"));
         args.addVCF(getTestFile("gvcfExample2.vcf"));
-        args.add("--" + CombineGVCFs.IGNORE_VARIANTS_THAT_START_OUTSIDE_INTERVAL );
-        args.add(" -L 20:69772-69783");
+        args.addRaw("--" + CombineGVCFs.IGNORE_VARIANTS_THAT_START_OUTSIDE_INTERVAL );
+        args.addRaw(" -L 20:69772-69783");
 
         runCommandLine(args);
 
@@ -434,7 +450,7 @@ public class CombineGVCFsIntegrationTest extends CommandLineProgramTest {
         args.addReference(new File(b37Reference)).addOutput(output)
                 .addVCF(getTestFile("NA12878.MT.filtered.g.vcf"))
                 .addVCF(getTestFile("NA19240.MT.filtered.g.vcf"))
-                .addBooleanArgument(CombineGVCFs.SOMATIC_INPUT_LONG_NAME, true);
+                .add(CombineGVCFs.SOMATIC_INPUT_LONG_NAME, true);
         runCommandLine(args);
 
         final List<VariantContext> actualVC = getVariantContexts(output);
@@ -473,7 +489,7 @@ public class CombineGVCFsIntegrationTest extends CommandLineProgramTest {
 
         final List<VariantContext> expectedVC = getVariantContexts(getTestFile("twoSamples.MT.g.vcf"));
         final VCFHeader header = getHeaderFromFile(output);
-        assertForEachElementInLists(actualVC, expectedVC, (a, e) -> VariantContextTestUtils.assertVariantContextsAreEqualAlleleOrderIndependent(a, e, Arrays.asList(), header));
+        assertForEachElementInLists(actualVC, expectedVC, (a, e) -> VariantContextTestUtils.assertVariantContextsAreEqualAlleleOrderIndependent(a, e, Arrays.asList(), Collections.emptyList(), header));
     }
 
     //test for combining with a multi-sample input GVCF because we'll need to do a hierarchical merge in the absence of GenomicsDB support for somatic GVCFs
@@ -486,7 +502,7 @@ public class CombineGVCFsIntegrationTest extends CommandLineProgramTest {
         args.addOutput(output);
         args.addVCF(getTestFile("twoSamples.MT.g.vcf"));
         args.addVCF(getTestFile("NA12891.MT.filtered.g.vcf"));
-        args.addBooleanArgument(CombineGVCFs.SOMATIC_INPUT_LONG_NAME, true);
+        args.add(CombineGVCFs.SOMATIC_INPUT_LONG_NAME, true);
         runCommandLine(args);
 
         final File output2 = createTempFile("expected", ".vcf");
@@ -496,13 +512,13 @@ public class CombineGVCFsIntegrationTest extends CommandLineProgramTest {
         args2.addVCF(getTestFile("NA12878.MT.filtered.g.vcf"));
         args2.addVCF(getTestFile("NA19240.MT.filtered.g.vcf"));
         args2.addVCF(getTestFile("NA12891.MT.filtered.g.vcf"));
-        args2.addBooleanArgument(CombineGVCFs.SOMATIC_INPUT_LONG_NAME, true);
+        args2.add(CombineGVCFs.SOMATIC_INPUT_LONG_NAME, true);
         runCommandLine(args2);
 
         final List<VariantContext> expectedVC = getVariantContexts(output2);
         final List<VariantContext> actualVC = getVariantContexts(output);
         final VCFHeader header = getHeaderFromFile(output);
-        assertForEachElementInLists(actualVC, expectedVC, (a, e) -> VariantContextTestUtils.assertVariantContextsAreEqualAlleleOrderIndependent(a, e, Arrays.asList(), header));
+        assertForEachElementInLists(actualVC, expectedVC, (a, e) -> VariantContextTestUtils.assertVariantContextsAreEqualAlleleOrderIndependent(a, e, Collections.emptyList(), Collections.emptyList(), header));
     }
 
     @Test
@@ -514,8 +530,8 @@ public class CombineGVCFsIntegrationTest extends CommandLineProgramTest {
         args.addVCF(getTestFile("NA12878.MT.filtered.g.vcf"));
         args.addVCF(getTestFile("NA19240.MT.filtered.g.vcf"));
         args.addVCF(getTestFile("NA12891.MT.filtered.g.vcf"));
-        args.addBooleanArgument(CombineGVCFs.SOMATIC_INPUT_LONG_NAME, true);
-        args.addBooleanArgument(CombineGVCFs.DROP_SOMATIC_FILTERING_ANNOTATIONS_LONG_NAME, true);
+        args.add(CombineGVCFs.SOMATIC_INPUT_LONG_NAME, true);
+        args.add(CombineGVCFs.DROP_SOMATIC_FILTERING_ANNOTATIONS_LONG_NAME, true);
         runCommandLine(args);
 
         final List<VariantContext> actualVCs = getVariantContexts(output);

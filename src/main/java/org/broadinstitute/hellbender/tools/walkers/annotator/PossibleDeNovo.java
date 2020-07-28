@@ -8,8 +8,9 @@ import org.apache.logging.log4j.Logger;
 import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.engine.ReferenceContext;
 import org.broadinstitute.hellbender.utils.Utils;
-import org.broadinstitute.hellbender.utils.genotyper.ReadLikelihoods;
+import org.broadinstitute.hellbender.utils.genotyper.AlleleLikelihoods;
 import org.broadinstitute.hellbender.utils.help.HelpConstants;
+import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.samples.MendelianViolation;
 import org.broadinstitute.hellbender.utils.samples.Trio;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
@@ -31,12 +32,6 @@ import java.util.*;
  *     <li>When multiple trios are present, the annotation is simply the maximum of the likelihood ratios, rather than the strict 1-Prod(1-p_i) calculation, as this can scale poorly for uncertain sites and many trios.</li>
  *     <li>This annotation can only be used from the Variant Annotator. If you attempt to use it from the UnifiedGenotyper, the run will fail with an error message to that effect. If you attempt to use it from the HaplotypeCaller, the run will complete successfully but the annotation will not be added to any variants.</li>
  * </ul>
- *
- * <h3>Related annotations</h3>
- * <ul>
- *     <li><b><a href="https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_annotator_MVLikelihoodRatio.php">MVLikelihoodRatio</a></b> evaluates whether a site is transmitted from parents to offspring according to Mendelian rules or not.</li>
- * </ul>
- *
  */
 @DocumentedFeature(groupName=HelpConstants.DOC_CAT_ANNOTATORS, groupSummary=HelpConstants.DOC_CAT_ANNOTATORS_SUMMARY, summary="Existence of a de novo mutation in at least one of the given families (hiConfDeNovo, loConfDeNovo)")
 public final class PossibleDeNovo extends PedigreeAnnotation {
@@ -100,7 +95,7 @@ public final class PossibleDeNovo extends PedigreeAnnotation {
     @Override
     public Map<String, Object> annotate(final ReferenceContext ref,
                                         final VariantContext vc,
-                                        final ReadLikelihoods<Allele> likelihoods) {
+                                        final AlleleLikelihoods<GATKRead, Allele> likelihoods) {
         Utils.nonNull(vc);
         Set<Trio> trioSet = initializeAndGetTrios();
         if (trioSet.isEmpty()){

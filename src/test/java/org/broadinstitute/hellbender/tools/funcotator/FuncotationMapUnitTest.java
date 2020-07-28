@@ -29,8 +29,8 @@ import org.broadinstitute.hellbender.tools.funcotator.dataSources.gencode.Gencod
 import org.broadinstitute.hellbender.tools.funcotator.dataSources.gencode.GencodeFuncotationFactory;
 import org.broadinstitute.hellbender.tools.funcotator.vcfOutput.VcfOutputRenderer;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
-import org.broadinstitute.hellbender.utils.codecs.gencode.GencodeGtfCodec;
-import org.broadinstitute.hellbender.utils.codecs.gencode.GencodeGtfFeature;
+import org.broadinstitute.hellbender.utils.codecs.gtf.GencodeGtfCodec;
+import org.broadinstitute.hellbender.utils.codecs.gtf.GencodeGtfFeature;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
 import org.broadinstitute.hellbender.utils.test.FuncotatorTestUtils;
 import org.testng.Assert;
@@ -888,11 +888,11 @@ public class FuncotationMapUnitTest extends GATKBaseTest {
     @Test
     public void testCopy() {
         final FuncotationMap old = FuncotationMap.createEmpty();
-        old.add("TEST_TX", TableFuncotation.create(ImmutableSortedMap.of("f1", "v1", "f2", "v2"),
+        old.add("TEST_TX", TableFuncotation.create(new LinkedHashMap<>(ImmutableSortedMap.of("f1", "v1", "f2", "v2")),
                 Allele.create("C"), "TEST_DATA", null));
 
         final FuncotationMap newFuncotationMap = FuncotationMap.create(old);
-        newFuncotationMap.add("TEST_TX2", TableFuncotation.create(ImmutableSortedMap.of("f3", "v1", "f4", "v2"),
+        newFuncotationMap.add("TEST_TX2", TableFuncotation.create(new LinkedHashMap<>(ImmutableSortedMap.of("f3", "v1", "f4", "v2")),
                 Allele.create("C"), "TEST_DATA", null));
 
         Assert.assertEquals(newFuncotationMap.getTranscriptList(), Arrays.asList("TEST_TX", "TEST_TX2"));
@@ -907,11 +907,11 @@ public class FuncotationMapUnitTest extends GATKBaseTest {
         final FuncotationMap old = FuncotationMap.createFromGencodeFuncotations(Collections.singletonList(new GencodeFuncotationBuilder()
                 .setAnnotationTranscript("TEST_TX")
                 .build()));
-        old.add("TEST_TX", TableFuncotation.create(ImmutableSortedMap.of("f1", "v1", "f2", "v2"),
+        old.add("TEST_TX", TableFuncotation.create(new LinkedHashMap<>(ImmutableSortedMap.of("f1", "v1", "f2", "v2")),
                 Allele.create("C"), "TEST_DATA", null));
 
         final FuncotationMap newFuncotationMap = FuncotationMap.create(old);
-        newFuncotationMap.add("TEST_TX2", TableFuncotation.create(ImmutableSortedMap.of("f3", "v1", "f4", "v2"),
+        newFuncotationMap.add("TEST_TX2", TableFuncotation.create(new LinkedHashMap<>(ImmutableSortedMap.of("f3", "v1", "f4", "v2")),
                 Allele.create("C"), "TEST_DATA", null));
 
         Assert.assertEquals(newFuncotationMap.getTranscriptList(), Arrays.asList("TEST_TX", "TEST_TX2"));
@@ -927,7 +927,7 @@ public class FuncotationMapUnitTest extends GATKBaseTest {
         final FuncotationMap funcotationMap = FuncotationMap.createFromGencodeFuncotations(Collections.singletonList(new GencodeFuncotationBuilder()
                 .setAnnotationTranscript(FuncotationMap.NO_TRANSCRIPT_AVAILABLE_KEY)
                 .build()));
-        funcotationMap.add(FuncotationMap.NO_TRANSCRIPT_AVAILABLE_KEY, TableFuncotation.create(ImmutableSortedMap.of("f1", "v1", "f2", "v2"),
+        funcotationMap.add(FuncotationMap.NO_TRANSCRIPT_AVAILABLE_KEY, TableFuncotation.create(new LinkedHashMap<>(ImmutableSortedMap.of("f1", "v1", "f2", "v2")),
                         Allele.create("C"), "TEST_DATA", null));
 
         final Consumer<Kryo> registerFuncotationMapForKryo = GATKRegistrator::registerFuncotationMapDependencies;

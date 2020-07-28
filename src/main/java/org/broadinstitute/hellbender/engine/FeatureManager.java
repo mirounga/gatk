@@ -2,6 +2,7 @@ package org.broadinstitute.hellbender.engine;
 
 import com.google.common.annotations.VisibleForTesting;
 import htsjdk.samtools.SAMSequenceDictionary;
+import htsjdk.samtools.util.Locatable;
 import htsjdk.tribble.Feature;
 import htsjdk.tribble.FeatureCodec;
 import htsjdk.variant.vcf.VCFHeader;
@@ -9,18 +10,19 @@ import org.apache.commons.lang3.tuple.Pair;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.broadinstitute.barclay.argparser.Argument;
+import org.broadinstitute.barclay.argparser.ArgumentDefinition;
 import org.broadinstitute.barclay.argparser.ClassFinder;
-import org.broadinstitute.barclay.argparser.CommandLineParser;
 import org.broadinstitute.hellbender.cmdline.CommandLineProgram;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
+import org.broadinstitute.hellbender.tools.genomicsdb.GenomicsDBOptions;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.config.ConfigFactory;
 import org.broadinstitute.hellbender.utils.config.GATKConfig;
 
 import java.io.File;
-import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.nio.file.Files;
@@ -138,35 +140,34 @@ public final class FeatureManager implements AutoCloseable {
      * Create a FeatureManager given a CommandLineProgram tool instance, discovering all FeatureInput
      * arguments in the tool and creating query-able FeatureDataSources for them. Allows control over
      * how much caching is performed by each {@link FeatureDataSource}.
-     *
-     * @param toolInstance Instance of the tool to be run (potentially containing one or more FeatureInput arguments)
+     *  @param toolInstance Instance of the tool to be run (potentially containing one or more FeatureInput arguments)
      *                     Must have undergone command-line argument parsing and argument value injection already.
      * @param featureQueryLookahead When querying FeatureDataSources, cache this many extra bases of context beyond
      *                              the end of query intervals in anticipation of future queries (>= 0).
      * @param cloudPrefetchBuffer MB size of caching/prefetching wrapper for the data, if on Google Cloud (0 to disable).
      * @param cloudIndexPrefetchBuffer MB size of caching/prefetching wrapper for the index, if on Google Cloud (0 to disable).
-     * @param reference reference to use when opening feature files, may be null, currently only used by Genomics DB
+     * @param gdbOptions settings for GenomicsDB to use when reading from a GenomicsDB workspace
      *
      */
-    public FeatureManager(final CommandLineProgram toolInstance, final int featureQueryLookahead, final int cloudPrefetchBuffer, final int cloudIndexPrefetchBuffer, final Path reference) {
+    public FeatureManager(final CommandLineProgram toolInstance, final int featureQueryLookahead, final int cloudPrefetchBuffer, final int cloudIndexPrefetchBuffer, final GenomicsDBOptions gdbOptions) {
         this.toolInstanceSimpleClassName = toolInstance.getClass().getSimpleName();
         this.featureSources = new LinkedHashMap<>();
 
-        initializeFeatureSources(featureQueryLookahead, toolInstance, cloudPrefetchBuffer, cloudIndexPrefetchBuffer, reference);
+        initializeFeatureSources(featureQueryLookahead, toolInstance, cloudPrefetchBuffer, cloudIndexPrefetchBuffer, gdbOptions);
     }
 
     /**
-     * Same as {@link FeatureManager#FeatureManager(CommandLineProgram, int, int, int, Path)}, except used when the
+     * Same as {@link FeatureManager#FeatureManager(CommandLineProgram, int, int, int, GenomicsDBOptions)}, except used when the
      *  FeatureInputs (and associated types) are known.
      *
      *  This constructor should only be used in test code.
      *
      * @param featureInputsToTypeMap {@link Map} of a {@link FeatureInput} to the output type that must extend {@link Feature}.  Never {@code null}
-     * @param toolInstanceName See {@link FeatureManager#FeatureManager(CommandLineProgram, int, int, int, Path)}
-     * @param featureQueryLookahead See {@link FeatureManager#FeatureManager(CommandLineProgram, int, int, int, Path)}
-     * @param cloudPrefetchBuffer See {@link FeatureManager#FeatureManager(CommandLineProgram, int, int, int, Path)}
-     * @param cloudIndexPrefetchBuffer See {@link FeatureManager#FeatureManager(CommandLineProgram, int, int, int, Path)}
-     * @param reference See {@link FeatureManager#FeatureManager(CommandLineProgram, int, int, int, Path)}
+     * @param toolInstanceName See {@link FeatureManager#FeatureManager(CommandLineProgram, int, int, int, GenomicsDBOptions)}
+     * @param featureQueryLookahead See {@link FeatureManager#FeatureManager(CommandLineProgram, int, int, int, GenomicsDBOptions)}
+     * @param cloudPrefetchBuffer See {@link FeatureManager#FeatureManager(CommandLineProgram, int, int, int, GenomicsDBOptions)}
+     * @param cloudIndexPrefetchBuffer See {@link FeatureManager#FeatureManager(CommandLineProgram, int, int, int, GenomicsDBOptions)}
+     * @param reference See {@link FeatureManager#FeatureManager(CommandLineProgram, int, int, int, GenomicsDBOptions)}
      */
     @VisibleForTesting
     FeatureManager(final Map<FeatureInput<? extends Feature>, Class<? extends Feature>> featureInputsToTypeMap, final String toolInstanceName, final int featureQueryLookahead, final int cloudPrefetchBuffer, final int cloudIndexPrefetchBuffer, final Path reference) {
@@ -191,21 +192,22 @@ public final class FeatureManager implements AutoCloseable {
      * @param cloudIndexPrefetchBuffer MB size of caching/prefetching wrapper for the index, if on Google Cloud (0 to disable).
      */
     @SuppressWarnings({"unchecked", "rawtypes"})
-    private void initializeFeatureSources( final int featureQueryLookahead, final CommandLineProgram toolInstance, final int cloudPrefetchBuffer, final int cloudIndexPrefetchBuffer, final Path reference) {
+    private void initializeFeatureSources( final int featureQueryLookahead, final CommandLineProgram toolInstance, final int cloudPrefetchBuffer, final int cloudIndexPrefetchBuffer, final GenomicsDBOptions gdbOptions) {
 
         // Discover all arguments of type FeatureInput (or Collections thereof) in our tool's class hierarchy
         // (and associated ArgumentCollections). Arguments not specified by the user on the command line will
         // come back to us with a null FeatureInput.
-        final List<Pair<Field, FeatureInput>> featureArgumentValues =
-                CommandLineParser.gatherArgumentValuesOfType(FEATURE_ARGUMENT_CLASS, toolInstance);
+        final List<Pair<ArgumentDefinition, FeatureInput>> featureArgumentValues =
+                toolInstance.getCommandLineParser().gatherArgumentValuesOfType(FEATURE_ARGUMENT_CLASS);
 
-        for ( final Pair<Field, FeatureInput> featureArgument : featureArgumentValues ) {
+        for ( final Pair<ArgumentDefinition, FeatureInput> featureArgument : featureArgumentValues ) {
             final FeatureInput<? extends Feature> featureInput = featureArgument.getValue();
 
             // Only create a data source for Feature arguments that were actually specified
             if ( featureInput != null ) {
-                final Class<? extends Feature> featureType = getFeatureTypeForFeatureInputField(featureArgument.getKey());
-                addToFeatureSources(featureQueryLookahead, featureInput, featureType, cloudPrefetchBuffer, cloudIndexPrefetchBuffer, reference);
+                final Class<? extends Feature> featureType = getFeatureTypeForFeatureInputArgument(featureArgument.getKey());
+                addToFeatureSources(featureQueryLookahead, featureInput, featureType, cloudPrefetchBuffer, cloudIndexPrefetchBuffer,
+                        gdbOptions);
             }
         }
     }
@@ -217,6 +219,13 @@ public final class FeatureManager implements AutoCloseable {
         }
     }
 
+    void addToFeatureSources(final int featureQueryLookahead, final FeatureInput<? extends Feature> featureInput,
+                             final Class<? extends Feature> featureType, final int cloudPrefetchBuffer,
+                             final int cloudIndexPrefetchBuffer, final Path reference) {
+        // Create a new FeatureDataSource for this file, and add it to our query pool
+        featureSources.put(featureInput, new FeatureDataSource<>(featureInput, featureQueryLookahead, featureType, cloudPrefetchBuffer, cloudIndexPrefetchBuffer, new GenomicsDBOptions(reference)));
+    }
+
     /**
      * Add the feature data source to the given feature input.
      *
@@ -225,39 +234,42 @@ public final class FeatureManager implements AutoCloseable {
      * @param featureType class of features
      * @param cloudPrefetchBuffer MB size of caching/prefetching wrapper for the data, if on Google Cloud (0 to disable).
      * @param cloudIndexPrefetchBuffer MB size of caching/prefetching wrapper for the index, if on Google Cloud (0 to disable).
+     * @param genomicsDBOptions options and info for reading from a GenomicsDB
      *
      * Note: package-visible to enable access from the core walker classes
      * (but not actual tools, so it's not protected).
      */
-    void addToFeatureSources(final int featureQueryLookahead, final FeatureInput<? extends Feature> featureInput, final Class<? extends Feature> featureType, final int cloudPrefetchBuffer, final int cloudIndexPrefetchBuffer, final Path reference) {
+    void addToFeatureSources(final int featureQueryLookahead, final FeatureInput<? extends Feature> featureInput,
+                             final Class<? extends Feature> featureType, final int cloudPrefetchBuffer,
+                             final int cloudIndexPrefetchBuffer, final GenomicsDBOptions genomicsDBOptions) {
         // Create a new FeatureDataSource for this file, and add it to our query pool
-        featureSources.put(featureInput, new FeatureDataSource<>(featureInput, featureQueryLookahead, featureType, cloudPrefetchBuffer, cloudIndexPrefetchBuffer, reference));
+        featureSources.put(featureInput, new FeatureDataSource<>(featureInput, featureQueryLookahead, featureType, cloudPrefetchBuffer, cloudIndexPrefetchBuffer, genomicsDBOptions));
     }
 
     /**
-     * Given a Field known to be of type FeatureInput (or a Collection thereof), retrieves the type
+     * Given a ArgumentDefinition for an argument known to be of type FeatureInput (or a Collection thereof), retrieves the type
      * parameter for the FeatureInput (eg., for FeatureInput<VariantContext> or List<FeatureInput<VariantContext>>
      * this would be VariantContext).
      *
-     * @param field a Field known to be of type FeatureInput whose type parameter to retrieve
-     * @return type parameter of the FeatureInput declaration represented by the given field
+     * @param argDef an {@code ArgumentDefinition} for an argument known to be of type FeatureInput whose type parameter to retrieve
+     * @return type parameter of the FeatureInput declaration represented by the given ArgumentDefinition
      */
     @SuppressWarnings("unchecked")
-    static Class<? extends Feature> getFeatureTypeForFeatureInputField( final Field field ) {
-        final Type featureInputType = CommandLineParser.isCollectionField(field) ?
-                                getNextTypeParameter((ParameterizedType)(field.getGenericType())) :
-                                field.getGenericType();
+    static Class<? extends Feature> getFeatureTypeForFeatureInputArgument( final ArgumentDefinition argDef ) {
+        final Type featureInputType = argDef.isCollection() ?
+                                getNextTypeParameter((ParameterizedType)(argDef.getUnderlyingField().getGenericType())) :
+                                argDef.getUnderlyingField().getGenericType();
 
         if ( ! (featureInputType instanceof ParameterizedType) ) {
             throw new GATKException(String.format("FeatureInput declaration for argument --%s lacks an explicit type parameter for the Feature type",
-                                                  field.getAnnotation(Argument.class).fullName()));
+                                argDef.getUnderlyingField().getAnnotation(Argument.class).fullName()));
         }
 
         return (Class<? extends Feature>)getNextTypeParameter((ParameterizedType)featureInputType);
     }
 
     /**
-     * Helper method for {@link #getFeatureTypeForFeatureInputField(Field)} that "unpacks" a
+     * Helper method for {@link #getFeatureTypeForFeatureInputArgument(ArgumentDefinition)} that "unpacks" a
      * parameterized type by one level of parameterization. Eg., given List<FeatureInput<VariantContext>>
      * would return FeatureInput<VariantContext>.
      *
@@ -331,7 +343,7 @@ public final class FeatureManager implements AutoCloseable {
      * @return A List of all Features in the backing data source for the provided FeatureInput that overlap
      *         the provided interval (may be empty if there are none, but never null)
      */
-    public <T extends Feature> List<T> getFeatures( final FeatureInput<T> featureDescriptor, final SimpleInterval interval ) {
+    public <T extends Feature> List<T> getFeatures( final FeatureInput<T> featureDescriptor, final Locatable interval ) {
         final FeatureDataSource<T> dataSource = lookupDataSource(featureDescriptor);
 
         // No danger of a ClassCastException here, since we verified that the FeatureDataSource for this
@@ -408,32 +420,11 @@ public final class FeatureManager implements AutoCloseable {
      * an unsupported format), or if more than one codec claims to be able to decode the file (this is
      * a configuration error on the codec authors' part).
      *
-     * @param featureFile file for which to find the right codec
+     * @param featurePath path for which to find the right codec
      * @return the codec suitable for decoding the provided file
      */
-    public static FeatureCodec<? extends Feature, ?> getCodecForFile( final File featureFile ) {
-        return getCodecForFile(featureFile.toPath(), null);
-    }
-
-    /**
-     * Utility method that determines the correct codec to use to read Features from the provided file,
-     * optionally considering only codecs that produce a particular type of Feature.
-     *
-     * Codecs MUST correctly implement the {@link FeatureCodec#canDecode(String)} method
-     * in order to be considered as candidates for decoding the file, and must produce
-     * Features of the specified type if featureType is non-null.
-     *
-     * Throws an exception if no suitable codecs are found (this is a user error, since the file is of
-     * an unsupported format), or if more than one codec claims to be able to decode the file (this is
-     * a configuration error on the codec authors' part).
-     *
-     * @param featureFile file for which to find the right codec
-     * @param featureType If specified, consider only codecs that produce Features of this type. May be null,
-     *                    in which case all codecs are considered.
-     * @return the codec suitable for decoding the provided file
-     */
-    public static FeatureCodec<? extends Feature, ?> getCodecForFile( final File featureFile, final Class<? extends Feature> featureType ) {
-        return getCodecForFile(featureFile.toPath(), featureType);
+    public static FeatureCodec<? extends Feature, ?> getCodecForFile( final Path featurePath ) {
+        return getCodecForFile(featurePath, null);
     }
 
     /**
@@ -508,12 +499,12 @@ public final class FeatureManager implements AutoCloseable {
 
         for ( final Class<?> codecClass : DISCOVERED_CODECS ) {
             try {
-                final FeatureCodec<? extends Feature, ?> codec = (FeatureCodec<? extends Feature, ?>)codecClass.newInstance();
+                final FeatureCodec<? extends Feature, ?> codec = (FeatureCodec<? extends Feature, ?>)codecClass.getDeclaredConstructor().newInstance();
                 if ( codec.canDecode(featureFile.toAbsolutePath().toUri().toString()) ) {
                     candidateCodecs.add(codec);
                 }
             }
-            catch ( InstantiationException | IllegalAccessException e ) {
+            catch (InstantiationException | IllegalAccessException | NoSuchMethodException | InvocationTargetException e ) {
                 throw new GATKException("Unable to automatically instantiate codec " + codecClass.getName());
             }
         }

@@ -5,7 +5,7 @@ import com.google.common.jimfs.Jimfs;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.logging.log4j.core.util.FileUtils;
 import org.broadinstitute.hellbender.GATKBaseTest;
-import org.broadinstitute.hellbender.engine.GATKPathSpecifier;
+import org.broadinstitute.hellbender.engine.GATKPath;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.testutils.BaseTest;
@@ -28,6 +28,7 @@ import java.nio.file.Paths;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 public final class IOUtilsUnitTest extends GATKBaseTest {
 
@@ -594,6 +595,26 @@ public final class IOUtilsUnitTest extends GATKBaseTest {
                 "file was not written to temp file: " + tempFile + " in dir: " + tempDir);
     }
 
+    @Test
+    public void testCreateTempFileWithContent() throws IOException {
+        final String prefix = "prefix";
+        final String suffix = ".txt";
+        final List<String> inputStrings = Arrays.asList("first line", "second line");
+
+        final File tempFile = IOUtils.writeTempFile(inputStrings,prefix, suffix);
+
+        Assert.assertTrue(tempFile.exists(), "file was not written to temp file: " + tempFile);
+        Assert.assertTrue(tempFile.getName().startsWith("prefix"));
+        Assert.assertTrue(tempFile.getName().endsWith(".txt"));
+
+        final List<String> actualStrings = new ArrayList<>();
+        try (Stream<String> lines = Files.lines( tempFile.toPath())) {
+            lines.forEach(actualStrings::add);
+        }
+
+        Assert.assertEquals(actualStrings, inputStrings);
+    }
+
     @DataProvider
     public Object[][] tmpPathDirs() throws Exception {
         return new Object[][] {
@@ -680,8 +701,8 @@ public final class IOUtilsUnitTest extends GATKBaseTest {
     public void testGenomicsDBPathParsing(String path, String expectedPath, String gendbExpectedAbsolutePath, boolean expectedComparison) {
         Assert.assertEquals(IOUtils.getGenomicsDBPath(path), expectedPath, "getGenomicsDBPath() returned the wrong value");
         if (path != null) {
-            // GATKPathSpecifier can't take a null path
-            Assert.assertEquals(IOUtils.getAbsolutePathWithGenomicsDBURIScheme(new GATKPathSpecifier(path)), gendbExpectedAbsolutePath, "getAbsolutePathWithGenDBScheme() returned the wrong value");
+            // GATKPath can't take a null path
+            Assert.assertEquals(IOUtils.getAbsolutePathWithGenomicsDBURIScheme(new GATKPath(path)), gendbExpectedAbsolutePath, "getAbsolutePathWithGenDBScheme() returned the wrong value");
         }
         Assert.assertEquals(IOUtils.isGenomicsDBPath(path), expectedComparison, "isGenomicsDBPath() returned the wrong value");
     }

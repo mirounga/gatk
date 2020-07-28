@@ -25,7 +25,6 @@ import org.broadinstitute.hellbender.engine.ReferenceContext;
 import org.broadinstitute.hellbender.engine.MultiVariantWalker;
 import org.broadinstitute.hellbender.utils.R.RScriptExecutor;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
-import org.broadinstitute.hellbender.utils.collections.ExpandingArrayList;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.utils.io.Resource;
 import org.broadinstitute.hellbender.utils.report.GATKReport;
@@ -189,8 +188,7 @@ public class VariantRecalibrator extends MultiVariantWalker {
      * Bad - A database of known bad variants can be used to supplement the set of worst ranked variants (compared to the
      * Gaussian mixture model) that the program selects from the data to model "bad" variants.
      */
-    @Argument(fullName="resource",
-            shortName = "resource",
+    @Argument(fullName=StandardArgumentDefinitions.RESOURCE_LONG_NAME,
             doc="A list of sites for which to apply a prior probability of being correct but which aren't used by the algorithm (training and truth sets are required to run)",
             optional=false)
     private List<FeatureInput<VariantContext>> resource = new ArrayList<>();
@@ -381,7 +379,7 @@ public class VariantRecalibrator extends MultiVariantWalker {
     final private ArrayList<Double> replicate = new ArrayList<>(REPLICATE * 2);
     private final Set<String> ignoreInputFilterSet = new TreeSet<>();
     private final VariantRecalibratorEngine engine = new VariantRecalibratorEngine( VRAC );
-    final private ExpandingArrayList<VariantDatum> reduceSum = new ExpandingArrayList<>(2000);
+    final private ArrayList<VariantDatum> reduceSum = new ArrayList<>(2000);
     final private List<ImmutablePair<VariantContext, FeatureContext>> variantsAtLocus = new ArrayList<>();
     private long counter = 0;
     private GATKReportTable nmcTable;
@@ -575,6 +573,7 @@ public class VariantRecalibrator extends MultiVariantWalker {
             else if( VRAC.useASannotations ) {
                 for (final Allele allele : vc.getAlternateAlleles()) {
                     if (!GATKVCFConstants.isSpanningDeletion(allele) && VariantDataManager.checkVariationClass(vc, allele, VRAC.MODE)) {
+                        //note that this may not be the minimal representation for the ref and alt allele
                         addDatum(reduceSum, isInput, context, vc, vc.getReference(), allele);
                     }
                 }
@@ -587,7 +586,7 @@ public class VariantRecalibrator extends MultiVariantWalker {
      * @param variants is modified by having a new VariantDatum added to it
      */
     private void addDatum(
-            final ExpandingArrayList<VariantDatum> variants,
+            final ArrayList<VariantDatum> variants,
             final boolean isInput,
             final FeatureContext featureContext,
             final VariantContext vc,
@@ -651,14 +650,28 @@ public class VariantRecalibrator extends MultiVariantWalker {
                     // Generate the positive model using the training data and evaluate each variant
                     goodModel = engine.generateModel(positiveTrainingData, VRAC.MAX_GAUSSIANS);
                     engine.evaluateData(dataManager.getData(), goodModel, false);
+                    if (goodModel.failedToConverge) {
+                        if (outputModel != null) {
+                            final GATKReport report = writeModelReport(goodModel, null, USE_ANNOTATIONS);
+                            try (final PrintStream modelReportStream = new PrintStream(outputModel)) {
+                                report.print(modelReportStream);
+                            } catch (FileNotFoundException e) {
+                                throw new UserException.CouldNotCreateOutputFile("File: (" + outputModel + ")", e);
+                            }
+                        }
+                        throw new UserException.VQSRPositiveModelFailure("Positive training model failed to converge.  One or more annotations " +
+                                "(usually MQ) may have insufficient variance.  Please consider lowering the maximum number" +
+                                " of Gaussians allowed for use in the model (via --max-gaussians 4, for example).");
+                    }
                     // Generate the negative model using the worst performing data and evaluate each variant contrastively
                     negativeTrainingData = dataManager.selectWorstVariants();
                     badModel = engine.generateModel(negativeTrainingData,
                             Math.min(VRAC.MAX_GAUSSIANS_FOR_NEGATIVE_MODEL, VRAC.MAX_GAUSSIANS));
-
-                    if (badModel.failedToConverge || goodModel.failedToConverge) {
-                        throw new UserException(
-                                "NaN LOD value assigned. Clustering with this few variants and these annotations is unsafe. Please consider " + (badModel.failedToConverge ? "raising the number of variants used to train the negative model (via --minimum-bad-variants 5000, for example)." : "lowering the maximum number of Gaussians allowed for use in the model (via --max-gaussians 4, for example)."));
+                    if (badModel.failedToConverge) {
+                        throw new UserException.VQSRNegativeModelFailure(
+                                "NaN LOD value assigned. Clustering with this few variants and these annotations is unsafe." +
+                                        " Please consider raising the number of variants used to train the negative model " +
+                                        "(via --minimum-bad-variants 5000, for example).");
                     }
                 }
 
@@ -862,16 +875,18 @@ public class VariantRecalibrator extends MultiVariantWalker {
         final GATKReportTable goodPMix = makeVectorTable("GoodGaussianPMix", "Pmixture log 10 used to evaluate model", gaussianStrings, pMixtureLog10s, "pMixLog10", formatString, "Gaussian");
         report.addTable(goodPMix);
 
-        gaussianStrings.clear();
-        final double[] pMixtureLog10sBad = new double[badModel.getModelGaussians().size()];
-        idx = 0;
+        if (badModel != null) {
+            gaussianStrings.clear();
+            final double[] pMixtureLog10sBad = new double[badModel.getModelGaussians().size()];
+            idx = 0;
 
-        for( final MultivariateGaussian gaussian : badModel.getModelGaussians() ) {
-            pMixtureLog10sBad[idx] = gaussian.pMixtureLog10;
-            gaussianStrings.add(Integer.toString(idx++));
+            for (final MultivariateGaussian gaussian : badModel.getModelGaussians()) {
+                pMixtureLog10sBad[idx] = gaussian.pMixtureLog10;
+                gaussianStrings.add(Integer.toString(idx++));
+            }
+            final GATKReportTable badPMix = makeVectorTable("BadGaussianPMix", "Pmixture log 10 used to evaluate model", gaussianStrings, pMixtureLog10sBad, "pMixLog10", formatString, "Gaussian");
+            report.addTable(badPMix);
         }
-        final GATKReportTable badPMix = makeVectorTable("BadGaussianPMix", "Pmixture log 10 used to evaluate model", gaussianStrings, pMixtureLog10sBad, "pMixLog10", formatString, "Gaussian");
-        report.addTable(badPMix);
 
         //The model and Gaussians don't know what the annotations are, so get them from this class
         //VariantDataManager keeps the annotation in the same order as the argument list
@@ -889,19 +904,21 @@ public class VariantRecalibrator extends MultiVariantWalker {
                 formatString);
         report.addTable(positiveCovariance);
 
-        //do the same for the negative model means
-        final GATKReportTable negativeMeans = makeMeansTable(
-                "NegativeModelMeans", "Vector of annotation values to describe the (normalized) mean for each Gaussian in the negative model",
-                annotationList, badModel, formatString);
-        report.addTable(negativeMeans);
+        if (badModel != null) {
+            //do the same for the negative model means
+            final GATKReportTable negativeMeans = makeMeansTable(
+                    "NegativeModelMeans", "Vector of annotation values to describe the (normalized) mean for each Gaussian in the negative model",
+                    annotationList, badModel, formatString);
+            report.addTable(negativeMeans);
 
-        final GATKReportTable negativeCovariance = makeCovariancesTable(
-                "NegativeModelCovariances",
-                "Matrix to describe the (normalized) covariance for each Gaussian in the negative model; covariance matrices are joined by row",
-                annotationList,
-                badModel,
-                formatString);
-        report.addTable(negativeCovariance);
+            final GATKReportTable negativeCovariance = makeCovariancesTable(
+                    "NegativeModelCovariances",
+                    "Matrix to describe the (normalized) covariance for each Gaussian in the negative model; covariance matrices are joined by row",
+                    annotationList,
+                    badModel,
+                    formatString);
+            report.addTable(negativeCovariance);
+        }
 
         return report;
     }
@@ -1027,7 +1044,7 @@ private GATKReportTable makeVectorTable(final String tableName,
             for( int jjj = iii + 1; jjj < annotationKeys.length; jjj++) {
                 logger.info( "Building " + annotationKeys[iii] + " x " + annotationKeys[jjj] + " plot...");
 
-                final List<VariantDatum> fakeData = new ExpandingArrayList<>();
+                final List<VariantDatum> fakeData = new ArrayList<>();
                 double minAnn1 = 100.0, maxAnn1 = -100.0, minAnn2 = 100.0, maxAnn2 = -100.0;
                 for( final VariantDatum datum : randomData ) {
                     minAnn1 = Math.min(minAnn1, datum.annotations[iii]);

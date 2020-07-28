@@ -1,8 +1,10 @@
 package org.broadinstitute.hellbender.exceptions;
 
 import htsjdk.samtools.SAMSequenceDictionary;
+import htsjdk.samtools.SAMSequenceRecord;
 import htsjdk.tribble.Feature;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
+import org.broadinstitute.hellbender.engine.GATKPath;
 import org.broadinstitute.hellbender.tools.walkers.variantutils.ValidateVariants;
 import org.broadinstitute.hellbender.utils.help.HelpConstants;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
@@ -12,6 +14,7 @@ import org.broadinstitute.hellbender.utils.read.ReadUtils;
 import java.io.File;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  * <p/>
@@ -56,16 +59,16 @@ public class UserException extends RuntimeException {
             super(String.format("Couldn't read file. Error was: %s with exception: %s", message, getMessage(e)), e);
         }
 
-        public CouldNotReadInputFile(File file) {
-            super(String.format("Couldn't read file %s", file.getAbsolutePath()));
+        public CouldNotReadInputFile(final GATKPath file, final String message) {
+            super(String.format("Couldn't read file %s. Error was: %s", file.getRawInputString(), message));
+        }
+
+        public CouldNotReadInputFile(final GATKPath file, final String message, final Throwable cause) {
+            super(String.format("Couldn't read file %s. Error was: %s", file.getRawInputString(), message), cause);
         }
 
         public CouldNotReadInputFile(Path file) {
             super(String.format("Couldn't read file %s", file.toAbsolutePath().toUri()));
-        }
-
-        public CouldNotReadInputFile(File file, String message) {
-            super(String.format("Couldn't read file %s. Error was: %s", file.getAbsolutePath(), message));
         }
 
         public CouldNotReadInputFile(Path file, String message) {
@@ -78,14 +81,6 @@ public class UserException extends RuntimeException {
 
         public CouldNotReadInputFile(String file, String message) {
             super(String.format("Couldn't read file %s. Error was: %s", file, message));
-        }
-
-        public CouldNotReadInputFile(File file, String message, Exception e) {
-            super(String.format("Couldn't read file %s. Error was: %s with exception: %s", file.getAbsolutePath(), message, getMessage(e)), e);
-        }
-
-        public CouldNotReadInputFile(File file, Exception e) {
-            this(file, getMessage(e), e);
         }
 
         public CouldNotReadInputFile(Path path, Exception e) {
@@ -101,7 +96,13 @@ public class UserException extends RuntimeException {
         private static final long serialVersionUID = 0L;
 
         public MissingReference(String message) { super(message); }
+
+        public MissingReference(final String message, final boolean commandLine) {
+            super(message + (commandLine ? String.format("  A reference is specified with the -%s command line argument.", StandardArgumentDefinitions.REFERENCE_SHORT_NAME) : ""));
+        }
     }
+
+    public static final MissingReference MISSING_REFERENCE_FOR_CRAM = new MissingReference("A reference file is required when using CRAM files.", true);
 
     public static class MissingIndex extends UserException {
         private static final long serialVersionUID = 0L;
@@ -132,9 +133,12 @@ public class UserException extends RuntimeException {
     public static class CouldNotCreateOutputFile extends UserException {
         private static final long serialVersionUID = 0L;
 
+        public CouldNotCreateOutputFile(final GATKPath file, final String message, final Exception e) {
+            super(String.format("Couldn't write file %s because %s with exception %s", file.getRawInputString(), message, getMessage(e)), e);
+        }
 
-        public CouldNotCreateOutputFile(File file, String message, Exception e) {
-            super(String.format("Couldn't write file %s because %s with exception %s", file.getAbsolutePath(), message, getMessage(e)), e);
+        public CouldNotCreateOutputFile(final GATKPath file, final String message) {
+            super(String.format("Couldn't write file %s because %s", file.getRawInputString(), message));
         }
 
         public CouldNotCreateOutputFile(File file, String message) {
@@ -234,12 +238,12 @@ public class UserException extends RuntimeException {
             super(String.format("Unknown file is malformed: %s", message));
         }
 
-        public MalformedFile(File f, String message) {
-            super(String.format("File %s is malformed: %s", f.getAbsolutePath(), message));
+        public MalformedFile(final GATKPath f, final String message) {
+            super(String.format("File %s is malformed: %s", f.getRawInputString(), message));
         }
 
-        public MalformedFile(File f, String message, Exception e) {
-            super(String.format("File %s is malformed: %s caused by %s", f.getAbsolutePath(), message, getMessage(e)), e);
+        public MalformedFile(final GATKPath f, final String message, final Exception e) {
+            super(String.format("File %s is malformed: %s caused by %s", f.getRawInputString(), message, getMessage(e)), e);
         }
 
         public MalformedFile(Path p, String message) {
@@ -326,7 +330,7 @@ public class UserException extends RuntimeException {
         public final ValidateVariants.ValidationType type;
 
         public FailsStrictValidation(String f, ValidateVariants.ValidationType type, String message) {
-            super(String.format("Input %s fails strict validation: %s of type:", f, message, type));
+            super(String.format("Input %s fails strict validation of type %s: %s", f, type, message));
             this.type = type;
         }
     }
@@ -339,12 +343,6 @@ public class UserException extends RuntimeException {
         }
     }
 
-    /**
-     * <p/>
-     * Class UserException.MalformedFile
-     * <p/>
-     * For errors parsing files
-     */
     public static class IncompatibleSequenceDictionaries extends UserException {
         private static final long serialVersionUID = 0L;
 
@@ -373,11 +371,19 @@ public class UserException extends RuntimeException {
         }
     }
 
-    public static final class Require2BitReferenceForBroadcast extends BadInput {
+    public static class SequenceDictionaryIsMissingContigLengths extends UserException {
         private static final long serialVersionUID = 0L;
-        public Require2BitReferenceForBroadcast() {
-            super("Running this tool with BROADCAST strategy requires a 2bit reference. To create a 2bit reference from an existing fasta file, download faToTwoBit from the link on https://genome.ucsc.edu/goldenPath/help/twoBit.html, then run faToTwoBit in.fasta out.2bit");
-	}
+
+        public SequenceDictionaryIsMissingContigLengths(String source, SAMSequenceDictionary dict){
+            super("GATK SequenceDictionaryValidation requires all contigs in the dictionary to have lengths associated with them.  " +
+                    "\nOne or more contigs in the dictionary from " + source + " are missing contig lengths." +
+                    "\nThe following contigs are missing lengths: " +
+                    dict.getSequences().stream()
+                            .filter( s -> s.getSequenceLength() == SAMSequenceRecord.UNKNOWN_SEQUENCE_LENGTH)
+                            .map(SAMSequenceRecord::getSequenceName)
+                            .limit(20)
+                            .collect(Collectors.joining(",")));
+        }
     }
 
     public static final class NoSuitableCodecs extends  UserException {
@@ -433,9 +439,9 @@ public class UserException extends RuntimeException {
     public static final class CouldNotIndexFile extends UserException {
         private static final long serialVersionUID = 0L;
 
-        public CouldNotIndexFile(final File file, final Exception e) {
+        public CouldNotIndexFile(final Path path, final Exception e) {
             super(String.format("Error while trying to create index for %s. Error was: %s: %s",
-                    file.getAbsolutePath(), e.getClass().getCanonicalName(), e.getMessage()), e);
+                    path.toString(), e.getClass().getCanonicalName(), e.getMessage()), e);
         }
     }
 
@@ -445,5 +451,17 @@ public class UserException extends RuntimeException {
         public UnimplementedFeature(String message){
             super(message);
         }
+    }
+
+    public static final class VQSRPositiveModelFailure extends UserException {
+        private static final long serialVersionUID = 0L;
+
+        public VQSRPositiveModelFailure(String message) { super(message); }
+    }
+
+    public static final class VQSRNegativeModelFailure extends UserException {
+        private static final long serialVersionUID = 0L;
+
+        public VQSRNegativeModelFailure(String message) { super(message); }
     }
 }
