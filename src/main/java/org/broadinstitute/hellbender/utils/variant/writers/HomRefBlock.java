@@ -35,6 +35,7 @@ final class HomRefBlock extends GVCFBlock {
 
     private int[] minPLs = null;
     private int[] minPPs = null;
+    private int minGQ = -1;
 
     /**
      * Create a new HomRefBlock
@@ -50,6 +51,20 @@ final class HomRefBlock extends GVCFBlock {
         if ( lowerGQBound > upperGQBound ) { throw new IllegalArgumentException("bad lowerGQBound " + lowerGQBound + " as it's >= upperGQBound " + upperGQBound); }
 
         this.ploidy = startingVC.getMaxPloidy(defaultPloidy);
+        final Genotype g = startingVC.getGenotype(0);
+        if (g.hasPL()) {
+            this.minPLs = g.getPL();
+        }
+        if (g.hasExtendedAttribute(GATKVCFConstants.PHRED_SCALED_POSTERIORS_KEY)) {
+            this.minPPs = PosteriorProbabilitiesUtils.parsePosteriorsIntoPhredSpace(g);
+        }
+        if (minPPs != null) {
+            minGQ = GATKVariantContextUtils.calculateGQFromPLs(minPPs);
+        } else if (minPLs != null) {
+            minGQ = GATKVariantContextUtils.calculateGQFromPLs(minPLs);
+        } else if (g.hasGQ()) {
+            minGQ = g.getGQ();
+        }
     }
 
 
@@ -63,14 +78,20 @@ final class HomRefBlock extends GVCFBlock {
         final int[] minPLs = getMinPLs();
         final int[] minPPs = getMinPPs();
         if (!floorBlocks) {
-            gb.PL(minPLs);
-            gb.GQ(GATKVariantContextUtils.calculateGQFromPLs(minPPs != null ? minPPs : minPLs));
-            gb.attribute(GATKVCFConstants.MIN_DP_FORMAT_KEY, getMinDP());
+            if (minPLs != null) {
+                gb.PL(minPLs);
+            }
+            gb.GQ(getMinGQ());
+            if (!DPs.isEmpty()) {
+                gb.attribute(GATKVCFConstants.MIN_DP_FORMAT_KEY, getMinDP());
+            }
         }
         else {
             gb.GQ(getGQLowerBound());
         }
-        gb.DP(getMedianDP());
+        if (!DPs.isEmpty()) {
+            gb.DP(getMedianDP());
+        }
         if (minPPs != null) {
             gb.attribute(GATKVCFConstants.PHRED_SCALED_POSTERIORS_KEY, Utils.listFromPrimitives(minPPs));
         }
@@ -81,15 +102,15 @@ final class HomRefBlock extends GVCFBlock {
     /**
      * Add a homRef block to the current block
      *
-     * @param pos current genomic position
+     * @param pos current genomic position, must be directly following this block (i.e. contiguous and non-overlapping)
      * @param newEnd new calculated block end position
      * @param genotype A non-null Genotype with GQ and DP attributes
      */
     @Override
     public void add(final int pos, final int newEnd, final Genotype genotype) {
         Utils.nonNull(genotype, "genotype cannot be null");
-        if ( ! genotype.hasPL() ) { throw new IllegalArgumentException("genotype must have PL field");}
-        if ( pos != end + 1 ) { throw new IllegalArgumentException("adding genotype at pos " + pos + " isn't contiguous with previous end " + end); }
+        if ( pos > end + 1 ) { throw new IllegalArgumentException("adding genotype at pos " + pos + " isn't contiguous with previous end " + end); }
+        if ( pos < end + 1 ) { throw new IllegalArgumentException("adding genotype at pos " + pos + " overlaps previous end " + end); }
         if ( genotype.getPloidy() != ploidy) { throw new IllegalArgumentException("cannot add a genotype with a different ploidy: " + genotype.getPloidy() + " != " + ploidy); }
         // Make sure the GQ is within the bounds of this band. Treat GQs > 99 as 99.
         if ( !withinBounds(Math.min(genotype.getGQ(), VCFConstants.MAX_GENOTYPE_QUAL))) {
@@ -102,11 +123,13 @@ final class HomRefBlock extends GVCFBlock {
         }
         else { // otherwise take the min with the provided genotype's PLs
             final int[] pls = genotype.getPL();
-            if (pls.length != minPLs.length) {
-                throw new GATKException("trying to merge different PL array sizes: " + pls.length + " != " + minPLs.length);
-            }
-            for (int i = 0; i < pls.length; i++) {
-                minPLs[i] = Math.min(minPLs[i], pls[i]);
+            if (pls != null) {
+                if (pls.length != minPLs.length) {
+                    throw new GATKException("trying to merge different PL array sizes: " + pls.length + " != " + minPLs.length);
+                }
+                for (int i = 0; i < pls.length; i++) {
+                    minPLs[i] = Math.min(minPLs[i], pls[i]);
+                }
             }
         }
 
@@ -124,9 +147,18 @@ final class HomRefBlock extends GVCFBlock {
                 }
             }
         }
+        if (minPPs != null) {
+            minGQ = GATKVariantContextUtils.calculateGQFromPLs(minPPs);
+        } else if (minPLs != null) {
+            minGQ = GATKVariantContextUtils.calculateGQFromPLs(minPLs);
+        } else {
+            minGQ = minGQ == -1 ? genotype.getGQ() : Math.min(minGQ, genotype.getGQ());
+        }
 
         end = newEnd;
-        DPs.add(Math.max(genotype.getDP(), 0)); // DP must be >= 0
+        if (genotype.hasDP()) {
+            DPs.add(Math.max(genotype.getDP(), 0)); // DP must be >= 0
+        }
     }
 
     /** Get the min PLs observed within this band, can be null if no PLs have yet been observed */
@@ -144,5 +176,9 @@ final class HomRefBlock extends GVCFBlock {
      */
     public int getPloidy() {
         return ploidy;
+    }
+
+    public int getMinGQ() {
+        return minGQ;
     }
 }

@@ -32,14 +32,14 @@ import java.util.*;
  *
  * <h3>Related annotations</h3>
  * <ul>
- *     <li><b><a href="https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_annotator_InbreedingCoeff.php">InbreedingCoeff</a></b> outputs a version of this annotation that includes all alternate alleles in a single calculation.</li>
- *     <li><b><a href="https://www.broadinstitute.org/gatk/gatkdocs/org_broadinstitute_gatk_tools_walkers_annotator_ExcessHet.php">ExcessHet</a></b> estimates excess heterozygosity in a population of samples.</li>
+ *     <li><b>InbreedingCoeff</b> outputs a version of this annotation that includes all alternate alleles in a single calculation.</li>
+ *     <li><b>ExcessHet</b> estimates excess heterozygosity in a population of samples.</li>
  * </ul>
  *
  */
 //TODO: this can't extend InbreedingCoeff because that one is Standard and it would force this to be output all the time; should fix code duplication nonetheless
 @DocumentedFeature(groupName=HelpConstants.DOC_CAT_ANNOTATORS, groupSummary=HelpConstants.DOC_CAT_ANNOTATORS_SUMMARY, summary="Allele-specific likelihood-based test for the consanguinity among samples (AS_InbreedingCoeff)")
-public final class AS_InbreedingCoeff extends InfoFieldAnnotation implements AS_StandardAnnotation, AlleleSpecificAnnotation {
+public final class AS_InbreedingCoeff implements InfoFieldAnnotation, AS_StandardAnnotation, AlleleSpecificAnnotation {
 
     public static final int MIN_SAMPLES = 10;
     private Set<String> founderIds;    //TODO: either use this or enter a bug report

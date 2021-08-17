@@ -4,6 +4,7 @@ package org.broadinstitute.hellbender.tools.walkers.genotyper;
  * Created by davidben on 6/10/16.
  */
 public enum GenotypeAssignmentMethod {
+
     /**
      * set all of the genotype GT values to NO_CALL
      */
@@ -13,6 +14,11 @@ public enum GenotypeAssignmentMethod {
      * Use the subsetted PLs to greedily assigned genotypes
      */
     USE_PLS_TO_ASSIGN,
+
+    /**
+     * Use the existing, subsetted posteriors array to assign genotypes
+     */
+    USE_POSTERIORS_ANNOTATION,
 
     /**
      * set all of the genotype GT values to NO_CALL and remove annotations
@@ -41,5 +47,11 @@ public enum GenotypeAssignmentMethod {
     /**
      * do not even bother changing the GTs
      */
-    DO_NOT_ASSIGN_GENOTYPES
+    DO_NOT_ASSIGN_GENOTYPES,
+
+    /**
+     * Calculate posterior probabilities and use those to assign genotypes
+     */
+    USE_POSTERIOR_PROBABILITIES,
+
 }

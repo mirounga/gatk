@@ -1,13 +1,13 @@
 package org.broadinstitute.hellbender.engine;
 
+import htsjdk.samtools.SAMSequenceDictionary;
 import htsjdk.tribble.Feature;
 import htsjdk.tribble.FeatureCodec;
 import org.broadinstitute.hellbender.engine.filters.CountingReadFilter;
 import org.broadinstitute.hellbender.exceptions.UserException;
+import org.broadinstitute.hellbender.tools.genomicsdb.GenomicsDBOptions;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
-
-import java.io.File;
 
 /**
  * A FeatureWalker is a tool that processes a {@link Feature} at a time from a source of Features, with
@@ -15,7 +15,7 @@ import java.io.File;
  * of Features.
 
  * Subclasses must implement the {@link #apply(Feature, ReadsContext, ReferenceContext, FeatureContext)} method to process each Feature,
- * as well as {@link #isAcceptableFeatureType(Class)} and {@link #getDrivingFeatureFile()}, and may optionally implement
+ * as well as {@link #isAcceptableFeatureType(Class)} and {@link #getDrivingFeaturePath()}, and may optionally implement
  * {@link #onTraversalStart()}, {@link #onTraversalSuccess()}, and/or {@link #closeTool()}.
  *
  * @param <F> the driving feature type.
@@ -23,6 +23,7 @@ import java.io.File;
 public abstract class FeatureWalker<F extends Feature> extends WalkerBase {
 
     private FeatureDataSource<F> drivingFeatures;
+    private Object header;
 
     @Override
     public boolean requiresFeatures(){
@@ -55,16 +56,23 @@ public abstract class FeatureWalker<F extends Feature> extends WalkerBase {
 
     @SuppressWarnings("unchecked")
     private void initializeDrivingFeatures() {
-        final File drivingFile = getDrivingFeatureFile();
-        final FeatureCodec<? extends Feature, ?> codec = FeatureManager.getCodecForFile(drivingFile.toPath());
+        final GATKPath drivingPath = getDrivingFeaturePath();
+        final FeatureCodec<? extends Feature, ?> codec = FeatureManager.getCodecForFile(drivingPath.toPath());
         if (isAcceptableFeatureType(codec.getFeatureType())) {
-            drivingFeatures = new FeatureDataSource<>(new FeatureInput<>(drivingFile.getAbsolutePath()), FeatureDataSource.DEFAULT_QUERY_LOOKAHEAD_BASES, null, cloudPrefetchBuffer, cloudIndexPrefetchBuffer, referenceArguments.getReferencePath());
+            final GenomicsDBOptions options = new GenomicsDBOptions(referenceArguments.getReferencePath());
+            final FeatureInput<F> drivingFeatureInput = new FeatureInput<>(drivingPath);
+            drivingFeatureInput.setFeatureCodecClass((Class<FeatureCodec<F, ?>>)codec.getClass());
+            drivingFeatures = new FeatureDataSource<>(drivingFeatureInput, FeatureDataSource.DEFAULT_QUERY_LOOKAHEAD_BASES, null,
+                    cloudPrefetchBuffer, cloudIndexPrefetchBuffer, options, false);
+            header = drivingFeatures.getHeader();
 
-            final FeatureInput<F> drivingFeaturesInput = new FeatureInput<>(drivingFile.getAbsolutePath(), "drivingFeatureFile");
-            features.addToFeatureSources(0, drivingFeaturesInput, codec.getFeatureType(), cloudPrefetchBuffer, cloudIndexPrefetchBuffer,
-                                         referenceArguments.getReferencePath());
+            final FeatureInput<F> featureInput = new FeatureInput<>(drivingPath, "drivingFeatureFile");
+            featureInput.setFeatureCodecClass((Class<FeatureCodec<F, ?>>)codec.getClass());
+            features.addToFeatureSources(featureInput,
+                    new FeatureDataSource<>(featureInput, 0, codec.getFeatureType(),
+                        cloudPrefetchBuffer, cloudIndexPrefetchBuffer, options, false));
         } else {
-            throw new UserException("File " + drivingFile + " contains features of the wrong type.");
+            throw new UserException("File " + drivingPath.getRawInputString() + " contains features of the wrong type.");
         }
     }
 
@@ -147,5 +155,13 @@ public abstract class FeatureWalker<F extends Feature> extends WalkerBase {
      *
      * @return never {@code null}.
      */
-    public abstract File getDrivingFeatureFile();
+    public abstract GATKPath getDrivingFeaturePath();
+
+
+    /**
+     * Returns the header of the driving features file.
+     */
+    public Object getDrivingFeaturesHeader() {
+        return header;
+    }
 }

@@ -11,10 +11,20 @@ import org.broadinstitute.hellbender.engine.GATKTool;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.tools.copynumber.arguments.CopyNumberArgumentValidationUtils;
-import org.broadinstitute.hellbender.tools.copynumber.formats.collections.*;
+import org.broadinstitute.hellbender.tools.copynumber.formats.collections.AbstractLocatableCollection;
+import org.broadinstitute.hellbender.tools.copynumber.formats.collections.AbstractRecordCollection;
+import org.broadinstitute.hellbender.tools.copynumber.formats.collections.BaselineCopyNumberCollection;
+import org.broadinstitute.hellbender.tools.copynumber.formats.collections.CopyNumberPosteriorDistributionCollection;
+import org.broadinstitute.hellbender.tools.copynumber.formats.collections.IntegerCopyNumberSegmentCollection;
+import org.broadinstitute.hellbender.tools.copynumber.formats.collections.LinearCopyRatioCollection;
+import org.broadinstitute.hellbender.tools.copynumber.formats.collections.NonLocatableDoubleCollection;
+import org.broadinstitute.hellbender.tools.copynumber.formats.collections.OverlappingIntegerCopyNumberSegmentCollection;
+import org.broadinstitute.hellbender.tools.copynumber.formats.collections.SimpleIntervalCollection;
 import org.broadinstitute.hellbender.tools.copynumber.formats.metadata.LocatableMetadata;
+import org.broadinstitute.hellbender.tools.copynumber.formats.metadata.SampleLocatableMetadata;
 import org.broadinstitute.hellbender.tools.copynumber.formats.metadata.SimpleSampleLocatableMetadata;
 import org.broadinstitute.hellbender.tools.copynumber.formats.records.CopyNumberPosteriorDistribution;
+import org.broadinstitute.hellbender.tools.copynumber.formats.records.IntegerCopyNumberSegment;
 import org.broadinstitute.hellbender.tools.copynumber.formats.records.IntervalCopyNumberGenotypingData;
 import org.broadinstitute.hellbender.tools.copynumber.formats.records.LinearCopyRatio;
 import org.broadinstitute.hellbender.tools.copynumber.gcnv.GermlineCNVIntervalVariantComposer;
@@ -26,13 +36,17 @@ import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
 import org.broadinstitute.hellbender.utils.io.Resource;
 import org.broadinstitute.hellbender.utils.python.PythonScriptExecutor;
+import org.broadinstitute.hellbender.utils.reference.ReferenceUtils;
 
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
 import java.nio.file.Paths;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -60,6 +74,12 @@ import java.util.stream.IntStream;
  * <p>Finally, the tool concatenates posterior means for denoised copy ratios from all the call shards produced by
  * the {@link GermlineCNVCaller} into a single file.</p>
  *
+ * <p>This tool can also take a VCF specifying breakpoints to be used instead of HMM-derived segmentation using posterior
+ * probabilities from the intervals.  This functionality enables the calculation of new quality scores using breakpoints
+ * derived from another source, as with JointGermlineCNVSegmentation applied to multiple samples. When using this functionality,
+ * an <code>input-intervals-vcf</code> from the original PostprocessGermlineCNVCalls call without multi-sample
+ * breakpoints should also be provided.</p>
+ *
  * <h3>Python environment setup</h3>
  *
  * <p>The computation done by this tool, aside from input data parsing and validation, is performed outside of the Java
@@ -73,8 +93,8 @@ import java.util.stream.IntStream;
  * configuration. For example, by running
  * <code>THEANO_FLAGS="base_compiledir=PATH/TO/BASE_COMPILEDIR" gatk PostprocessGermlineCNVCalls ...</code>, users can specify
  * the theano compilation directory (which is set to <code>$HOME/.theano</code> by default).  See theano documentation
- * at <a href="http://deeplearning.net/software/theano/library/config.html">
- *     http://deeplearning.net/software/theano/library/config.html</a>.
+ * at <a href="https://theano-pymc.readthedocs.io/en/latest/library/config.html">
+ *     https://theano-pymc.readthedocs.io/en/latest/library/config.html</a>.
  * </p>
  *
  * <h3>Required inputs:</h3>
@@ -90,7 +110,7 @@ import java.util.stream.IntStream;
  *
  * <p>The calls or model shards can be specified in arbitrary order.</p>
  *
- * <h3>Usage example</h3>
+ * <h3>Usage examples</h3>
  *
  * <pre>
  *   gatk PostprocessGermlineCNVCalls \
@@ -105,6 +125,24 @@ import java.util.stream.IntStream;
  *     --output-genotyped-intervals sample_0_genotyped_intervals.vcf
  *     --output-genotyped-segments sample_0_genotyped_segments.vcf
  *     --output-denoised-copy-ratios sample_0_denoised_copy_ratios.tsv
+ * </pre>
+ *
+ * <pre>
+ *   gatk PostprocessGermlineCNVCalls \
+ *     --calls-shard-path path/to/shard_1-calls
+ *     --calls-shard-path path/to/shard_2-calls
+ *     --model-shard-path path/to/shard_1-model
+ *     --model-shard-path path/to/shard_2-model
+ *     --sample-index 0
+ *     --autosomal-ref-copy-number 2
+ *     --allosomal-contig X
+ *     --allosomal-contig Y
+ *     --input-intervals-vcf sample_0_genotyped_intervals.vcf
+ *     --clustered-breakpoints cohort_breakpoints.vcf
+ *     --output-genotyped-intervals sample_0_genotyped_intervals.clustered.vcf
+ *     --output-genotyped-segments sample_0_genotyped_segments.clustered.vcf
+ *     --output-denoised-copy-ratios sample_0_denoised_copy_ratios.clustered.tsv
+ *     -R reference.fasta
  * </pre>
  *
  * @author Mehrtash Babadi &lt;mehrtash@broadinstitute.org&gt;
@@ -128,6 +166,12 @@ public final class PostprocessGermlineCNVCalls extends GATKTool {
     public static final String OUTPUT_DENOISED_COPY_RATIOS_LONG_NAME = "output-denoised-copy-ratios";
     public static final String AUTOSOMAL_REF_COPY_NUMBER_LONG_NAME = "autosomal-ref-copy-number";
     public static final String ALLOSOMAL_CONTIG_LONG_NAME = "allosomal-contig";
+    public static final String INPUT_INTERVALS_LONG_NAME = "input-intervals-vcf";
+    public static final String CLUSTERED_FILE_LONG_NAME = "clustered-breakpoints";
+    public static final String DUPLICATION_QS_THRESHOLD_LONG_NAME = "duplication-qs-threshold";
+    public static final String HET_DEL_QS_THRESHOLD_LONG_NAME = "het-deletion-qs-threshold";
+    public static final String HOM_DEL_QS_THRESHOLD_LONG_NAME = "hom-deletion-qs-threshold";
+    public static final String SITE_FREQUENCY_THRESHOLD_LONG_NAME = "site-frequency-threshold";
 
     @Argument(
             doc = "List of paths to GermlineCNVCaller call directories.",
@@ -172,6 +216,20 @@ public final class PostprocessGermlineCNVCalls extends GATKTool {
     private List<String> allosomalContigList;
 
     @Argument(
+            doc = "Input VCF with combined intervals for all samples",
+            fullName = INPUT_INTERVALS_LONG_NAME,
+            optional = true
+    )
+    private File combinedIntervalsVCFFile = null;
+
+    @Argument(
+            doc = "VCF with clustered breakpoints and copy number calls for all samples, can be generated with GATK JointGermlineCNVSegmentation tool",
+            fullName = CLUSTERED_FILE_LONG_NAME,
+            optional = true
+    )
+    private File clusteredBreakpointsVCFFile = null;
+
+    @Argument(
             doc = "Output intervals VCF file.",
             fullName = OUTPUT_INTERVALS_VCF_LONG_NAME
     )
@@ -188,6 +246,38 @@ public final class PostprocessGermlineCNVCalls extends GATKTool {
             fullName = OUTPUT_DENOISED_COPY_RATIOS_LONG_NAME
     )
     private File outputDenoisedCopyRatioFile;
+
+    @Argument(
+            doc = "Filter out heterozygous deletions with quality lower than this.",
+            fullName = HET_DEL_QS_THRESHOLD_LONG_NAME,
+            optional = true,
+            minValue = 0
+    )
+    private int hetDelQSThreshold = 100;
+
+    @Argument(
+            doc = "Filter out homozygous deletions with quality lower than this.",
+            fullName = HOM_DEL_QS_THRESHOLD_LONG_NAME,
+            optional = true,
+            minValue = 0
+    )
+    private int homDelQSThreshold = 400;
+
+    @Argument(
+            doc = "Filter out duplications with quality lower than this.",
+            fullName = DUPLICATION_QS_THRESHOLD_LONG_NAME,
+            optional = true,
+            minValue = 0
+    )
+    private int dupeQSThreshold = 50;
+
+    @Argument(
+            doc = "Filter out variants with site frequency higher than this.",
+            fullName = SITE_FREQUENCY_THRESHOLD_LONG_NAME,
+            optional = true,
+            minValue = 0
+    )
+    private double siteFrequencyThreshold = 0.01;
 
     /**
      * A list of {@link SimpleIntervalCollection} for each shard
@@ -253,7 +343,8 @@ public final class PostprocessGermlineCNVCalls extends GATKTool {
      */
     @Override
     public SAMSequenceDictionary getBestAvailableSequenceDictionary() {
-        if (sequenceDictionary != null) {
+        if (getMasterSequenceDictionary() != null) {
+            sequenceDictionary = getMasterSequenceDictionary();
             return sequenceDictionary;
         }
         final List<SimpleIntervalCollection> unsortedIntervalCollectionsFromCalls =
@@ -387,43 +478,62 @@ public final class PostprocessGermlineCNVCalls extends GATKTool {
     }
 
     private void generateSegmentsVCFFileFromAllShards() {
-        logger.info("Generating segments VCF file...");
+        logger.info("Generating segments...");
 
         /* perform segmentation */
         final File pythonScriptOutputPath = IOUtils.createTempDir("gcnv-segmented-calls");
         final boolean pythonScriptSucceeded = executeSegmentGermlineCNVCallsPythonScript(
                 sampleIndex, inputContigPloidyCallsPath, sortedCallsShardPaths, sortedModelShardPaths,
-                pythonScriptOutputPath);
+                combinedIntervalsVCFFile, clusteredBreakpointsVCFFile, pythonScriptOutputPath);
         if (!pythonScriptSucceeded) {
             throw new UserException("Python return code was non-zero.");
         }
 
         /* parse segments */
+        logger.info("Parsing Python output...");
         final File copyNumberSegmentsFile = getCopyNumberSegmentsFile(pythonScriptOutputPath, sampleIndex);
-        final IntegerCopyNumberSegmentCollection integerCopyNumberSegmentCollection =
-                new IntegerCopyNumberSegmentCollection(copyNumberSegmentsFile);
-        final String sampleNameFromSegmentCollection = integerCopyNumberSegmentCollection
-                .getMetadata().getSampleName();
+
+        final List<IntegerCopyNumberSegment> records;
+        //if we supply a breakpoints file, then allow overlapping segments
+        final AbstractRecordCollection<SampleLocatableMetadata, IntegerCopyNumberSegment> integerCopyNumberSegmentCollection;
+        final String sampleNameFromSegmentCollection;
+        if (clusteredBreakpointsVCFFile == null) {
+            integerCopyNumberSegmentCollection
+                    = new IntegerCopyNumberSegmentCollection(copyNumberSegmentsFile);
+            sampleNameFromSegmentCollection= integerCopyNumberSegmentCollection
+                    .getMetadata().getSampleName();
+
+        } else {
+            integerCopyNumberSegmentCollection
+                    = new OverlappingIntegerCopyNumberSegmentCollection(copyNumberSegmentsFile);
+            sampleNameFromSegmentCollection = integerCopyNumberSegmentCollection
+                    .getMetadata().getSampleName();
+        }
         Utils.validate(sampleNameFromSegmentCollection.equals(sampleName),
                 String.format("Sample name found in the header of copy-number segments file is " +
                                 "different from the expected sample name (found: %s, expected: %s).",
                         sampleNameFromSegmentCollection, sampleName));
+        records = integerCopyNumberSegmentCollection.getRecords();
+
 
         /* write variants */
         logger.info(String.format("Writing segments VCF file to %s...", outputSegmentsVCFFile.getAbsolutePath()));
         final VariantContextWriter segmentsVCFWriter = createVCFWriter(outputSegmentsVCFFile);
         final GermlineCNVSegmentVariantComposer germlineCNVSegmentVariantComposer =
                 new GermlineCNVSegmentVariantComposer(segmentsVCFWriter, sampleName,
-                        refAutosomalIntegerCopyNumberState, allosomalContigSet);
+                        refAutosomalIntegerCopyNumberState, allosomalContigSet,
+                        referenceArguments.getReferenceSpecifier() == null ? null :
+                                ReferenceUtils.createReferenceReader(referenceArguments.getReferenceSpecifier()),
+                        dupeQSThreshold, hetDelQSThreshold, homDelQSThreshold, siteFrequencyThreshold, clusteredBreakpointsVCFFile);
         germlineCNVSegmentVariantComposer.composeVariantContextHeader(sequenceDictionary, getDefaultToolVCFHeaderLines());
-        germlineCNVSegmentVariantComposer.writeAll(integerCopyNumberSegmentCollection.getRecords());
+        germlineCNVSegmentVariantComposer.writeAll(records);
         segmentsVCFWriter.close();
     }
 
     private void concatenateDenoisedCopyRatioFiles() {
         logger.info("Generating denoised copy ratios...");
-        final List<SimpleInterval> concatenatedIntervalList = new ArrayList<>();
-        final List<Double> concatenatedDenoisedCopyRatioRecordsList = new ArrayList<>();
+        final List<SimpleInterval> concatenatedIntervals = new ArrayList<>();
+        final List<Double> concatenatedDenoisedCopyRatioValues = new ArrayList<>();
         /* Read in and concatenate all denoised copy ratio files into one list */
         for (int shardIndex = 0; shardIndex < numShards; shardIndex++) {
             final File shardRootDirectory = sortedCallsShardPaths.get(shardIndex);
@@ -442,20 +552,20 @@ public final class PostprocessGermlineCNVCalls extends GATKTool {
                                     "not match the number of entries in the shard interval list (copy ratio list size: %d, " +
                                     "interval list size: %d)",
                             shardIndex, shardDenoisedCopyRatioRecords.size(), shardIntervals.size()));
-            concatenatedIntervalList.addAll(shardIntervals);
-            concatenatedDenoisedCopyRatioRecordsList.addAll(shardDenoisedCopyRatioRecords);
+            concatenatedIntervals.addAll(shardIntervals);
+            concatenatedDenoisedCopyRatioValues.addAll(shardDenoisedCopyRatioRecords);
         }
         /* Attach the corresponding intervals */
-        final List<LinearCopyRatio> linearCopyRatioList =
-                IntStream.range(0, concatenatedIntervalList.size())
+        final List<LinearCopyRatio> linearCopyRatios =
+                IntStream.range(0, concatenatedIntervals.size())
                         .mapToObj(intervalIndex -> new LinearCopyRatio(
-                                concatenatedIntervalList.get(intervalIndex),
-                                concatenatedDenoisedCopyRatioRecordsList.get(intervalIndex)))
+                                concatenatedIntervals.get(intervalIndex),
+                                concatenatedDenoisedCopyRatioValues.get(intervalIndex)))
                         .collect(Collectors.toList());
         final SimpleSampleLocatableMetadata metadata = new SimpleSampleLocatableMetadata(sampleName, sequenceDictionary);
         /* Make a locatable collection of denoised copy ratios and write it to file */
         final LinearCopyRatioCollection linearCopyRatioCollection =
-                new LinearCopyRatioCollection(metadata, linearCopyRatioList);
+                new LinearCopyRatioCollection(metadata, linearCopyRatios);
         logger.info(String.format("Writing denoised copy ratios to %s...", outputDenoisedCopyRatioFile.getAbsolutePath()));
         linearCopyRatioCollection.write(outputDenoisedCopyRatioFile);
     }
@@ -514,26 +624,26 @@ public final class PostprocessGermlineCNVCalls extends GATKTool {
 
         /* attach the intervals to make locatable posteriors */
         final List<SimpleInterval> shardIntervals = sortedIntervalCollections.get(shardIndex).getIntervals();
-        final List<CopyNumberPosteriorDistribution> copyNumberPosteriorDistributionList =
+        final List<CopyNumberPosteriorDistribution> copyNumberPosteriorDistributions =
                 copyNumberPosteriorDistributionCollection.getRecords();
-        Utils.validate(shardIntervals.size() == copyNumberPosteriorDistributionList.size(),
+        Utils.validate(shardIntervals.size() == copyNumberPosteriorDistributions.size(),
                 String.format("The number of entries in the copy-number posterior file for shard %d does " +
                                 "not match the number of entries in the shard interval list (posterior list size: %d, " +
-                                "interval list size: %d)", shardIndex, copyNumberPosteriorDistributionList.size(),
+                                "interval list size: %d)", shardIndex, copyNumberPosteriorDistributions.size(),
                         shardIntervals.size()));
 
-        final List<IntegerCopyNumberState> baselineCopyNumberList = baselineCopyNumberCollection.getRecords();
-        Utils.validate(shardIntervals.size() == baselineCopyNumberList.size(),
+        final List<IntegerCopyNumberState> baselineCopyNumbers = baselineCopyNumberCollection.getRecords();
+        Utils.validate(shardIntervals.size() == baselineCopyNumbers.size(),
                 String.format("The number of entries in the baseline copy-number file for shard %d does " +
                                 "not match the number of entries in the shard interval list (baseline copy-number " +
-                                "list size: %d, interval list size: %d)", shardIndex, baselineCopyNumberList.size(),
+                                "list size: %d, interval list size: %d)", shardIndex, baselineCopyNumbers.size(),
                         shardIntervals.size()));
 
         return IntStream.range(0, copyNumberPosteriorDistributionCollection.size())
                         .mapToObj(intervalIndex -> new IntervalCopyNumberGenotypingData(
                                 shardIntervals.get(intervalIndex),
-                                copyNumberPosteriorDistributionList.get(intervalIndex),
-                                baselineCopyNumberList.get(intervalIndex)))
+                                copyNumberPosteriorDistributions.get(intervalIndex),
+                                baselineCopyNumbers.get(intervalIndex)))
                         .collect(Collectors.toList());
     }
 
@@ -590,6 +700,8 @@ public final class PostprocessGermlineCNVCalls extends GATKTool {
                                                                       final File contigPloidyCallsPath,
                                                                       final List<File> sortedCallDirectories,
                                                                       final List<File> sortedModelDirectories,
+                                                                      final File combinedIntervalsVCFFile,
+                                                                      final File clusteredBreakpointsVCFFile,
                                                                       final File pythonScriptOutputPath) {
         /* the inputs to this method are expected to be previously validated */
         try {
@@ -615,6 +727,14 @@ public final class PostprocessGermlineCNVCalls extends GATKTool {
         arguments.add(CopyNumberArgumentValidationUtils.getCanonicalPath(pythonScriptOutputPath));
         arguments.add("--sample_index");
         arguments.add(String.valueOf(sampleIndex));
+        if (combinedIntervalsVCFFile != null) {
+            arguments.add("--intervals_vcf");
+            arguments.add(combinedIntervalsVCFFile.toString());
+        }
+        if (clusteredBreakpointsVCFFile != null) {
+            arguments.add("--clustered_vcf");
+            arguments.add(clusteredBreakpointsVCFFile.toString());
+        }
 
         return executor.executeScript(
                 new Resource(SEGMENT_GERMLINE_CNV_CALLS_PYTHON_SCRIPT, PostprocessGermlineCNVCalls.class),

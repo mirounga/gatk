@@ -11,7 +11,6 @@ import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.genotyper.LikelihoodMatrix;
 import org.broadinstitute.hellbender.utils.haplotype.Haplotype;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
-import org.broadinstitute.hellbender.utils.read.ReadUtils;
 
 import java.io.Closeable;
 import java.util.Arrays;
@@ -65,13 +64,7 @@ public abstract class PairHMM implements Closeable{
             logger.info("Using the OpenMP multi-threaded AVX-accelerated native PairHMM implementation");
             return hmm;
         }),
-        /* FPGA implementation of LOGLESS_CACHING called through JNI. Throws if FPGA is not available */
-        EXPERIMENTAL_FPGA_LOGLESS_CACHING(args -> {
-            // Constructor will throw a UserException if FPGA is not available
-            final VectorLoglessPairHMM hmm = new VectorLoglessPairHMM(VectorLoglessPairHMM.Implementation.FPGA, args);
-            logger.info("Using the FPGA-accelerated native PairHMM implementation");
-            return hmm;
-        }),
+
         /* MS optimized AVX implementation of LOGLESS_CACHING called through JNI. Throws if AVX is not available */
         AVX_LOGLESS_CACHING_MGL(args -> {
             // Constructor will throw a UserException if native DLL is not available
@@ -87,17 +80,6 @@ public abstract class PairHMM implements Closeable{
             4. LOGLESS_CACHING
          */
         FASTEST_AVAILABLE(args -> {
-            // This try block is temporarily commented out becuase FPGA support is experimental for the time being. Once
-            // FPGA support has matured/been properly tested, we can easily add it back the "fastest available" logic
-            // by uncommenting this block
-            // try {
-            //    final VectorLoglessPairHMM hmm = new VectorLoglessPairHMM(VectorLoglessPairHMM.Implementation.FPGA, args);
-            //    logger.info("Using the FPGA-accelerated native PairHMM implementation");
-            //    return hmm;
-            //}
-            //catch ( UserException.HardwareFeatureException e ) {
-            //    logger.info("FPGA-accelerated native PairHMM implementation is not supported");
-            //}
             try {
                 final VectorLoglessPairHMM hmm = new VectorLoglessPairHMM(VectorLoglessPairHMM.Implementation.MGL, args);
                 logger.info("Using the Microsoft Genomics AVX-accelerated native PairHMM implementation");
@@ -221,12 +203,10 @@ public abstract class PairHMM implements Closeable{
      * @param processedReads reads to analyze instead of the ones present in the destination read-likelihoods.
      * @param logLikelihoods where to store the log likelihoods where position [a][r] is reserved for the log likelihood of {@code reads[r]}
      *             conditional to {@code alleles[a]}.
-     * @param gcp penalty for gap continuations base array map for processed reads.
-     *
      */
     public void computeLog10Likelihoods(final LikelihoodMatrix<GATKRead, Haplotype> logLikelihoods,
-                                      final List<GATKRead> processedReads,
-                                      final Map<GATKRead, byte[]> gcp) {
+                                        final List<GATKRead> processedReads,
+                                        final PairHMMInputScoreImputator inputScoreImputator) {
         if (processedReads.isEmpty()) {
             return;
         }
@@ -247,11 +227,13 @@ public abstract class PairHMM implements Closeable{
         int idx = 0;
         int readIndex = 0;
         for(final GATKRead read : processedReads){
+            final PairHMMInputScoreImputation inputScoreImputation = inputScoreImputator.impute(read);
             final byte[] readBases = read.getBases();
+
             final byte[] readQuals = read.getBaseQualities();
-            final byte[] readInsQuals = ReadUtils.getBaseInsertionQualities(read);
-            final byte[] readDelQuals = ReadUtils.getBaseDeletionQualities(read);
-            final byte[] overallGCP = gcp.get(read);
+            final byte[] readInsQuals = inputScoreImputation.insOpenPenalties();
+            final byte[] readDelQuals = inputScoreImputation.delOpenPenalties();
+            final byte[] overallGCP = inputScoreImputation.gapContinuationPenalties();
 
             // peek at the next haplotype in the list (necessary to get nextHaplotypeBases, which is required for caching in the array implementation)
             final boolean isFirstHaplotype = true;

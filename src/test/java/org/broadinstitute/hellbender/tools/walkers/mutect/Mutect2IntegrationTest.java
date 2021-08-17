@@ -16,6 +16,8 @@ import org.broadinstitute.hellbender.engine.FeatureDataSource;
 import org.broadinstitute.hellbender.testutils.ArgumentsBuilder;
 import org.broadinstitute.hellbender.testutils.VariantContextTestUtils;
 import org.broadinstitute.hellbender.tools.walkers.annotator.AnnotationUtils;
+import org.broadinstitute.hellbender.tools.walkers.annotator.AssemblyComplexity;
+import org.broadinstitute.hellbender.tools.walkers.annotator.FeaturizedReadSets;
 import org.broadinstitute.hellbender.tools.walkers.haplotypecaller.AssemblyBasedCallerArgumentCollection;
 import org.broadinstitute.hellbender.tools.walkers.haplotypecaller.ReadThreadingAssemblerArgumentCollection;
 import org.broadinstitute.hellbender.tools.walkers.haplotypecaller.ReferenceConfidenceMode;
@@ -135,7 +137,7 @@ public class Mutect2IntegrationTest extends CommandLineProgramTest {
         final List<File> normals = normal.isPresent() ? Collections.singletonList(normal.get()) : Collections.emptyList();
         runMutect2(Collections.singletonList(tumor), normals, unfilteredVcf, CHROMOSOME_20, b37Reference, Optional.of(GNOMAD),
                 args -> args.addMask(mask).add(M2ArgumentCollection.F1R2_TAR_GZ_NAME, f1r2Counts),
-                        args -> errorCorrectReads ? args.add(ReadThreadingAssemblerArgumentCollection.PILEUP_ERROR_CORRECTION_LOG_ODDS_NAME, 3.0) : args
+                args -> errorCorrectReads ? args.add(ReadThreadingAssemblerArgumentCollection.PILEUP_ERROR_CORRECTION_LOG_ODDS_NAME, 3.0) : args
         );
 
         // verify that alleles contained in likelihoods matrix but dropped from somatic calls do not show up in annotations
@@ -162,7 +164,8 @@ public class Mutect2IntegrationTest extends CommandLineProgramTest {
                     args -> runOrientationFilter ? args.add(M2FiltersArgumentCollection.ARTIFACT_PRIOR_TABLE_NAME, orientationModel) : args);
 
             final File concordanceSummary = createTempFile("concordance", ".txt");
-            runConcordance(truth, filteredVcf,concordanceSummary, CHROMOSOME_20, mask);
+            final File truePositivesFalseNegatives = createTempFile("tpfn", ".vcf");
+            runConcordance(truth, filteredVcf,concordanceSummary, CHROMOSOME_20, mask, Optional.of (truePositivesFalseNegatives));
 
             final List<ConcordanceSummaryRecord> summaryRecords = new ConcordanceSummaryRecord.Reader(concordanceSummary.toPath()).toList();
             summaryRecords.forEach(rec -> {
@@ -216,7 +219,7 @@ public class Mutect2IntegrationTest extends CommandLineProgramTest {
         runFilterMutectCalls(unfilteredVcf, filteredVcf, b37Reference);
 
         final File concordanceSummary = createTempFile("concordance", ".txt");
-        runConcordance(truth, filteredVcf, concordanceSummary, CHROMOSOME_20, mask);
+        runConcordance(truth, filteredVcf, concordanceSummary, CHROMOSOME_20, mask, Optional.empty());
 
         final List<ConcordanceSummaryRecord> summaryRecords = new ConcordanceSummaryRecord.Reader(concordanceSummary.toPath()).toList();
         summaryRecords.forEach(rec -> {
@@ -267,7 +270,9 @@ public class Mutect2IntegrationTest extends CommandLineProgramTest {
         runFilterMutectCalls(unfilteredVcf, filteredVcf, b37Reference);
 
         VariantContextTestUtils.streamVcf(unfilteredVcf).flatMap(vc -> vc.getGenotypes().stream()).forEach(g -> Assert.assertTrue(g.hasAD()));
-        final long numVariants = VariantContextTestUtils.streamVcf(unfilteredVcf).count();
+        final long numVariants = VariantContextTestUtils.streamVcf(filteredVcf)
+                .filter(VariantContext::isNotFiltered)
+                .count();
         Assert.assertTrue(numVariants < 4);
     }
 
@@ -292,6 +297,48 @@ public class Mutect2IntegrationTest extends CommandLineProgramTest {
 
         // every variant on this interval in this sample is in gnomAD
         Assert.assertTrue(numVariantsPassingFilters < 2);
+    }
+    
+    // run tumor-only using our mini gnomAD on NA12878, which is not a tumor
+    @Test
+    public void testTrainingDataMode() {
+        Utils.resetRandomGenerator();
+        final File tumor = new File(NA12878_20_21_WGS_bam);
+        final File unfilteredVcf = createTempFile("unfiltered", ".vcf");
+        
+        final List<String> assemblyComplexityKeys = new AssemblyComplexity().getKeyNames();
+        final List<String> featurizedReadSetKeys = new FeaturizedReadSets().getKeyNames();
+        
+        //runMutect2(tumor, unfilteredVcf, "20:10000000-10010000", b37Reference, Optional.of(GNOMAD));
+        runMutect2(tumor, unfilteredVcf, "20:10000000-10010000", b37Reference, Optional.of(GNOMAD),
+                   args -> args.addFlag(ReadThreadingAssemblerArgumentCollection.LINKED_DE_BRUIJN_GRAPH_LONG_NAME),
+                   args -> args.addFlag(M2ArgumentCollection.TRAINING_DATA_MODE_LONG_NAME));
+        
+        VariantContextTestUtils.streamVcf(unfilteredVcf).forEach(vc -> {
+            Assert.assertTrue(vc.hasAttribute(GATKVCFConstants.REFERENCE_BASES_KEY));
+            assemblyComplexityKeys.forEach(key -> Assert.assertTrue(vc.hasAttribute(key)));
+            vc.getGenotypes().forEach(gt -> featurizedReadSetKeys.forEach(key -> Assert.assertTrue(gt.hasExtendedAttribute(key))));
+        });
+    }
+
+    // make sure we can call tumor alts when the normal has a different alt at the same site
+    // regression test for https://github.com/broadinstitute/gatk/issues/6901
+    @Test
+    public void testDifferentAltsInTumorAndNormal() {
+        Utils.resetRandomGenerator();
+        final File tumor = new File(toolsTestDir, "mutect/different-alts-tumor.bam");
+        final File normal = new File(toolsTestDir, "mutect/different-alts-normal.bam");
+        final File output = createTempFile("output", ".vcf");
+
+
+        runMutect2(tumor, normal, output, "20:10020000-10021200", b37Reference, Optional.empty(),
+                args -> args.add(M2ArgumentCollection.NORMAL_LOG_10_ODDS_LONG_NAME, 0.0));
+
+        final Map<Integer, Allele> altAllelesByPosition = VariantContextTestUtils.streamVcf(output)
+                .collect(Collectors.toMap(VariantContext::getStart, VariantContext::getAltAlleleWithHighestAlleleCount));
+
+        Assert.assertTrue(altAllelesByPosition.get(10020042).basesMatch(Allele.ALT_C)); //tumor G->C, normal G->A
+        Assert.assertTrue(altAllelesByPosition.get(10020124).basesMatch(Allele.ALT_G)); //tumor A->G, normal A->T
     }
 
     // test on an artificial bam with several contrived MNPs
@@ -371,6 +418,34 @@ public class Mutect2IntegrationTest extends CommandLineProgramTest {
                 vc.getAlternateAlleles().stream().filter(a-> a.length() > 0 && BaseUtils.isNucleotide(a.getBases()[0])).forEach(a -> Assert.assertTrue(altAllelesAtThisLocus.contains(a)));
             }
         }
+    }
+
+    // test that the dont-use-soft-clips option actually does something
+    @Test
+    public void testDontUseSoftClips() {
+        Utils.resetRandomGenerator();
+        final File tumor = new File(NA12878_20_21_WGS_bam);
+        final int start = 10050000;
+
+        final SimpleInterval interval = new SimpleInterval("20", start, start + 25000);
+
+        final File calls1 = createTempFile("unfiltered", ".vcf");
+        runMutect2(tumor, calls1, interval.toString(), b37Reference, Optional.of(GNOMAD));
+
+        final File calls2 = createTempFile("unfiltered", ".vcf");
+        runMutect2(tumor, calls2, interval.toString(), b37Reference, Optional.of(GNOMAD),
+                args -> args.addFlag(AssemblyBasedCallerArgumentCollection.DONT_USE_SOFT_CLIPPED_BASES_LONG_NAME));
+
+        final List<VariantContext> indelsWithSoftClips = VariantContextTestUtils.streamVcf(calls1).filter(VariantContext::isIndel).collect(Collectors.toList());
+        final List<VariantContext> indelsWithoutSoftClips = VariantContextTestUtils.streamVcf(calls2).filter(VariantContext::isIndel).collect(Collectors.toList());
+
+        Assert.assertTrue(indelsWithoutSoftClips.size() < indelsWithSoftClips.size());
+
+        final int startOfDroppedVariant = 10068160;
+        final int endOfDroppedVariant = 10068174;
+        Assert.assertTrue(indelsWithSoftClips.stream().anyMatch(vc -> vc.getStart() == startOfDroppedVariant && vc.getEnd() == endOfDroppedVariant));
+        Assert.assertFalse(indelsWithoutSoftClips.stream().anyMatch(vc -> vc.getStart() == startOfDroppedVariant && vc.getEnd() == endOfDroppedVariant));
+
     }
 
 
@@ -497,17 +572,17 @@ public class Mutect2IntegrationTest extends CommandLineProgramTest {
                 args -> args.add(M2ArgumentCollection.MITOCHONDRIA_MODE_LONG_NAME, true));
 
         final List<VariantContext> variants = VariantContextTestUtils.streamVcf(unfilteredVcf).collect(Collectors.toList());
-        final List<String> variantKeys = variants.stream().map(Mutect2IntegrationTest::keyForVariant).collect(Collectors.toList());
+        final List<String> variantKeys = variants.stream().map(VariantContextTestUtils::keyForVariant).collect(Collectors.toList());
 
         final List<String> expectedKeys = Arrays.asList(
                 "chrM:152-152 T*, [C]",
                 "chrM:263-263 A*, [G]",
-                "chrM:302-302 A*, [AC, ACC, C]",
+                "chrM:302-302 A*, [AC, ACC, ACCCCCCCCCCCCC, C]",
                 "chrM:310-310 T*, [C, TC]",
                 "chrM:750-750 A*, [G]");
         Assert.assertTrue(variantKeys.containsAll(expectedKeys));
 
-        Assert.assertEquals(variants.get(0).getAttributeAsInt(GATKVCFConstants.ORIGINAL_CONTIG_MISMATCH_KEY, 0), 1672);
+        Assert.assertEquals(variants.get(0).getAttributeAsInt(GATKVCFConstants.ORIGINAL_CONTIG_MISMATCH_KEY, 0), 1741);
     }
 
     @DataProvider(name = "vcfsForFiltering")
@@ -556,6 +631,38 @@ public class Mutect2IntegrationTest extends CommandLineProgramTest {
         // vcf sequence dicts don't match ref
         runFilterMutectCalls(unfiltered, filteredVcf, MITO_REF.getAbsolutePath(),
                 args -> args.add(M2ArgumentCollection.MITOCHONDRIA_MODE_LONG_NAME, true),
+                args -> args.add(StandardArgumentDefinitions.DISABLE_SEQUENCE_DICT_VALIDATION_NAME, true),
+                args -> args.add(M2FiltersArgumentCollection.MIN_AF_LONG_NAME, minAlleleFraction),
+                args -> args.add(M2FiltersArgumentCollection.MIN_READS_ON_EACH_STRAND_LONG_NAME, 1),
+                args -> args.add(M2FiltersArgumentCollection.UNIQUE_ALT_READ_COUNT_LONG_NAME, 2),
+                args -> {
+                    intervals.stream().map(SimpleInterval::new).forEach(args::addInterval);
+                    return args;
+                });
+
+        final List<Set<String>> actualFilters = VariantContextTestUtils.streamVcf(filteredVcf)
+                .map(VariantContext::getFilters).collect(Collectors.toList());
+
+        final List<List<String>> actualASFilters = VariantContextTestUtils.streamVcf(filteredVcf)
+                .map(vc -> AnnotationUtils.decodeAnyASListWithRawDelim(vc.getCommonInfo().getAttributeAsString(GATKVCFConstants.AS_FILTER_STATUS_KEY, ""))).collect(Collectors.toList());
+        Assert.assertEquals(actualASFilters, expectedASFilters);
+
+        Assert.assertEquals(actualFilters.size(), expectedFilters.size());
+        for (int n = 0; n < actualFilters.size(); n++) {
+            Assert.assertTrue(actualFilters.get(n).containsAll(expectedFilters.get(n)), "Actual filters missing some expected filters: " + SetUtils.difference(expectedFilters.get(n), actualFilters.get(n)));
+            Assert.assertTrue(expectedFilters.get(n).containsAll(actualFilters.get(n)), "Expected filters missing some actual filters: " + SetUtils.difference(actualFilters.get(n), expectedFilters.get(n)));
+        }
+
+        Assert.assertEquals(actualFilters, expectedFilters);
+    }
+
+    @Test(dataProvider = "vcfsForFiltering")
+    public void testFilterMicrobial(File unfiltered, final double minAlleleFraction, final List<String> intervals, List<Set<String>> expectedFilters, List<List<String>> expectedASFilters)  {
+        final File filteredVcf = createTempFile("filtered", ".vcf");
+
+        // vcf sequence dicts don't match ref
+        runFilterMutectCalls(unfiltered, filteredVcf, MITO_REF.getAbsolutePath(),
+                args -> args.add(M2ArgumentCollection.MICROBIAL_MODE_LONG_NAME, true),
                 args -> args.add(StandardArgumentDefinitions.DISABLE_SEQUENCE_DICT_VALIDATION_NAME, true),
                 args -> args.add(M2FiltersArgumentCollection.MIN_AF_LONG_NAME, minAlleleFraction),
                 args -> args.add(M2FiltersArgumentCollection.MIN_READS_ON_EACH_STRAND_LONG_NAME, 1),
@@ -658,20 +765,20 @@ public class Mutect2IntegrationTest extends CommandLineProgramTest {
         Assert.assertTrue(result.getLeft().getMetaDataLine(GATKVCFConstants.SYMBOLIC_ALLELE_DEFINITION_HEADER_TAG) != null);
 
         final List<VariantContext> variants = result.getRight();
-        final Map<String, VariantContext> variantMap = variants.stream().collect(Collectors.toMap(Mutect2IntegrationTest::keyForVariant, Function.identity()));
+        final Map<String, VariantContext> variantMap = variants.stream().collect(Collectors.toMap(VariantContextTestUtils::keyForVariant, Function.identity()));
         final List<String> variantKeys = new ArrayList<>(variantMap.keySet());
 
         final List<String> expectedKeys = Arrays.asList(
                 "chrM:152-152 T*, [<NON_REF>, C]",
                 "chrM:263-263 A*, [<NON_REF>, G]",
-                "chrM:297-297 A*, [<NON_REF>, AC, C]",  //alt alleles get sorted when converted to keys
-                //"chrM:301-301 A*, [<NON_REF>, AC, ACC]",
-                //"chrM:302-302 A*, [<NON_REF>, AC, ACC, C]",  //one of these commented out variants has an allele that only appears in debug mode
-                "chrM:310-310 T*, [<NON_REF>, C, TC]",
+                //"chrM:297-297 A*, [<NON_REF>, AC, C]",
+                //"chrM:301-301 A*, [<NON_REF>, AC, ACC, ACCC]",
+                "chrM:302-302 A*, [<NON_REF>, AC, ACC, ACCC, C]",  //one of these commented out variants has an allele that only appears in debug mode
+                "chrM:310-310 T*, [<NON_REF>, TC]",
                 "chrM:750-750 A*, [<NON_REF>, G]");
         Assert.assertTrue(variantKeys.containsAll(expectedKeys));
         //First entry should be a homRef block
-        Assert.assertTrue(keyForVariant(variants.get(0)).contains("*, [<NON_REF>]"));
+        Assert.assertTrue(VariantContextTestUtils.keyForVariant(variants.get(0)).contains("*, [<NON_REF>]"));
 
         final ArgumentsBuilder validateVariantsArgs = new ArgumentsBuilder()
                 .add("R", MITO_REF.getAbsolutePath())
@@ -688,7 +795,7 @@ public class Mutect2IntegrationTest extends CommandLineProgramTest {
 
         final Pair<VCFHeader, List<VariantContext>> result_noThreshold = VariantContextTestUtils.readEntireVCFIntoMemory(unthresholded.getAbsolutePath());
 
-        final Map<String, VariantContext> variantMap2 = result_noThreshold.getRight().stream().collect(Collectors.toMap(Mutect2IntegrationTest::keyForVariant, Function.identity()));
+        final Map<String, VariantContext> variantMap2 = result_noThreshold.getRight().stream().collect(Collectors.toMap(VariantContextTestUtils::keyForVariant, Function.identity()));
 
         //TLODs for variants should not change too much for variant allele, should change significantly for non-ref
         // however, there are edge cases where this need not be true (this might indicate the need to fix our
@@ -703,7 +810,7 @@ public class Mutect2IntegrationTest extends CommandLineProgramTest {
                 //ref blocks will be dependent on TLOD band values
                 "chrM:218-218 A*, [<NON_REF>]",
                 "chrM:264-266 C*, [<NON_REF>]",
-                "chrM:479-483 A*, [<NON_REF>]",
+                "chrM:475-483 A*, [<NON_REF>]",
                 "chrM:488-492 T*, [<NON_REF>]");
 
         //ref block boundaries aren't particularly stable, so try a few and make sure we check at least one
@@ -711,7 +818,7 @@ public class Mutect2IntegrationTest extends CommandLineProgramTest {
                 .filter(key -> variantMap.containsKey(key) && variantMap2.containsKey(key))
                 .collect(Collectors.toList());
         Assert.assertFalse(refBlockKeys.isEmpty());
-        
+
         refBlockKeys.forEach(key -> Assert.assertTrue(onlyNonRefTlodsChange(variantMap.get(key), variantMap2.get(key), minAF)));
     }
 
@@ -802,11 +909,6 @@ public class Mutect2IntegrationTest extends CommandLineProgramTest {
         Assert.assertTrue(bamout.exists());
     }
 
-    private static String keyForVariant(final VariantContext variant) {
-        return String.format("%s:%d-%d %s, %s", variant.getContig(), variant.getStart(), variant.getEnd(), variant.getReference(),
-                variant.getAlternateAlleles().stream().map(Allele::getDisplayString).sorted().collect(Collectors.toList()));
-    }
-
     @Test
     public void testFilteringHeaders() {
         Utils.resetRandomGenerator();
@@ -827,8 +929,8 @@ public class Mutect2IntegrationTest extends CommandLineProgramTest {
 
     @SafeVarargs
     final private void runMutect2(final List<File> tumors, final List<File> normals, final File output,
-                            final String interval, final String reference,
-                            final Optional<File> gnomad, final Function<ArgumentsBuilder, ArgumentsBuilder>... appendExtraArguments) {
+                                  final String interval, final String reference,
+                                  final Optional<File> gnomad, final Function<ArgumentsBuilder, ArgumentsBuilder>... appendExtraArguments) {
         final ArgumentsBuilder args = new ArgumentsBuilder()
                 .addOutput(output)
                 .addReference(reference);
@@ -855,19 +957,19 @@ public class Mutect2IntegrationTest extends CommandLineProgramTest {
 
     @SafeVarargs
     final private void runMutect2(final File tumor, final File normal, final File output, final String interval, final String reference,
-                            final Optional<File> gnomad, final Function<ArgumentsBuilder, ArgumentsBuilder>... appendExtraArguments) {
+                                  final Optional<File> gnomad, final Function<ArgumentsBuilder, ArgumentsBuilder>... appendExtraArguments) {
         runMutect2(Collections.singletonList(tumor), Collections.singletonList(normal), output, interval, reference, gnomad, appendExtraArguments);
     }
 
     @SafeVarargs
     final private void runMutect2(final File tumor, final File output, final String interval, final String reference,
-                            final Optional<File> gnomad, final Function<ArgumentsBuilder, ArgumentsBuilder>... appendExtraArguments) {
+                                  final Optional<File> gnomad, final Function<ArgumentsBuilder, ArgumentsBuilder>... appendExtraArguments) {
         runMutect2(Collections.singletonList(tumor), Collections.emptyList(), output, interval, reference, gnomad, appendExtraArguments);
     }
 
     @SafeVarargs
     final private void runFilterMutectCalls(final File unfilteredVcf, final File filteredVcf, final String reference,
-                                      final Function<ArgumentsBuilder, ArgumentsBuilder>... appendExtraArguments) {
+                                            final Function<ArgumentsBuilder, ArgumentsBuilder>... appendExtraArguments) {
         final ArgumentsBuilder args = new ArgumentsBuilder()
                 .addVCF(unfilteredVcf)
                 .addOutput(filteredVcf)
@@ -882,13 +984,15 @@ public class Mutect2IntegrationTest extends CommandLineProgramTest {
         runCommandLine(argsWithAdditions, FilterMutectCalls.class.getSimpleName());
     }
 
-    private void runConcordance(final File truth, final File eval, final File summary, final String interval, final File mask) {
+    private void runConcordance(final File truth, final File eval, final File summary, final String interval, final File mask, final Optional<File> truePositivesFalseNegatives) {
         final ArgumentsBuilder concordanceArgs = new ArgumentsBuilder()
                 .add(Concordance.TRUTH_VARIANTS_LONG_NAME, truth)
                 .add(Concordance.EVAL_VARIANTS_LONG_NAME, eval)
                 .addInterval(new SimpleInterval(interval))
                 .add(IntervalArgumentCollection.EXCLUDE_INTERVALS_LONG_NAME, mask)
                 .add(Concordance.SUMMARY_LONG_NAME, summary);
+
+        truePositivesFalseNegatives.ifPresent(file -> concordanceArgs.add(Concordance.TRUE_POSITIVES_AND_FALSE_NEGATIVES_SHORT_NAME, file));
         runCommandLine(concordanceArgs, Concordance.class.getSimpleName());
     }
 

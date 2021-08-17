@@ -1,5 +1,6 @@
 package org.broadinstitute.hellbender.utils.pairhmm;
 
+import htsjdk.variant.variantcontext.Allele;
 import org.broadinstitute.gatk.nativebindings.pairhmm.PairHMMNativeArguments;
 import org.broadinstitute.hellbender.GATKBaseTest;
 import org.broadinstitute.hellbender.exceptions.UserException;
@@ -9,15 +10,14 @@ import org.broadinstitute.hellbender.utils.read.ArtificialReadUtils;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.read.ReadUtils;
 import org.testng.Assert;
+import org.testng.SkipException;
 import org.testng.annotations.Test;
 import picard.util.BasicInputParser;
 
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
-import java.util.Arrays;
-import java.util.LinkedHashMap;
+import java.util.Collections;
 import java.util.List;
-import java.util.Map;
 
 public final class VectorPairHMMUnitTest extends GATKBaseTest {
 
@@ -32,6 +32,12 @@ public final class VectorPairHMMUnitTest extends GATKBaseTest {
         final PairHMMNativeArguments args = new PairHMMNativeArguments();
         args.useDoublePrecision = false;
         args.maxNumberOfThreads = 1;
+
+        // Skip this test on Java 11. Re-enable when https://github.com/broadinstitute/gatk/issues/6649 is fixed.
+        final String jvmVersionString = System.getProperty("java.version");
+        if (jvmVersionString.startsWith("1.11")) {
+            throw new SkipException("testLikelihoodsFromHaplotypesForAvailableImplementations on Java 11");
+        }
 
         for (final VectorLoglessPairHMM.Implementation imp : VectorLoglessPairHMM.Implementation.values()) {
             PairHMM hmm;
@@ -51,7 +57,7 @@ public final class VectorPairHMMUnitTest extends GATKBaseTest {
             }
 
             while (parser.hasNext()) {
-                String tokens[] = parser.next();
+                final String[] tokens = parser.next();
 
                 final Haplotype hap = new Haplotype(tokens[0].getBytes(), true);
 
@@ -67,11 +73,27 @@ public final class VectorPairHMMUnitTest extends GATKBaseTest {
                 ReadUtils.setInsertionBaseQualities(read, insertionQuals);
                 ReadUtils.setDeletionBaseQualities(read, deletionQuals);
 
-                final Map<GATKRead, byte[]> gpcs = new LinkedHashMap<>(readLength);
-                gpcs.put(read, gcp);
+                final PairHMMInputScoreImputator inputScoreImputator = (r_) ->
+                    new PairHMMInputScoreImputation() {
 
-                hmm.initialize(Arrays.asList(hap), null, 0, 0);
-                hmm.computeLog10Likelihoods(matrix(Arrays.asList(hap)), Arrays.asList(read), gpcs);
+                        @Override
+                        public byte[] delOpenPenalties() {
+                            return deletionQuals;
+                        }
+
+                        @Override
+                        public byte[] insOpenPenalties() {
+                            return insertionQuals;
+                        }
+
+                        @Override
+                        public byte[] gapContinuationPenalties() {
+                            return gcp;
+                        }
+                    };
+
+                hmm.initialize(Collections.singletonList(hap), null, 0, 0);
+                hmm.computeLog10Likelihoods(matrix(Collections.singletonList(hap)), Collections.singletonList(read), inputScoreImputator);
 
                 final double[] la = hmm.getLogLikelihoodArray();
 
@@ -118,7 +140,7 @@ public final class VectorPairHMMUnitTest extends GATKBaseTest {
             }
 
             @Override
-            public int indexOfAllele(Haplotype allele) {
+            public int indexOfAllele(final Allele allele) {
                 throw new UnsupportedOperationException();
             }
 

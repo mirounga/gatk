@@ -21,6 +21,7 @@ import org.broadinstitute.hellbender.tools.walkers.annotator.Annotation;
 import org.broadinstitute.hellbender.tools.walkers.annotator.AnnotationUtils;
 import org.broadinstitute.hellbender.tools.walkers.genotyper.AlleleSubsettingUtils;
 import org.broadinstitute.hellbender.tools.walkers.genotyper.GenotypeAssignmentMethod;
+import org.broadinstitute.hellbender.utils.BaseUtils;
 import org.broadinstitute.hellbender.utils.MathUtils;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
@@ -46,6 +47,8 @@ import java.util.stream.StreamSupport;
 import static org.broadinstitute.hellbender.utils.variant.VariantContextGetters.attributeToList;
 
 public final class VariantContextTestUtils {
+    public static final String SAMPLE_NAME = "XXYYZZ";
+
     private VariantContextTestUtils() {}
 
     /** Standard Logger.  */
@@ -182,8 +185,8 @@ public final class VariantContextTestUtils {
         final VariantContextBuilder result = new VariantContextBuilder(vc);
         result.alleles(sortedAlleles);
 
-        GenotypesContext newGT = AlleleSubsettingUtils.subsetAlleles(vc.getGenotypes(),2,vc.getAlleles(),sortedAlleles,
-                                                                     GenotypeAssignmentMethod.SET_TO_NO_CALL, vc.getAttributeAsInt(VCFConstants.DEPTH_KEY,0));
+        GenotypesContext newGT = AlleleSubsettingUtils.subsetAlleles(vc.getGenotypes(),2,vc.getAlleles(),sortedAlleles, null,
+                                                                     GenotypeAssignmentMethod.SET_TO_NO_CALL, vc.getAttributeAsInt(VCFConstants.DEPTH_KEY,0), false);
 
         // Asserting that the new genotypes were calculated properly in case AlleleSubsettingUtils behavior changes
         if (newGT.getSampleNames().size() != vc.getGenotypes().size()) throw new IllegalStateException("Sorting this variant context resulted in a different number of genotype alleles, check that AlleleSubsettingUtils still supports reordering:" + vc.toString());
@@ -658,7 +661,6 @@ public final class VariantContextTestUtils {
     private static final Allele REF = Allele.create("G", true);
     private static final Allele ALT = Allele.create("A");
     private static final List<Allele> ALLELES = ImmutableList.of(REF, Allele.NON_REF_ALLELE);
-    private static final String SAMPLE_NAME = "XXYYZZ";
 
 
     public static VariantContext makeHomRef(int start) {
@@ -717,12 +719,35 @@ public final class VariantContextTestUtils {
         return makeVariantContext(vcb, Arrays.asList(vc.getReference(), vc.getAlternateAllele(0)), 50);
     }
 
+    /**
+     *
+     * @param vcb   must be biallelic
+     * @param alleles   must be diploid
+     * @param gq
+     * @return
+     */
     public static VariantContext makeVariantContext(VariantContextBuilder vcb, List<Allele> alleles, int gq) {
         final GenotypeBuilder gb = new GenotypeBuilder(SAMPLE_NAME, alleles);
         gb.GQ(gq);
         gb.DP(10);
         gb.AD(new int[]{1, 2});
         gb.PL(new int[]{0, gq, 20+gq});
+        return vcb.genotypes(gb.make()).id(VCFConstants.EMPTY_ID_FIELD).make();
+    }
+
+    /**
+     *
+     * @param vcb   must be biallelic with non-ref
+     * @param alleles   must be diploid
+     * @param gq
+     * @return
+     */
+    public static VariantContext makeGVCFVariantContext(VariantContextBuilder vcb, List<Allele> alleles, int gq) {
+        final GenotypeBuilder gb = new GenotypeBuilder(SAMPLE_NAME, alleles);
+        gb.GQ(gq);
+        gb.DP(10);
+        gb.AD(new int[]{1, 2, 0});
+        gb.PL(new int[]{gq, 0, 20+gq, 200, 400, 800});
         return vcb.genotypes(gb.make()).id(VCFConstants.EMPTY_ID_FIELD).make();
     }
 
@@ -734,5 +759,26 @@ public final class VariantContextTestUtils {
         gb.attribute(GATKVCFConstants.PHRED_SCALED_POSTERIORS_KEY, Utils.listFromPrimitives(PPs));
         gb.GQ(MathUtils.secondSmallestMinusSmallest(PPs, gq));
         return vcb.genotypes(gb.make()).id(VCFConstants.EMPTY_ID_FIELD).make();
+    }
+
+    public static Allele makeAnySNPAlt(final Allele refAllele) {
+        Utils.validate(refAllele.length() == 1, "This method is for SNPs with ref allele length 1.");
+        char altBase = 'N';
+        for (final char base : BaseUtils.BASE_CHARS) {
+            if (base != refAllele.getBases()[0]) {
+                altBase = base;
+                break;
+            }
+        }
+        if (altBase == 'N') {
+            throw new IllegalStateException("Non-ref base not found.");
+        }
+        return Allele.create((byte)altBase);
+    }
+
+    public static String keyForVariant(final VariantContext variant) {
+        final int end = variant.hasAttribute(VCFConstants.END_KEY) ? Integer.parseInt(variant.getAttribute(VCFConstants.END_KEY).toString()) : variant.getEnd();
+        return String.format("%s:%d-%d %s, %s", variant.getContig(), variant.getStart(), end, variant.getReference(),
+                variant.getAlternateAlleles().stream().map(Allele::getDisplayString).sorted().collect(Collectors.toList()));
     }
 }

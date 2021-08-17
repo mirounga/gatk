@@ -726,6 +726,39 @@ public final class GATKVariantContextUtilsUnitTest extends GATKBaseTest {
         return tests.toArray(new Object[][]{});
     }
 
+
+    @DataProvider(name = "GQLog10PosteriorsTest")
+    public Object[][] makeGQLog10PosteriorsTest() {
+        List<Object[]> tests = new ArrayList<>();
+
+        // testing the 3 allele case
+        tests.add(new Object[]{0, new double[]{-1.0, -2.0, -2.2}, -1.787});
+        tests.add(new Object[]{1, new double[]{-1.0, -2.0, -2.2}, -0.973});
+        tests.add(new Object[]{2, new double[]{-1.0, -2.0, -2.2}, -0.958});
+
+        // testing in the 3 allele case where the choice between two genotypes is ambiguous
+        tests.add(new Object[]{0, new double[]{0.0, 0.0, -0.2}, 0});
+        tests.add(new Object[]{1, new double[]{0.0, 0.0, -0.2}, 0});
+        tests.add(new Object[]{2, new double[]{0.0, 0.0, -0.2}, 0});
+
+        // testing in the 4+ allele case where the choice between two genotypes is ambiguous (if not careful this might have resulted in a negative GQ)
+        tests.add(new Object[]{0, new double[]{0.0, 0.0, -0.2, -0.2, -0.2, 0.0}, 0});
+        tests.add(new Object[]{1, new double[]{0.0, 0.0, -0.2, -0.2, -0.2, 0.0}, 0});
+        tests.add(new Object[]{2, new double[]{0.0, 0.0, -0.2, -0.2, -0.2, 0.0}, 0});
+        tests.add(new Object[]{3, new double[]{0.0, 0.0, -0.2, -0.2, -0.2, 0.0}, 0});
+        tests.add(new Object[]{4, new double[]{0.0, 0.0, -0.2, -0.2, -0.2, 0.0}, 0});
+        tests.add(new Object[]{5, new double[]{0.0, 0.0, -0.2, -0.2, -0.2, 0.0}, 0});
+
+
+        return tests.toArray(new Object[][]{});
+    }
+
+    @Test(dataProvider = "GQLog10PosteriorsTest")
+    public void testGetGQLog10FromPosteriors(final int bestGenotypeIndex, final double[] genotypeArray, final double expectedResult)  {
+        final double actualResult = GATKVariantContextUtils.getGQLog10FromPosteriors(bestGenotypeIndex, genotypeArray);
+        assertEqualsDoubleSmart(actualResult, expectedResult);
+    }
+
     // --------------------------------------------------------------------------------
     //
     // Test repeats
@@ -947,6 +980,9 @@ public final class GATKVariantContextUtilsUnitTest extends GATKBaseTest {
         List<Object[]> tests = new ArrayList<>();
 
         // this functionality can be adapted to provide input data for whatever you might want in your data
+        tests.add(new Object[]{Arrays.asList("ACC", "AC", "<NON_REF>"), Arrays.asList("AC", "A", "<NON_REF>"), 0});
+        tests.add(new Object[]{Arrays.asList("ACC", "AC", "*"), Arrays.asList("AC", "A", "*"), 0});
+
         tests.add(new Object[]{Arrays.asList("ACC", "AC"), Arrays.asList("AC", "A"), 0});
         tests.add(new Object[]{Arrays.asList("ACGC", "ACG"), Arrays.asList("GC", "G"), 2});
         tests.add(new Object[]{Arrays.asList("ACGC", "ACGA"), Arrays.asList("C", "A"), 3});
@@ -974,7 +1010,7 @@ public final class GATKVariantContextUtilsUnitTest extends GATKBaseTest {
         Assert.assertEquals(clipped.getStart(), unclipped.getStart() + numLeftClipped);
         for ( int i = 0; i < unclipped.getAlleles().size(); i++ ) {
             final Allele trimmed = clipped.getAlleles().get(i);
-            Assert.assertEquals(trimmed.getBaseString(), expected.get(i));
+            Assert.assertEquals(trimmed.getDisplayString(), expected.get(i));  //note that getBaseString doesn't work for <NON_REF>
         }
     }
 
@@ -1370,6 +1406,7 @@ public final class GATKVariantContextUtilsUnitTest extends GATKBaseTest {
         final double[] aRefPL = new double[]{0.9, 0.09, 0.01};
         final double[] cPL = new double[]{0.09, 0.9, 0.01};
         final double[] gPL = new double[]{0.01, 0.09, 0.9};
+        final double[] nonRefPL = gPL;
         final List<double[]> allHaploidPLs = Arrays.asList(aRefPL, cPL, gPL);
         final List<List<Allele>> allHaploidSubsetAlleles = Arrays.asList(Collections.singletonList(Aref), Collections.singletonList(G));
 
@@ -1408,9 +1445,11 @@ public final class GATKVariantContextUtilsUnitTest extends GATKBaseTest {
 
         final List<Allele> originalHaploidGT = Collections.singletonList(Aref);
         final List<Allele> haploidAllelesToUse = Arrays.asList(Aref, C, G );
+        final List<Allele> haploidAllelesWithNonRef = Arrays.asList(Aref, C, Allele.NON_REF_ALLELE );
         tests.add(new Object[]{1, GenotypeAssignmentMethod.USE_PLS_TO_ASSIGN, aRefPL, originalHaploidGT, haploidAllelesToUse, Collections.singletonList(Aref)});
         tests.add(new Object[]{1, GenotypeAssignmentMethod.USE_PLS_TO_ASSIGN, cPL, originalHaploidGT, haploidAllelesToUse, Collections.singletonList(C)});
         tests.add(new Object[]{1, GenotypeAssignmentMethod.USE_PLS_TO_ASSIGN, gPL, originalHaploidGT, haploidAllelesToUse, Collections.singletonList(G)});
+        tests.add(new Object[]{1, GenotypeAssignmentMethod.USE_PLS_TO_ASSIGN, nonRefPL, originalHaploidGT, haploidAllelesWithNonRef, Collections.singletonList(Aref)});  //this used to be no-call, but new convention is no call means NO DATA
 
         for ( final List<Allele> originalGT : Arrays.asList(AA, AC, CC, AG, CG, GG) ) {
             tests.add(new Object[]{2, GenotypeAssignmentMethod.USE_PLS_TO_ASSIGN, homRefPL, originalGT, AC, AA});
@@ -1446,9 +1485,10 @@ public final class GATKVariantContextUtilsUnitTest extends GATKBaseTest {
         final GenotypeBuilder gb = new GenotypeBuilder("test");
         final double[] logLikelhoods = MathUtils.normalizeLog10(likelihoods);
 
-        GATKVariantContextUtils.makeGenotypeCall(originalGT.size(), gb, mode, logLikelhoods, allelesToUse);
+        GATKVariantContextUtils.makeGenotypeCall(originalGT.size(), gb, mode, logLikelhoods, allelesToUse, null);
 
         final Genotype g = gb.make();
+        Assert.assertEquals(g.getAlleles().size(), expectedAlleles.size());
         Assert.assertEquals(new LinkedHashSet<>(g.getAlleles()), new LinkedHashSet<>(expectedAlleles));
     }
 

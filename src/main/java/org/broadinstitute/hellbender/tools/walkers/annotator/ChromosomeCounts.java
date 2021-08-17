@@ -33,18 +33,12 @@ import java.util.*;
  *
  */
 @DocumentedFeature(groupName=HelpConstants.DOC_CAT_ANNOTATORS, groupSummary=HelpConstants.DOC_CAT_ANNOTATORS_SUMMARY, summary="Counts and frequency of alleles in called genotypes (AC, AF, AN)")
-public final class ChromosomeCounts extends InfoFieldAnnotation implements StandardAnnotation {
+public final class ChromosomeCounts implements InfoFieldAnnotation, StandardAnnotation {
 
     public static final String[] keyNames = {
             VCFConstants.ALLELE_NUMBER_KEY,
             VCFConstants.ALLELE_COUNT_KEY,
             VCFConstants.ALLELE_FREQUENCY_KEY };
-
-    public static final VCFInfoHeaderLine[] descriptions = {
-            VCFStandardHeaderLines.getInfoLine(VCFConstants.ALLELE_FREQUENCY_KEY),
-            VCFStandardHeaderLines.getInfoLine(VCFConstants.ALLELE_COUNT_KEY),
-            VCFStandardHeaderLines.getInfoLine(VCFConstants.ALLELE_NUMBER_KEY) };
-
 
     @Override
     public Map<String, Object> annotate(final ReferenceContext ref,
@@ -62,7 +56,4 @@ public final class ChromosomeCounts extends InfoFieldAnnotation implements Stand
     public List<String> getKeyNames() {
         return Arrays.asList(keyNames);
     }
-
-    @Override
-    public List<VCFInfoHeaderLine> getDescriptions() { return Arrays.asList(descriptions); }
 }

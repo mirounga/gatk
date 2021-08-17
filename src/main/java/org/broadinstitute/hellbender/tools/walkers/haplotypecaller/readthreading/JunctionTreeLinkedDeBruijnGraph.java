@@ -33,22 +33,23 @@ public class JunctionTreeLinkedDeBruijnGraph extends AbstractReadThreadingGraph 
     private static final long serialVersionUID = 1l;
     private static final MultiDeBruijnVertex SYMBOLIC_END_VETEX = new MultiDeBruijnVertex(new byte[]{'_'});
     private MultiSampleEdge SYMBOLIC_END_EDGE;
-    
+
     private Map<MultiDeBruijnVertex, ThreadingTree> readThreadingJunctionTrees = new HashMap<>();
 
     // TODO should this be constructed here or elsewhere
     private final Set<Kmer> kmers = new HashSet<>();
 
+    @VisibleForTesting
     public JunctionTreeLinkedDeBruijnGraph(int kmerSize) {
-        this(kmerSize, false, (byte)6, 1);
+        this(kmerSize, false, (byte)6, 1, -1);
     }
 
     /**
      * Create a new ReadThreadingAssembler using kmerSize for matching
      * @param kmerSize must be >= 1
      */
-    JunctionTreeLinkedDeBruijnGraph(final int kmerSize, final boolean debugGraphTransformations, final byte minBaseQualityToUseInAssembly, final int numPruningSamples) {
-        super(kmerSize, debugGraphTransformations, minBaseQualityToUseInAssembly, numPruningSamples);
+    JunctionTreeLinkedDeBruijnGraph(final int kmerSize, final boolean debugGraphTransformations, final byte minBaseQualityToUseInAssembly, final int numPruningSamples, final int numDanglingMatchingPrefixBases) {
+        super(kmerSize, debugGraphTransformations, minBaseQualityToUseInAssembly, numPruningSamples, numDanglingMatchingPrefixBases);
     }
 
     /**
@@ -231,7 +232,7 @@ public class JunctionTreeLinkedDeBruijnGraph extends AbstractReadThreadingGraph 
         return extraSequence;
     }
 
-    // TODO this behavior is frankly silly and needs to be fixed, there is no way upwards paths should be dangingling head recovered differently
+    // TODO this behavior is frankly silly and needs to be fixed, there is no way upwards paths should be dangling head recovered differently
     private List<MultiDeBruijnVertex> getReferencePathBackwardsForKmer(final MultiDeBruijnVertex targetKmer) {
         int firstIndex = referencePath.indexOf(targetKmer);
         if (firstIndex == -1) return Collections.singletonList(targetKmer);

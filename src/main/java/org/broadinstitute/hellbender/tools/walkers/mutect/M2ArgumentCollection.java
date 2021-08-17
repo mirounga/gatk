@@ -44,10 +44,13 @@ public class M2ArgumentCollection extends AssemblyBasedCallerArgumentCollection 
     public static final String NORMAL_LOG_10_ODDS_LONG_NAME = "normal-lod";
     public static final String IGNORE_ITR_ARTIFACTS_LONG_NAME = "ignore-itr-artifacts";
     public static final String MITOCHONDRIA_MODE_LONG_NAME = "mitochondria-mode";
+    public static final String MICROBIAL_MODE_LONG_NAME = "microbial-mode";
     public static final String CALLABLE_DEPTH_LONG_NAME = "callable-depth";
     public static final String PCR_SNV_QUAL_LONG_NAME = "pcr-snv-qual";
     public static final String PCR_INDEL_QUAL_LONG_NAME = "pcr-indel-qual";
     public static final String F1R2_TAR_GZ_NAME = "f1r2-tar-gz";
+    public static final String TRAINING_DATA_MODE_LONG_NAME = "training-data-mode";
+    public static final String TRAINING_DATA_MODE_REF_DOWNSAMPLE_LONG_NAME = "training-data-mode-ref-downsample";
 
     public static final double DEFAULT_AF_FOR_TUMOR_ONLY_CALLING = 5e-8;
     public static final double DEFAULT_AF_FOR_TUMOR_NORMAL_CALLING = 1e-6;
@@ -156,6 +159,18 @@ public class M2ArgumentCollection extends AssemblyBasedCallerArgumentCollection 
     public Boolean mitochondria = false;
 
     /**
+     * Training data mode collects data on variant- and artifact-supporting read sets for fitting a deep learning filtering model
+     */
+    @Argument(fullName = TRAINING_DATA_MODE_LONG_NAME, optional = true, doc="Output VCF contains featurized sets of reads for training a deep variant filter.")
+    public Boolean trainingDataMode = false;
+
+    /**
+     * Downsample ref reads in training data mode
+     */
+    @Argument(fullName = TRAINING_DATA_MODE_REF_DOWNSAMPLE_LONG_NAME, optional = true, doc="Downsample ref reads to this count in training data mode.")
+    public int maxRefCountInTrainingData = Integer.MAX_VALUE;
+
+    /**
      * Only variants with tumor LODs exceeding this threshold will be written to the VCF, regardless of filter status.
      * Set to less than or equal to tumor_lod. Increase argument value to reduce false positives in the callset.
      * Default setting of 3 is permissive and will emit some amount of negative training data that 
@@ -188,7 +203,7 @@ public class M2ArgumentCollection extends AssemblyBasedCallerArgumentCollection 
     @Argument(fullName = PCR_SNV_QUAL_LONG_NAME, optional = true, doc = "Phred-scaled PCR SNV qual for overlapping fragments")
     public int pcrSnvQual = 40;
 
-    @Argument(fullName = PCR_INDEL_QUAL_LONG_NAME, optional = true, doc = "Phred-scaled PCR SNV qual for overlapping fragments")
+    @Argument(fullName = PCR_INDEL_QUAL_LONG_NAME, optional = true, doc = "Phred-scaled PCR indel qual for overlapping fragments")
     public int pcrIndelQual = 40;
 
     /**

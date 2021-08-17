@@ -18,7 +18,7 @@ import java.util.stream.Collectors;
 /**
  * Apply an annotation based on aggregation data from all reads supporting each allele.
  */
-public abstract class PerAlleleAnnotation extends InfoFieldAnnotation{
+public abstract class PerAlleleAnnotation implements InfoFieldAnnotation {
 
     /**
      * Calculate annotations for each allele based on given VariantContext and likelihoods for a given genotype's sample
@@ -56,15 +56,9 @@ public abstract class PerAlleleAnnotation extends InfoFieldAnnotation{
     }
 
     @Override
-    public List<VCFInfoHeaderLine> getDescriptions() {
-        return Arrays.asList(new VCFInfoHeaderLine(getVcfKey(), includeRefAllele() ? VCFHeaderLineCount.R : VCFHeaderLineCount.A, VCFHeaderLineType.Integer, getDescription()));
-    }
-
-    @Override
     public List<String> getKeyNames() { return Arrays.asList(getVcfKey()); }
 
     protected abstract OptionalInt getValueForRead(final GATKRead read, final VariantContext vc);
     protected abstract int aggregate(final List<Integer> values);
     protected abstract String getVcfKey();
-    protected abstract String getDescription();
 }

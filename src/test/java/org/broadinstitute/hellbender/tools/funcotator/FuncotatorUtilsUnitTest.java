@@ -8,6 +8,7 @@ import htsjdk.tribble.annotation.Strand;
 import htsjdk.variant.variantcontext.Allele;
 import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.variantcontext.VariantContextBuilder;
+import htsjdk.variant.vcf.VCFHeader;
 import htsjdk.variant.vcf.VCFHeaderLineCount;
 import htsjdk.variant.vcf.VCFHeaderLineType;
 import htsjdk.variant.vcf.VCFInfoHeaderLine;
@@ -17,6 +18,7 @@ import org.broadinstitute.hellbender.engine.ReferenceContext;
 import org.broadinstitute.hellbender.engine.ReferenceDataSource;
 import org.broadinstitute.hellbender.engine.ReferenceFileSource;
 import org.broadinstitute.hellbender.exceptions.GATKException;
+import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.testutils.FuncotatorReferenceTestUtils;
 import org.broadinstitute.hellbender.tools.funcotator.dataSources.TableFuncotation;
 import org.broadinstitute.hellbender.tools.funcotator.dataSources.gencode.GencodeFuncotationBuilder;
@@ -563,6 +565,35 @@ public class FuncotatorUtilsUnitTest extends GATKBaseTest {
                 {"CCC", AminoAcid.PROLINE},
                 {"CCG", AminoAcid.PROLINE},
                 {"CCT", AminoAcid.PROLINE},
+
+                // IUPAC base decoding:
+                {"GCN", AminoAcid.ALANINE},
+                {"CGN", AminoAcid.ARGANINE},
+                {"AGR", AminoAcid.ARGANINE},
+                {"CGY", AminoAcid.ARGANINE},
+                {"MGR", AminoAcid.ARGANINE},
+                {"AAY", AminoAcid.ASPARAGINE},
+                {"GAY", AminoAcid.ASPARTIC_ACID},
+                {"TGY", AminoAcid.CYSTEINE},
+                {"CAR", AminoAcid.GLUTAMINE},
+                {"GAR", AminoAcid.GLUTAMIC_ACID},
+                {"GGN", AminoAcid.GLYCINE},
+                {"CAY", AminoAcid.HISTIDINE},
+                {"ATH", AminoAcid.ISOLEUCINE},
+                {"CTN", AminoAcid.LEUCINE},
+                {"TTR", AminoAcid.LEUCINE},
+                {"CTY", AminoAcid.LEUCINE},
+                {"YTR", AminoAcid.LEUCINE},
+                {"AAR", AminoAcid.LYSINE},
+                {"TTY", AminoAcid.PHENYLALANINE},
+                {"CCN", AminoAcid.PROLINE},
+                {"TCN", AminoAcid.SERINE},
+                {"AGY", AminoAcid.SERINE},
+                {"ACN", AminoAcid.THREONINE},
+                {"TAY", AminoAcid.TYROSINE},
+                {"GTN", AminoAcid.VALINE},
+                {"TRA", AminoAcid.STOP_CODON},
+                {"TAR", AminoAcid.STOP_CODON},
         };
     }
 
@@ -596,8 +627,38 @@ public class FuncotatorUtilsUnitTest extends GATKBaseTest {
                 {"ATT", true, FuncotatorUtils.Genus.HOMO,      AminoAcid.METHIONINE},
                 {"ATT", true, FuncotatorUtils.Genus.MUS,       AminoAcid.METHIONINE},
                 {"ATC", true, FuncotatorUtils.Genus.MUS,       AminoAcid.METHIONINE},
+                {"ATY", true, FuncotatorUtils.Genus.MUS,       AminoAcid.METHIONINE},
                 {"GTG", true, FuncotatorUtils.Genus.CORTURNIX, AminoAcid.METHIONINE},
                 {"GTG", true, FuncotatorUtils.Genus.GALLUS,    AminoAcid.METHIONINE},
+
+                // IUPAC base decoding:
+                {"GCN", false, FuncotatorUtils.Genus.UNSPECIFIED, AminoAcid.ALANINE},
+                {"CGN", false, FuncotatorUtils.Genus.UNSPECIFIED, AminoAcid.ARGANINE},
+                {"CGY", false, FuncotatorUtils.Genus.UNSPECIFIED, AminoAcid.ARGANINE},
+                {"MGR", false, FuncotatorUtils.Genus.UNSPECIFIED, AminoAcid.ARGANINE},
+                {"AAY", false, FuncotatorUtils.Genus.UNSPECIFIED, AminoAcid.ASPARAGINE},
+                {"GAY", false, FuncotatorUtils.Genus.UNSPECIFIED, AminoAcid.ASPARTIC_ACID},
+                {"TGY", false, FuncotatorUtils.Genus.UNSPECIFIED, AminoAcid.CYSTEINE},
+                {"CAR", false, FuncotatorUtils.Genus.UNSPECIFIED, AminoAcid.GLUTAMINE},
+                {"GAR", false, FuncotatorUtils.Genus.UNSPECIFIED, AminoAcid.GLUTAMIC_ACID},
+                {"GGN", false, FuncotatorUtils.Genus.UNSPECIFIED, AminoAcid.GLYCINE},
+                {"CAY", false, FuncotatorUtils.Genus.UNSPECIFIED, AminoAcid.HISTIDINE},
+                {"ATH", false, FuncotatorUtils.Genus.UNSPECIFIED, AminoAcid.ISOLEUCINE},
+                {"CTN", false, FuncotatorUtils.Genus.UNSPECIFIED, AminoAcid.LEUCINE},
+                {"TTR", false, FuncotatorUtils.Genus.UNSPECIFIED, AminoAcid.LEUCINE},
+                {"CTY", false, FuncotatorUtils.Genus.UNSPECIFIED, AminoAcid.LEUCINE},
+                {"YTR", false, FuncotatorUtils.Genus.UNSPECIFIED, AminoAcid.LEUCINE},
+                {"AAR", false, FuncotatorUtils.Genus.UNSPECIFIED, AminoAcid.LYSINE},
+                {"TTY", false, FuncotatorUtils.Genus.UNSPECIFIED, AminoAcid.PHENYLALANINE},
+                {"CCN", false, FuncotatorUtils.Genus.UNSPECIFIED, AminoAcid.PROLINE},
+                {"TCN", false, FuncotatorUtils.Genus.UNSPECIFIED, AminoAcid.SERINE},
+                {"AGY", false, FuncotatorUtils.Genus.UNSPECIFIED, AminoAcid.SERINE},
+                {"ACN", false, FuncotatorUtils.Genus.UNSPECIFIED, AminoAcid.THREONINE},
+                {"TAY", false, FuncotatorUtils.Genus.UNSPECIFIED, AminoAcid.TYROSINE},
+                {"GTN", false, FuncotatorUtils.Genus.UNSPECIFIED, AminoAcid.VALINE},
+                {"TRA", false, FuncotatorUtils.Genus.UNSPECIFIED, AminoAcid.STOP_CODON},
+                {"TAR", false, FuncotatorUtils.Genus.UNSPECIFIED, AminoAcid.STOP_CODON},
+                {"AGR", false, FuncotatorUtils.Genus.UNSPECIFIED, AminoAcid.STOP_CODON},
         };
     }
 
@@ -1891,7 +1952,8 @@ public class FuncotatorUtilsUnitTest extends GATKBaseTest {
                         "Threonine",
                         "Tryptophan",
                         "Tyrosine",
-                        "Valine"
+                        "Valine",
+                        "Undecodable Amino Acid"
                 }
         );
     }
@@ -1921,6 +1983,7 @@ public class FuncotatorUtilsUnitTest extends GATKBaseTest {
                         "Trp",
                         "Tyr",
                         "Val",
+                        "UNDECODABLE"
                 }
         );
     }
@@ -2407,4 +2470,5 @@ public class FuncotatorUtilsUnitTest extends GATKBaseTest {
     public void testCreateLinkedHashMapFromListsWithIllegalArgs(final List<String> keys, final List<String> values) {
         FuncotatorUtils.createLinkedHashMapFromLists(keys, values);
     }
+
 }

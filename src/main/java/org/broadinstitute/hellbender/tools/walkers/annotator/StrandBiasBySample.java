@@ -6,13 +6,14 @@ import htsjdk.variant.variantcontext.Genotype;
 import htsjdk.variant.variantcontext.GenotypeBuilder;
 import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.vcf.VCFFormatHeaderLine;
-import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.engine.ReferenceContext;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.genotyper.AlleleLikelihoods;
 import org.broadinstitute.hellbender.utils.help.HelpConstants;
+import org.broadinstitute.hellbender.utils.logging.OneShotLogger;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFHeaderLines;
@@ -46,13 +47,14 @@ import java.util.List;
  *
  * <h3>Related annotations</h3>
  * <ul>
- *     <li><b><a href="https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_annotator_FisherStrand.php">FisherStrand</a></b> uses Fisher's Exact Test to evaluate strand bias.</li>
- *     <li><b><a href="https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_annotator_StrandOddsRatio.php">StrandOddsRatio</a></b> is an updated form of FisherStrand that uses a symmetric odds ratio calculation.</li>
+ *     <li><b>FisherStrand</b> uses Fisher's Exact Test to evaluate strand bias.</li>
+ *     <li><b>StrandOddsRatio</b> is an updated form of FisherStrand that uses a symmetric odds ratio calculation.</li>
  * </ul>
  */
 @DocumentedFeature(groupName=HelpConstants.DOC_CAT_ANNOTATORS, groupSummary=HelpConstants.DOC_CAT_ANNOTATORS_SUMMARY, summary="Number of forward and reverse reads that support REF and ALT alleles (SB)")
-public final class StrandBiasBySample extends GenotypeAnnotation implements StandardMutectAnnotation {
+public final class StrandBiasBySample implements GenotypeAnnotation, StandardMutectAnnotation {
     private final static Logger logger = LogManager.getLogger(StrandBiasBySample.class);
+    private final static OneShotLogger droppedElementLogger = new OneShotLogger(StrandBiasBySample.class);
 
     @Override
     public void annotate(final ReferenceContext ref,
@@ -65,7 +67,7 @@ public final class StrandBiasBySample extends GenotypeAnnotation implements Stan
         Utils.nonNull(gb);
 
         if ( likelihoods == null || !g.isCalled() ) {
-            logger.warn("Annotation will not be calculated, genotype is not called or alleleLikelihoodMap is null");
+            droppedElementLogger.warn(() -> AnnotationUtils.generateMissingDataWarning(vc, g, likelihoods));
             return;
         }
 
@@ -99,11 +101,6 @@ public final class StrandBiasBySample extends GenotypeAnnotation implements Stan
     @Override
     public List<String> getKeyNames() {
         return Collections.singletonList(GATKVCFConstants.STRAND_BIAS_BY_SAMPLE_KEY);
-    }
-
-    @Override
-    public List<VCFFormatHeaderLine> getDescriptions() {
-        return Collections.singletonList(GATKVCFHeaderLines.getFormatLine(getKeyNames().get(0)));
     }
 
     public static int getAltForwardCountFromFlattenedContingencyTable(final int[] contingencyTable) {

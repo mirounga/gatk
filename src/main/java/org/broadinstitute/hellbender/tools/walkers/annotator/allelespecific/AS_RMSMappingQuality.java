@@ -11,8 +11,8 @@ import org.broadinstitute.hellbender.tools.walkers.annotator.InfoFieldAnnotation
 import org.broadinstitute.hellbender.utils.QualityUtils;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.genotyper.AlleleLikelihoods;
-import org.broadinstitute.hellbender.utils.logging.OneShotLogger;
 import org.broadinstitute.hellbender.utils.help.HelpConstants;
+import org.broadinstitute.hellbender.utils.logging.OneShotLogger;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
 
@@ -39,17 +39,22 @@ import java.util.*;
  *
  * <h3>Related annotations</h3>
  * <ul>
- *     <li><b><a href="https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_annotator_RMSMappingQuality.php">RMSMappingQuality</a></b> outputs a version of this annotation that includes all alternate alleles in a single calculation.</li>
- *     <li><b><a href="https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_annotator_MappingQualityRankSumTest.php">MappingQualityRankSumTest</a></b> compares the mapping quality of reads supporting the REF and ALT alleles.</li>
+ *     <li><b>RMSMappingQuality</b> outputs a version of this annotation that includes all alternate alleles in a single calculation.</li>
+ *     <li><b>MappingQualityRankSumTest</b> compares the mapping quality of reads supporting the REF and ALT alleles.</li>
  * </ul>
  */
 @DocumentedFeature(groupName=HelpConstants.DOC_CAT_ANNOTATORS, groupSummary=HelpConstants.DOC_CAT_ANNOTATORS_SUMMARY, summary="Allele-specific root-mean-square of the mapping quality of reads across all samples (AS_MQ)")
-public final class AS_RMSMappingQuality extends InfoFieldAnnotation implements AS_StandardAnnotation, ReducibleAnnotation, AlleleSpecificAnnotation {
+public final class AS_RMSMappingQuality implements InfoFieldAnnotation, AS_StandardAnnotation, ReducibleAnnotation, AlleleSpecificAnnotation {
 
     private final String printFormat = "%.2f";
 
     private static final OneShotLogger allele_logger = new OneShotLogger(AS_RMSMappingQuality.class);
     private static final OneShotLogger genotype_logger = new OneShotLogger(AS_RMSMappingQuality.class);
+
+    @Override
+    public String getEmptyRawValue() {
+        return "0.00";
+    }
 
     @Override
     public String getPrimaryRawKey() { return GATKVCFConstants.AS_RAW_RMS_MAPPING_QUALITY_KEY; }

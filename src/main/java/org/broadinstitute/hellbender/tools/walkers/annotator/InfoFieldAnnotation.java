@@ -1,7 +1,10 @@
 package org.broadinstitute.hellbender.tools.walkers.annotator;
 
+import com.google.common.collect.ImmutableList;
 import htsjdk.variant.variantcontext.Allele;
 import htsjdk.variant.variantcontext.VariantContext;
+import htsjdk.variant.vcf.VCFCompoundHeaderLine;
+import htsjdk.variant.vcf.VCFFormatHeaderLine;
 import htsjdk.variant.vcf.VCFInfoHeaderLine;
 import org.broadinstitute.hellbender.engine.ReferenceContext;
 import org.broadinstitute.hellbender.utils.genotyper.AlleleLikelihoods;
@@ -11,11 +14,14 @@ import org.broadinstitute.hellbender.utils.variant.GATKVCFHeaderLines;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * Annotations relevant to the INFO field of the variant file (ie annotations for sites).
  */
-public abstract class InfoFieldAnnotation extends VariantAnnotation{
+public interface InfoFieldAnnotation extends VariantAnnotation {
+
+    default VCFCompoundHeaderLine.SupportedHeaderLineType annotationType() { return VCFCompoundHeaderLine.SupportedHeaderLineType.INFO; }
 
     /**
      * Computes the annotation for the given variant and the likelihoods per read.
@@ -25,19 +31,7 @@ public abstract class InfoFieldAnnotation extends VariantAnnotation{
      * @param vc Variant to be annotated. Not null.
      * @param likelihoods likelihoods indexed by sample, allele, and read within sample
      */
-    public abstract Map<String, Object> annotate(final ReferenceContext ref,
+    public Map<String, Object> annotate(final ReferenceContext ref,
                                                  final VariantContext vc,
                                                  final AlleleLikelihoods<GATKRead, Allele> likelihoods);
-
-    /**
-     * Returns the descriptions used for the VCF INFO meta field.
-     * Subclasses must ensure that this list is not null and does not contain null.
-     */
-    public List<VCFInfoHeaderLine> getDescriptions() {
-        final List<VCFInfoHeaderLine> lines = new ArrayList<>(getKeyNames().size());
-        for (final String key : getKeyNames()) {
-            lines.add(GATKVCFHeaderLines.getInfoLine(key));
-        }
-        return lines;
-    }
 }

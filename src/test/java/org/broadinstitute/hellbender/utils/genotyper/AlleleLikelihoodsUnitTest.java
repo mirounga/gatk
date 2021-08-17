@@ -12,6 +12,7 @@ import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 import java.util.*;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -24,6 +25,21 @@ public final class AlleleLikelihoodsUnitTest {
     private static final double EPSILON = 1e-6;
     private static final int ODD_READ_START = 101;
     private static final int EVEN_READ_START = 1;
+
+    private static final SAMFileHeader SAM_HEADER = ArtificialReadUtils.createArtificialSamHeader(10, 0, 1000);
+    private static final GenomeLocParser locParser = new GenomeLocParser(SAM_HEADER.getSequenceDictionary());
+    
+    private static final int[][] READ_COUNTS = {
+            {},
+            { 100 },
+            { 0 },
+            { 0, 0, 0 },
+            { 1, 0, 1 },
+            { 100, 10 , 100},
+            { 1000, 10, 100, 20, 23 }
+    };
+
+    private static final int[] ALLELE_COUNTS = { 0, 1, 2, 3, 10, 20 };
 
     @Test(dataProvider = "dataSets")
     public void testInstantiationAndQuery(final String[] samples, final Allele[] alleles, final Map<String,List<GATKRead>> reads) {
@@ -155,13 +171,16 @@ public final class AlleleLikelihoodsUnitTest {
         }
     }
 
-    private AlleleLikelihoods<GATKRead, Allele> makeGoodAndBadLikelihoods(String[] samples, Allele[] alleles, Map<String, List<GATKRead>> reads) {
-        final AlleleLikelihoods<GATKRead, Allele> original = new AlleleLikelihoods<>(new IndexedSampleList(samples), new IndexedAlleleList<>(alleles), reads);
+    private AlleleLikelihoods<GATKRead, Allele> makeGoodAndBadLikelihoods(final String[] samples, final Allele[] alleles,
+                                                                          final Map<String, List<GATKRead>> reads,
+                                                                          final Predicate<Integer> readsToSkip) {
+        final AlleleLikelihoods<GATKRead, Allele> original = new AlleleLikelihoods<>(
+                new IndexedSampleList(samples), new IndexedAlleleList<>(alleles), reads);
 
         for (int s = 0; s < samples.length; s++) {
             final int sampleReadCount = original.sampleEvidenceCount(s);
             for (int r = 0; r < sampleReadCount; r++) {
-                if ((r & 1) == 0) continue;
+                if (readsToSkip.test(r)) continue;
                 for (int a = 0; a < alleles.length; a++)
                     original.sampleMatrix(s).set(a,r,-10000);
             }
@@ -171,20 +190,21 @@ public final class AlleleLikelihoodsUnitTest {
 
     @Test(dataProvider = "dataSets")
     public void testFilterPoorlyModeledReads(final String[] samples, final Allele[] alleles, final Map<String,List<GATKRead>> reads) {
-        final AlleleLikelihoods<GATKRead, Allele> original = makeGoodAndBadLikelihoods(samples, alleles, reads);
+        final AlleleLikelihoods<GATKRead, Allele> original =
+                makeGoodAndBadLikelihoods(samples, alleles, reads, r -> (r & 1) == 0); // even reads are skipped
 
-        final AlleleLikelihoods<GATKRead, Allele> result = makeGoodAndBadLikelihoods(samples, alleles, reads);
+        final AlleleLikelihoods<GATKRead, Allele> result =
+                makeGoodAndBadLikelihoods(samples, alleles, reads, r -> (r & 1) == 0); // even reads are skipped
 
         checkEvidenceToIndexMapIsCorrect(result);
-
         result.filterPoorlyModeledEvidence(read -> -100);
-
         checkEvidenceToIndexMapIsCorrect(result);
 
         for (int s = 0; s < samples.length; s++) {
             final int oldSampleReadCount = original.sampleEvidenceCount(s);
             final int newSampleReadCount = result.sampleEvidenceCount(s);
             Assert.assertEquals(newSampleReadCount, (oldSampleReadCount + 1) / 2);
+            Assert.assertEquals(newSampleReadCount + result.filteredEvidenceBySampleIndex.get(s).size(), oldSampleReadCount); // assert the correct number of reads were saved int the filtered pool
             final LikelihoodMatrix<GATKRead, Allele> newSampleMatrix = result.sampleMatrix(s);
             final LikelihoodMatrix<GATKRead, Allele> oldSampleMatrix = original.sampleMatrix(s);
             for (int r = 0 ; r < newSampleReadCount; r++) {
@@ -198,11 +218,14 @@ public final class AlleleLikelihoodsUnitTest {
 
     @Test(dataProvider = "dataSets")
     public void testFilterReadsToOverlap(final String[] samples, final Allele[] alleles, final Map<String,List<GATKRead>> reads) {
-        final AlleleLikelihoods<GATKRead, Allele> original = new AlleleLikelihoods<>(new IndexedSampleList(samples), new IndexedAlleleList<>(alleles), reads);
-        final AlleleLikelihoods<GATKRead, Allele> result = new AlleleLikelihoods<>(new IndexedSampleList(samples), new IndexedAlleleList<>(alleles), reads);
+        final AlleleLikelihoods<GATKRead, Allele> original = new AlleleLikelihoods<>(new IndexedSampleList(samples),
+                new IndexedAlleleList<>(alleles), reads);
+        final AlleleLikelihoods<GATKRead, Allele> result = new AlleleLikelihoods<>(new IndexedSampleList(samples),
+                new IndexedAlleleList<>(alleles), reads);
         fillWithRandomLikelihoods(samples, alleles, original, result);
 
-        final SimpleInterval evenReadOverlap = new SimpleInterval(SAM_HEADER.getSequenceDictionary().getSequences().get(0).getSequenceName(), EVEN_READ_START, EVEN_READ_START);
+        final SimpleInterval evenReadOverlap = new SimpleInterval(SAM_HEADER.getSequenceDictionary()
+                .getSequence(0).getSequenceName(), EVEN_READ_START, EVEN_READ_START);
 
         checkEvidenceToIndexMapIsCorrect(result);
         result.retainEvidence(evenReadOverlap::overlaps);
@@ -222,8 +245,47 @@ public final class AlleleLikelihoodsUnitTest {
         testLikelihoodMatrixQueries(samples,result,newLikelihoods);
     }
 
+    // This test asserts that when we call filterPoorlyModeledEvidence -> retainEvidence that the filtered reads have had the
+    // predicate applied to them as well.
     @Test(dataProvider = "dataSets")
-    public void testContaminationDownsamplingDoesntDoBadThingsToEvidenceToIndexCache(final String[] samples, final Allele[] alleles, final Map<String,List<GATKRead>> reads) {
+    public void testFilterReadToOverlap(final String[] samples, final Allele[] alleles, final Map<String,List<GATKRead>> reads) {
+        final AlleleLikelihoods<GATKRead, Allele> original = makeGoodAndBadLikelihoods(samples, alleles, reads, r -> (r & 2) == 0); // alternate skipping in blocks of 2
+        final AlleleLikelihoods<GATKRead, Allele> result = makeGoodAndBadLikelihoods(samples, alleles, reads, r -> (r & 2) == 0); // alternate skipping in blocks of 2
+
+        final SimpleInterval evenReadOverlap = new SimpleInterval(SAM_HEADER.getSequenceDictionary()
+                .getSequence(0).getSequenceName(), EVEN_READ_START, EVEN_READ_START);
+
+        result.filterPoorlyModeledEvidence(read -> -100);
+
+        checkEvidenceToIndexMapIsCorrect(result);
+        result.retainEvidence(evenReadOverlap::overlaps);
+        checkEvidenceToIndexMapIsCorrect(result);
+
+        final double[][][] newLikelihoods = new double[samples.length][alleles.length][];
+        for (int s = 0; s < samples.length ; s++) {
+            Assert.assertEquals(result.sampleEvidenceCount(s) + result.filteredEvidenceBySampleIndex.get(s).size(),
+                    (original.sampleEvidenceCount(s) + 1) / 2);
+
+            for (int a = 0; a < alleles.length; a++) {
+                newLikelihoods[s][a] = new double[(((original.sampleEvidenceCount(s) + 1) / 2) + 1) / 2];
+                final LikelihoodMatrix<GATKRead, Allele> sampleMatrix = original.sampleMatrix(s);
+                for (int r = 0; r < newLikelihoods[s][a].length; r++) {
+                    if (r % 2 == 0) {
+                        Assert.assertEquals(result.evidenceIndex(s, sampleMatrix.getEvidence(r << 2)), r);
+                        newLikelihoods[s][a][r] = sampleMatrix.get(a, r << 2);
+                    } else {
+                        Assert.assertEquals(result.evidenceIndex(s, sampleMatrix.getEvidence(r << 1)), -1);
+                    }
+                }
+            }
+        }
+        testLikelihoodMatrixQueries(samples,result,newLikelihoods);
+    }
+
+        @Test(dataProvider = "dataSets")
+    public void testContaminationDownsamplingDoesntDoBadThingsToEvidenceToIndexCache(final String[] samples,
+                                                                                     final Allele[] alleles,
+                                                                                     final Map<String,List<GATKRead>> reads) {
         final AlleleLikelihoods<GATKRead, Allele> original = new AlleleLikelihoods<>(new IndexedSampleList(samples), new IndexedAlleleList<>(alleles), reads);
         final AlleleLikelihoods<GATKRead, Allele> result = new AlleleLikelihoods<>(new IndexedSampleList(samples), new IndexedAlleleList<>(alleles), reads);
         fillWithRandomLikelihoods(samples, alleles, original, result);
@@ -297,7 +359,7 @@ public final class AlleleLikelihoodsUnitTest {
         final AlleleLikelihoods<GATKRead, Allele> result = new AlleleLikelihoods<>(new IndexedSampleList(samples), new IndexedAlleleList<>(alleles), reads);
         final double[][][] originalLikelihoods = fillWithRandomLikelihoods(samples,alleles,original, result);
 
-        result.normalizeLikelihoods(- 0.001);
+        result.normalizeLikelihoods(- 0.001, true);
         testAlleleQueries(alleles,result);
         final int numberOfAlleles = alleles.length;
         final double[][][] newLikelihoods = new double[originalLikelihoods.length][alleles.length][];
@@ -323,7 +385,6 @@ public final class AlleleLikelihoodsUnitTest {
         }
         testLikelihoodMatrixQueries(samples,result,newLikelihoods);
     }
-
 
     @Test(dataProvider = "dataSets")
     public void testAddMissingAlleles(final String[] samples, final Allele[] alleles, final Map<String,List<GATKRead>> reads) {
@@ -372,7 +433,6 @@ public final class AlleleLikelihoodsUnitTest {
         }
             testLikelihoodMatrixQueries(samples,result,newLikelihoods);
     }
-
 
     @Test(dataProvider = "dataSets")
     public void testAddNonRefAllele(final String[] samples, final Allele[] alleles, final Map<String,List<GATKRead>> reads) {
@@ -494,12 +554,12 @@ public final class AlleleLikelihoodsUnitTest {
             final Random rnd = Utils.getRandomGenerator();
             final Object[][] result = new Object[SAMPLE_SETS.length * ALLELE_SETS.length * ALLELE_SETS.length][];
             int nextIndex = 0;
-            for (int s = 0; s < SAMPLE_SETS.length; s++) {
-                for (int a = 0; a < ALLELE_SETS.length; a++) {
-                    for (int b = 0; b < ALLELE_SETS.length; b++) {
-                        if (ALLELE_SETS[b].length < ALLELE_SETS[a].length)
-                            result[nextIndex++] = new Object[]{SAMPLE_SETS[s], ALLELE_SETS[a],
-                                    dataSetReads(SAMPLE_SETS[s], rnd), randomAlleleMap(ALLELE_SETS[a], ALLELE_SETS[b])
+            for (final String[] sample_set : SAMPLE_SETS) {
+                for (final Allele[] alleleSet : ALLELE_SETS) {
+                    for (final Allele[] allele_set : ALLELE_SETS) {
+                        if (allele_set.length < alleleSet.length)
+                            result[nextIndex++] = new Object[]{sample_set, alleleSet,
+                                    dataSetReads(sample_set, rnd), randomAlleleMap(alleleSet, allele_set)
                             };
                     }
                 }
@@ -532,20 +592,21 @@ public final class AlleleLikelihoodsUnitTest {
             final Random rnd = Utils.getRandomGenerator();
             final Object[][] result = new Object[SAMPLE_SETS.length * ALLELE_SETS.length][];
             int nextIndex = 0;
-            for (int s = 0; s < SAMPLE_SETS.length; s++)
-                for (int a = 0; a < ALLELE_SETS.length; a++) {
-                    result[nextIndex++] = new Object[]{SAMPLE_SETS[s], ALLELE_SETS[a],
-                            dataSetReads(SAMPLE_SETS[s], rnd)
+            for (final String[] sample_set : SAMPLE_SETS) {
+                for (final Allele[] allele_set : ALLELE_SETS) {
+                    result[nextIndex++] = new Object[]{
+                            sample_set, allele_set,
+                            dataSetReads(sample_set, rnd)
                     };
                 }
+            }
             return result;
         }catch (final Throwable e) {
             throw new RuntimeException(e);
         }
     }
 
-    private Map<String,List<GATKRead>> dataSetReads(final String[] samples,
-                                                         final Random rnd) {
+    private Map<String,List<GATKRead>> dataSetReads(final String[] samples, final Random rnd) {
         final Map<String,List<GATKRead>> result = new LinkedHashMap<>(samples.length);
         for (final String sample : samples) {
             final int readCount = rnd.nextInt(100);
@@ -553,7 +614,8 @@ public final class AlleleLikelihoodsUnitTest {
             for (int r = 0; r < readCount; r++) {
                 final int alignmentStart = (r & 1) == 0 ? EVEN_READ_START : ODD_READ_START;
                 reads.add(ArtificialReadUtils.createArtificialRead(SAM_HEADER,
-                        "RRR" + sample + "00" + r, 0, alignmentStart, "AAAAA".getBytes(), new byte[]{30, 30, 30, 30, 30}, "5M"));
+                        "RRR" + sample + "00" + r, 0, alignmentStart, "AAAAA".getBytes(),
+                        new byte[]{30, 30, 30, 30, 30}, "5M"));
             }
             result.put(sample,reads);
         }
@@ -625,7 +687,6 @@ public final class AlleleLikelihoodsUnitTest {
         }
     }
 
-
     @Test(dataProvider="readCountsAndnumberOfAllelesDataSkippingNoLikelihoodsOrNoAlleleAndWithReference")
     public void testLikelihoodWriting(final int[] readCounts, final int numberOfAlleles, final boolean hasReference) {
         final SampleList sampleList = sampleList(readCounts);
@@ -649,7 +710,6 @@ public final class AlleleLikelihoodsUnitTest {
                     matrix.set(a,r,likelihood);
                     Assert.assertEquals(matrix.get(a, r), likelihood);
                 }
-
         }
         Assert.assertEquals(totalLikelihoodsSet, expectedLikelihoodsSet);
     }
@@ -657,8 +717,6 @@ public final class AlleleLikelihoodsUnitTest {
     private double testLikelihood(final int indexOfSample, final int indexOfAllele, final int readIndex) {
         return - Math.abs(31 * (indexOfSample + 1) + 101 * indexOfAllele + 1009 * readIndex);
     }
-
-    private final Random rnd = Utils.getRandomGenerator();
 
     private void testLikelihoodMatrixQueries(final AlleleList<Allele> alleles, final SampleList samples,
                                              final Map<String,List<GATKRead>> sampleToReads, AlleleLikelihoods<GATKRead, Allele> result, final double expectedLik) {
@@ -717,7 +775,7 @@ public final class AlleleLikelihoodsUnitTest {
     private AlleleList<Allele> alleleList(final int numberOfAlleles, final boolean hasReference) {
         final Allele[] alleles = AlleleListUnitTester.generateRandomUniqueAlleles(numberOfAlleles, 100);
         if (hasReference) {
-            final int referenceIndex = rnd.nextInt(numberOfAlleles);
+            final int referenceIndex = Utils.getRandomGenerator().nextInt(numberOfAlleles);
             alleles[referenceIndex] = Allele.create(alleles[referenceIndex].getBases(), true);
         }
         final AlleleList<Allele> alleleList = new IndexedAlleleList<>(alleles);
@@ -727,21 +785,24 @@ public final class AlleleLikelihoodsUnitTest {
         return alleleList;
     }
 
-    private SAMFileHeader SAM_HEADER = ArtificialReadUtils.createArtificialSamHeader(10, 0, 1000);
-    final GenomeLocParser locParser = new GenomeLocParser(SAM_HEADER.getSequenceDictionary());
+    @Test
+    public void testBug7153ZombieLkValues() {
+        final SimpleInterval evidence1 = new SimpleInterval("seq1", 1,1);
+        final SimpleInterval evidence2 = new SimpleInterval("seq2", 2,2);
 
-
-    private int[][] READ_COUNTS = {
-            {},
-            { 100 },
-            { 0 },
-            { 0, 0, 0 },
-            { 1, 0, 1 },
-            { 100, 10 , 100},
-            { 1000, 10, 100, 20, 23 }
-    };
-
-    private int[] ALLELE_COUNTS = { 0, 1, 2, 3, 10, 20 };
+        final AlleleLikelihoods<SimpleInterval, Allele> lk = new AlleleLikelihoods<SimpleInterval, Allele>(
+                SampleList.singletonSampleList("sample"),
+                AlleleList.newList(Arrays.asList(Allele.REF_A, Allele.ALT_A)),
+                Collections.singletonMap("sample", Collections.singletonList(evidence1))
+        );
+        lk.sampleMatrix(0).set(0, 0, 99.0);
+        lk.retainEvidence(e -> false);
+        Assert.assertEquals(lk.evidenceCount(), 0);
+        lk.addEvidence(Collections.singletonMap("sample", Collections.singletonList(evidence2)), 0.0);
+        Assert.assertEquals(lk.evidenceCount(), 1);
+        final double newLk = lk.sampleMatrix(0).get(0, 0);
+        Assert.assertEquals(newLk, 0.0, " reporting the zoombie lk of 99.0?");
+    }
 
     @DataProvider(name="readCountsAndnumberOfAllelesData")
     public Object[][] readCountsAndnumberOfAllelesData() {
@@ -784,5 +845,4 @@ public final class AlleleLikelihoodsUnitTest {
             samples.add("SAMPLE_" + i);
         return new IndexedSampleList(samples);
     }
-
 }

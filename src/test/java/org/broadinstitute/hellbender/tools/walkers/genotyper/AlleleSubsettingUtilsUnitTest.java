@@ -2,7 +2,6 @@ package org.broadinstitute.hellbender.tools.walkers.genotyper;
 
 import htsjdk.variant.variantcontext.*;
 import htsjdk.variant.vcf.VCFConstants;
-import htsjdk.variant.vcf.VCFHeader;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.utils.MathUtils;
 import org.broadinstitute.hellbender.GATKBaseTest;
@@ -137,19 +136,14 @@ public class AlleleSubsettingUtilsUnitTest extends GATKBaseTest {
     public void testUpdatePLsAndADData(final VariantContext originalVC,
                                        final VariantContext selectedVC,
                                        final List<Genotype> expectedGenotypes) {
-        // initialize cache of allele anyploid indices
-        for (final Genotype genotype : originalVC.getGenotypes()) {
-            GenotypeLikelihoods.initializeAnyploidPLIndexToAlleleIndices(originalVC.getNAlleles() - 1, genotype.getPloidy());
-        }
-
         final VariantContext selectedVCwithGTs = new VariantContextBuilder(selectedVC).genotypes(originalVC.getGenotypes()).make();
 
         final GenotypesContext oldGs = selectedVCwithGTs.getGenotypes();
         final GenotypesContext actual = selectedVCwithGTs.getNAlleles() == originalVC.getNAlleles() ? oldGs :
                                         AlleleSubsettingUtils.subsetAlleles(oldGs, 0, originalVC.getAlleles(),
-                                                                            selectedVCwithGTs.getAlleles(),
+                                                                            selectedVCwithGTs.getAlleles(), null,
                                                                             GenotypeAssignmentMethod.DO_NOT_ASSIGN_GENOTYPES,
-                                                                            originalVC.getAttributeAsInt(VCFConstants.DEPTH_KEY, 0));
+                                                                            originalVC.getAttributeAsInt(VCFConstants.DEPTH_KEY, 0), false);
 
         Assert.assertEquals(actual.size(), expectedGenotypes.size());
         for ( final Genotype expected : expectedGenotypes ) {
@@ -333,7 +327,7 @@ public class AlleleSubsettingUtilsUnitTest extends GATKBaseTest {
         final List<Allele> alleles = Arrays.asList(Aref);
         final Genotype uniformativePL = new GenotypeBuilder("sample", alleles).PL(new int[] {0}).make();
         final GenotypesContext result  = AlleleSubsettingUtils.subsetAlleles(GenotypesContext.create(uniformativePL), 2,
-                                                                      alleles, alleles, GenotypeAssignmentMethod.DO_NOT_ASSIGN_GENOTYPES, 10 );
+                                                                      alleles, alleles, null, GenotypeAssignmentMethod.DO_NOT_ASSIGN_GENOTYPES, 10, false);
         final Genotype genotype = result.get(0);
         Assert.assertTrue(genotype.hasPL());
         Assert.assertEquals(genotype.getPL(), new int[]{0});
@@ -366,7 +360,7 @@ public class AlleleSubsettingUtilsUnitTest extends GATKBaseTest {
         final VariantContext vc1 = new VariantContextBuilder("source", "contig", 1, 1, twoAlleles)
                 .genotypes(Arrays.asList(g1, g2, g3, gNull)).make();
 
-        Assert.assertEquals(AlleleSubsettingUtils.calculateLikelihoodSums(vc1, 2)[1], 4.2, 1.0e-8);
+        Assert.assertEquals(AlleleSubsettingUtils.calculateLikelihoodSums(vc1, 2, false)[1], 4.2, 1.0e-8);
 
         // diploid, triallelic, two samples
         final List<Allele> threeAlleles = Arrays.asList(Aref, C, G);
@@ -390,7 +384,7 @@ public class AlleleSubsettingUtilsUnitTest extends GATKBaseTest {
         final VariantContext vc2 = new VariantContextBuilder("source", "contig", 1, 1, threeAlleles)
                 .genotypes(Arrays.asList(g4, g5)).make();
 
-        final double[] likelihoodSums2 = AlleleSubsettingUtils.calculateLikelihoodSums(vc2, 2);
+        final double[] likelihoodSums2 = AlleleSubsettingUtils.calculateLikelihoodSums(vc2, 2, false);
         Assert.assertEquals(likelihoodSums2[1], 4.1, 1.0e-8);
         Assert.assertEquals(likelihoodSums2[2], 3.1, 1.0e-8);
 
@@ -405,7 +399,7 @@ public class AlleleSubsettingUtilsUnitTest extends GATKBaseTest {
         final VariantContext vc3 = new VariantContextBuilder("source", "contig", 1, 1, twoAlleles)
                 .genotypes(Arrays.asList(g6)).make();
 
-        Assert.assertEquals(AlleleSubsettingUtils.calculateLikelihoodSums(vc3, 3)[1], 3.5, 1.0e-8);
+        Assert.assertEquals(AlleleSubsettingUtils.calculateLikelihoodSums(vc3, 3, false)[1], 3.5, 1.0e-8);
     }
 
     // This test exists to enforce the behavior that AlleleSubsetting utils can be used to reorder alleles, if a developer
@@ -417,8 +411,8 @@ public class AlleleSubsettingUtilsUnitTest extends GATKBaseTest {
         final Genotype g5 = new GenotypeBuilder("sample2", Arrays.asList(Aref, C)).PL(new double[] {0.0, 1.0, 2.0, 3.0, 4.0, 5.0}).make();
 
         final GenotypesContext newGs = AlleleSubsettingUtils.subsetAlleles(GenotypesContext.create(g5),
-                2, threeAlleles, threeAllelesSorted,
-                GenotypeAssignmentMethod.DO_NOT_ASSIGN_GENOTYPES, 10);
+                2, threeAlleles, threeAllelesSorted, null,
+                GenotypeAssignmentMethod.DO_NOT_ASSIGN_GENOTYPES, 10, false);
 
         Assert.assertEquals(newGs.get(0).getPL(), new int[] {50, 20, 0, 40, 10, 30});
     }

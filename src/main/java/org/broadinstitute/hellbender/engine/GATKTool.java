@@ -9,11 +9,13 @@ import htsjdk.tribble.Feature;
 import htsjdk.variant.variantcontext.writer.Options;
 import htsjdk.variant.variantcontext.writer.VariantContextWriter;
 import htsjdk.variant.vcf.VCFHeaderLine;
+
 import java.io.File;
 import java.nio.file.Path;
 import java.time.ZonedDateTime;
 import java.util.*;
 import java.util.stream.Stream;
+
 import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.barclay.argparser.ArgumentCollection;
 import org.broadinstitute.barclay.argparser.CommandLinePluginDescriptor;
@@ -42,10 +44,7 @@ import org.broadinstitute.hellbender.utils.read.ReadUtils;
 import org.broadinstitute.hellbender.utils.read.SAMFileGATKReadWriter;
 import org.broadinstitute.hellbender.utils.reference.ReferenceUtils;
 import org.broadinstitute.hellbender.utils.variant.GATKVariantContextUtils;
-
-//TODO:
-//UserException overloads
-//VCF outs
+import org.broadinstitute.hellbender.utils.variant.writers.ShardingVCFWriter;
 
 /**
  * Base class for all GATK tools. Tool authors that wish to write a "GATK" tool but not use one of
@@ -66,9 +65,10 @@ public abstract class GATKTool extends CommandLineProgram {
     @Argument(fullName = StandardArgumentDefinitions.SEQUENCE_DICTIONARY_NAME,
             shortName = StandardArgumentDefinitions.SEQUENCE_DICTIONARY_NAME,
             doc = "Use the given sequence dictionary as the master/canonical sequence dictionary.  Must be a .dict file.", optional = true, common = true)
-    private String masterSequenceDictionaryFilename = null;
+    private GATKPath masterSequenceDictionaryFilename = null;
 
     public static final String SECONDS_BETWEEN_PROGRESS_UPDATES_NAME = "seconds-between-progress-updates";
+
     @Argument(fullName = SECONDS_BETWEEN_PROGRESS_UPDATES_NAME, shortName = SECONDS_BETWEEN_PROGRESS_UPDATES_NAME, doc = "Output traversal statistics every time this many seconds elapse", optional = true, common = true)
     private double secondsBetweenProgressUpdates = ProgressMeter.DEFAULT_SECONDS_BETWEEN_UPDATES;
 
@@ -94,6 +94,10 @@ public abstract class GATKTool extends CommandLineProgram {
             shortName=StandardArgumentDefinitions.CREATE_OUTPUT_VARIANT_MD5_SHORT_NAME,
             doc = "If true, create a a MD5 digest any VCF file created.", optional=true, common = true)
     public boolean createOutputVariantMD5 = false;
+
+    @Argument(fullName = StandardArgumentDefinitions.MAX_VARIANTS_PER_SHARD_LONG_NAME, optional = true, minValue = 0, common = true,
+            doc = "If non-zero, partitions VCF output into shards, each containing up to the given number of records.")
+    private int maxVariantsPerShard = 0;
 
     @Argument(fullName= StandardArgumentDefinitions.LENIENT_LONG_NAME,
             shortName = StandardArgumentDefinitions.LENIENT_SHORT_NAME,
@@ -443,17 +447,7 @@ public abstract class GATKTool extends CommandLineProgram {
      */
     void initializeReads() {
         if (! readArguments.getReadPathSpecifiers().isEmpty()) {
-            SamReaderFactory factory = SamReaderFactory.makeDefault().validationStringency(readArguments.getReadValidationStringency());
-            if (hasReference()) { // pass in reference if available, because CRAM files need it
-                factory = factory.referenceSequence(referenceArguments.getReferencePath());
-            }
-            else if (hasCramInput()) {
-                throw UserException.MISSING_REFERENCE_FOR_CRAM;
-            }
-
-            if(bamIndexCachingShouldBeEnabled()) {
-                factory = factory.enable(SamReaderFactory.Option.CACHE_FILE_BASED_INDEXES);
-            }
+            final SamReaderFactory factory = makeSamReaderFactory();
 
             reads = new ReadsPathDataSource(readArguments.getReadPaths(), readArguments.getReadIndexPaths(), factory, cloudPrefetchBuffer,
                 (cloudIndexPrefetchBuffer < 0 ? cloudPrefetchBuffer : cloudIndexPrefetchBuffer));
@@ -463,8 +457,23 @@ public abstract class GATKTool extends CommandLineProgram {
         }
     }
 
+    protected final SamReaderFactory makeSamReaderFactory() {
+        SamReaderFactory factory = SamReaderFactory.makeDefault().validationStringency(readArguments.getReadValidationStringency());
+        if (hasReference()) { // pass in reference if available, because CRAM files need it
+            factory = factory.referenceSequence(referenceArguments.getReferencePath());
+        }
+        else if (hasCramInput()) {
+            throw UserException.MISSING_REFERENCE_FOR_CRAM;
+        }
 
-    private boolean bamIndexCachingShouldBeEnabled() {
+        if(bamIndexCachingShouldBeEnabled()) {
+            factory = factory.enable(SamReaderFactory.Option.CACHE_FILE_BASED_INDEXES);
+        }
+        return factory;
+    }
+
+
+    protected final boolean bamIndexCachingShouldBeEnabled() {
         return intervalArgumentCollection.intervalsSpecified() && !disableBamIndexCaching;
     }
 
@@ -589,6 +598,14 @@ public abstract class GATKTool extends CommandLineProgram {
         return false;
     }
 
+    /**
+     * Does this tool want to disable the progress meter? If so, override here to return true
+     * 
+     * @return true if this tools wants to disable progress meter output, otherwise false
+     */
+    public boolean disableProgressMeter() {
+        return false;
+    }
 
     /**
      * Get the {@link SequenceDictionaryValidationArgumentCollection} for the tool.
@@ -606,7 +623,7 @@ public abstract class GATKTool extends CommandLineProgram {
      */
     private void loadMasterSequenceDictionary() {
         if ( (masterSequenceDictionary == null) && (masterSequenceDictionaryFilename != null) ) {
-            masterSequenceDictionary = ReferenceUtils.loadFastaDictionary(new File(masterSequenceDictionaryFilename));
+            masterSequenceDictionary = ReferenceUtils.loadFastaDictionary(masterSequenceDictionaryFilename);
         }
     }
 
@@ -651,8 +668,8 @@ public abstract class GATKTool extends CommandLineProgram {
         } else if (hasReads()){
             return reads.getSequenceDictionary();
         } else if (hasFeatures()){
-            final List<SAMSequenceDictionary> dictionaries = features.getVariantSequenceDictionaries();
-            //If there is just one, it clearly is the best. Otherwise, noone is best.
+            final List<SAMSequenceDictionary> dictionaries = features.getAllSequenceDictionaries();
+            //If there is just one, it clearly is the best. Otherwise, none is best.
             if (dictionaries.size() == 1){
                 return dictionaries.get(0);
             }
@@ -716,8 +733,15 @@ public abstract class GATKTool extends CommandLineProgram {
 
         checkToolRequirements();
 
-        progressMeter = new ProgressMeter(secondsBetweenProgressUpdates);
-        progressMeter.setRecordLabel(getProgressMeterRecordLabel());
+        initializeProgressMeter(getProgressMeterRecordLabel());
+    }
+
+    /**
+     * Helper method to initialize the progress meter without exposing engine level arguements.
+     */
+    protected final void initializeProgressMeter(final String progressMeterRecordLabel) {
+        progressMeter = new ProgressMeter(secondsBetweenProgressUpdates, disableProgressMeter());
+        progressMeter.setRecordLabel(progressMeterRecordLabel);
     }
 
     /**
@@ -775,12 +799,16 @@ public abstract class GATKTool extends CommandLineProgram {
 
         // Check all Feature dictionaries against the reference and/or reads dictionaries
         // TODO: pass file names associated with each sequence dictionary into validateDictionaries(); issue #660
+        final SAMSequenceDictionary bestDict = getBestAvailableSequenceDictionary();
         for ( final SAMSequenceDictionary featureDict : featureDicts ) {
             if (hasReference()){
                 SequenceDictionaryUtils.validateDictionaries("reference", refDict, "features", featureDict);
             }
             if (hasReads()) {
                 SequenceDictionaryUtils.validateDictionaries("reads", readDict, "features", featureDict);
+            }
+            if (bestDict != null) { //VariantWalkers will use DrivingVariants for best dictionary, then check all other FeatureInputs
+                SequenceDictionaryUtils.validateDictionaries("best available", bestDict, "features", featureDict);
             }
         }
 
@@ -884,6 +912,14 @@ public abstract class GATKTool extends CommandLineProgram {
             options.add(Options.DO_NOT_WRITE_GENOTYPES);
         }
 
+        if (maxVariantsPerShard > 0) {
+            return new ShardingVCFWriter(
+                    outPath,
+                    maxVariantsPerShard,
+                    sequenceDictionary,
+                    createOutputVariantMD5,
+                    options.toArray(new Options[options.size()]));
+        }
         return GATKVariantContextUtils.createVCFWriter(
                 outPath,
                 sequenceDictionary,
@@ -1047,7 +1083,9 @@ public abstract class GATKTool extends CommandLineProgram {
             onTraversalStart();
             progressMeter.start();
             traverse();
-            progressMeter.stop();
+            if (!progressMeter.stopped()) {
+                progressMeter.stop();
+            }
             return onTraversalSuccess();
         } finally {
             closeTool();

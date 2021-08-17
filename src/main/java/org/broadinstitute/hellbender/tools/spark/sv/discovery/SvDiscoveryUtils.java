@@ -2,11 +2,11 @@ package org.broadinstitute.hellbender.tools.spark.sv.discovery;
 
 import htsjdk.samtools.SAMSequenceDictionary;
 import org.apache.logging.log4j.Logger;
-import org.broadinstitute.hellbender.tools.spark.sv.StructuralVariationDiscoveryArgumentCollection.DiscoverVariantsFromContigAlignmentsSparkArgumentCollection;
+import org.broadinstitute.hellbender.tools.spark.sv.StructuralVariationDiscoveryArgumentCollection.DiscoverVariantsFromContigAlignmentsArgumentCollection;
 import org.broadinstitute.hellbender.tools.spark.sv.discovery.inference.BreakpointComplications;
 import org.broadinstitute.hellbender.tools.spark.sv.discovery.inference.NovelAdjacencyAndAltHaplotype;
-import org.broadinstitute.hellbender.tools.spark.sv.utils.SVInterval;
-import org.broadinstitute.hellbender.tools.spark.sv.utils.SVIntervalTree;
+import org.broadinstitute.hellbender.utils.SVInterval;
+import org.broadinstitute.hellbender.utils.SVIntervalTree;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.SVVCFReader;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 
@@ -17,7 +17,7 @@ public final class SvDiscoveryUtils {
     public static void evaluateIntervalsAndNarls(final List<SVInterval> assembledIntervals,
                                                  final List<NovelAdjacencyAndAltHaplotype> narls,
                                                  final SAMSequenceDictionary referenceSequenceDictionary,
-                                                 final DiscoverVariantsFromContigAlignmentsSparkArgumentCollection parameters,
+                                                 final DiscoverVariantsFromContigAlignmentsArgumentCollection parameters,
                                                  final Logger toolLogger) {
         if ( parameters.truthVCF != null ) {
             final SVIntervalTree<String> trueBreakpoints =
