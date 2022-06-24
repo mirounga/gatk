@@ -31,7 +31,9 @@ import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.gcs.BucketUtils;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
+import org.broadinstitute.hellbender.utils.pairhmm.PairHMM;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
+import org.broadinstitute.hellbender.utils.text.XReadLines;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
 import org.broadinstitute.hellbender.utils.variant.HomoSapiensConstants;
 import org.testng.Assert;
@@ -669,6 +671,40 @@ public class HaplotypeCallerIntegrationTest extends CommandLineProgramTest {
             vc.getAlternateAlleles().stream().filter(a-> a.length() > 0 && BaseUtils.isNucleotide(a.getBases()[0])).forEach(a -> Assert.assertTrue(altAllelesAtThisLocus.contains(a)));
         }
     }
+
+    @Test
+    public void testForceCallingNotProducingNoCalls() throws IOException {
+        Utils.resetRandomGenerator();
+        final String bamPath = NA12878_20_21_WGS_bam;
+        final File forceCallingVcf = new File(TEST_FILES_DIR, "testGenotypeGivenAllelesMode_givenAlleles.vcf");
+        final String intervalString = "20:10000000-10010000";
+        final File expected = new File(TEST_FILES_DIR, "expected.testForceCallingNotProducingNoCalls.gatk4.vcf");
+
+
+        final File output = createTempFile("testGenotypeGivenAllelesMode", ".vcf");
+        final String outputPath = UPDATE_EXACT_MATCH_EXPECTED_OUTPUTS ? expected.getAbsolutePath() : output.getAbsolutePath();
+
+        // Prior to https://github.com/broadinstitute/gatk/pull/7740 the output for this test would be littered with 0/0 reference variants with empty alt alleles. This test is intended to enshrine the new behavior.
+        // For an example of what the output used to look at see the issue https://github.com/broadinstitute/gatk/issues/7741.
+        final String[] args = {
+                "-I", bamPath,
+                "-R", b37Reference,
+                "-L", intervalString,
+                "-O", outputPath,
+                "-pairHMM", "AVX_LOGLESS_CACHING",
+                "--" + StandardArgumentDefinitions.ADD_OUTPUT_VCF_COMMANDLINE, "false",
+                "--" + AssemblyBasedCallerArgumentCollection.FORCE_CALL_ALLELES_LONG_NAME, forceCallingVcf.getAbsolutePath(),
+                "--" + AssemblyBasedCallerArgumentCollection.ALLELE_EXTENSION_LONG_NAME, "2",
+                "--" + GenotypeCalculationArgumentCollection.CALL_CONFIDENCE_LONG_NAME, "1000" // This is intended to be an absurdly high number that forces most alleles to fail to demonstrate a bug that caused calls to be made in the vicinity of forced alleles
+        };
+
+        runCommandLine(args);
+
+        if ( ! UPDATE_EXACT_MATCH_EXPECTED_OUTPUTS ) {
+            IntegrationTestSpec.assertEqualTextFiles(output, expected);
+        }
+    }
+
 
     // regression test for https://github.com/broadinstitute/gatk/issues/6495, where a mistake in assembly region trimming
     // caused variants in one-base or similarly short intervals to cause reads to be trimmed to one base long, yielding
@@ -1368,7 +1404,7 @@ public class HaplotypeCallerIntegrationTest extends CommandLineProgramTest {
         final Map<SimpleInterval, List<Allele>> expectedSubsettedAllelesByLocus = new HashMap<>();
         for ( final VariantContext vc : callsNoMaxAlternateAlleles ) {
             if ( getNumAltAllelesExcludingNonRef(vc) > maxAlternateAlleles ) {
-                final List<Allele> mostLikelyAlleles = AlleleSubsettingUtils.calculateMostLikelyAlleles(vc, HomoSapiensConstants.DEFAULT_PLOIDY, maxAlternateAlleles);
+                final List<Allele> mostLikelyAlleles = AlleleSubsettingUtils.calculateMostLikelyAlleles(vc, HomoSapiensConstants.DEFAULT_PLOIDY, maxAlternateAlleles, false);
                 expectedSubsettedAllelesByLocus.put(new SimpleInterval(vc), mostLikelyAlleles);
             }
         }
@@ -1605,5 +1641,170 @@ public class HaplotypeCallerIntegrationTest extends CommandLineProgramTest {
         return vc.hasAttribute(VCFConstants.END_KEY) &&
                vc.getAlternateAlleles().size() == 1 &&
                vc.getAlternateAllele(0).equals(Allele.NON_REF_ALLELE);
+    }
+
+    /*
+     * Test that in VCF mode we're consistent with past GATK4 results
+     */
+    @Test(dataProvider="HaplotypeCallerTestInputs")
+    public void testPileupCallingDefaultsConsistentWithPastResults(final String inputFileName, final String referenceFileName) throws Exception {
+        Utils.resetRandomGenerator();
+
+        final File output = createTempFile("testVCFModeIsConsistentWithPastResults", ".vcf");
+        final File expected = new File(TEST_FILES_DIR, "expected.pileupCallerDefaults.gatk4.vcf");
+
+        final String outputPath = UPDATE_EXACT_MATCH_EXPECTED_OUTPUTS ? expected.getAbsolutePath() : output.getAbsolutePath();
+
+        final String[] args = {
+                "-I", inputFileName,
+                "-R", referenceFileName,
+                "-L", "20:10000000-10100000",
+                "-O", outputPath,
+                "-pairHMM", "AVX_LOGLESS_CACHING",
+
+                // NOTE: These arguments are intended to force the assembly to fail at all sites in order to test what gets recovered by the pileup code
+                "--" + ReadThreadingAssemblerArgumentCollection.KMER_SIZE_LONG_NAME, "1",
+                "--" + ReadThreadingAssemblerArgumentCollection.DONT_INCREASE_KMER_SIZE_LONG_NAME,
+
+                // Pileup Caller args
+                "--" + PileupDetectionArgumentCollection.PILEUP_DETECTION_LONG_NAME,
+                "--" + PileupDetectionArgumentCollection.PILEUP_DETECTION_ENABLE_INDELS,
+                "--" + StandardArgumentDefinitions.ADD_OUTPUT_VCF_COMMANDLINE, "false"
+        };
+
+        runCommandLine(args);
+
+        // Test for an exact match against past results
+        if ( ! UPDATE_EXACT_MATCH_EXPECTED_OUTPUTS ) {
+            IntegrationTestSpec.assertEqualTextFiles(output, expected);
+        }
+    }
+
+    /*
+     * Test that in VCF mode we're consistent with past GATK4 results
+     */
+    @Test(dataProvider="HaplotypeCallerTestInputs")
+    public void testPileupCallingDRAGENModeConsistentWithPastResultsWithIndels(final String inputFileName, final String referenceFileName) throws Exception {
+        Utils.resetRandomGenerator();
+
+        final File output = createTempFile("testVCFModeIsConsistentWithPastResults", ".vcf");
+        final File expected = new File(TEST_FILES_DIR, "expected.pileupCallerDRAGEN.WithIndels.gatk4.vcf");
+
+        final String outputPath = UPDATE_EXACT_MATCH_EXPECTED_OUTPUTS ? expected.getAbsolutePath() : output.getAbsolutePath();
+
+        final String[] args = {
+                "-I", inputFileName,
+                "-R", referenceFileName,
+                "-L", "20:10000000-10100000",
+                "-O", outputPath,
+                "-pairHMM", "AVX_LOGLESS_CACHING",
+
+                // NOTE: These arguments are intended to force the assembly to fail at all sites in order to test what gets recovered by the pileup code
+                "--" + ReadThreadingAssemblerArgumentCollection.KMER_SIZE_LONG_NAME, "1",
+                "--" + ReadThreadingAssemblerArgumentCollection.DONT_INCREASE_KMER_SIZE_LONG_NAME,
+
+                // Pileup Caller args
+                "--" + PileupDetectionArgumentCollection.PILEUP_DETECTION_LONG_NAME,
+                "--" + PileupDetectionArgumentCollection.PILEUP_DETECTION_ABSOLUTE_ALT_DEPTH, "0",
+                "--" + PileupDetectionArgumentCollection.PILEUP_DETECTION_BAD_READ_RATIO_LONG_NAME, "0.01", // an excessive strict read badness filter designed to amplify the effect (the default here is 40%)
+                "--" + PileupDetectionArgumentCollection.PILEUP_DETECTION_ENABLE_INDELS,
+                "--" + StandardArgumentDefinitions.ADD_OUTPUT_VCF_COMMANDLINE, "false"
+        };
+
+        runCommandLine(args);
+
+        // Test for an exact match against past results
+        if ( ! UPDATE_EXACT_MATCH_EXPECTED_OUTPUTS ) {
+            IntegrationTestSpec.assertEqualTextFiles(output, expected);
+        }
+    }
+
+    @Test(dataProvider="HaplotypeCallerTestInputs")
+    public void testPileupCallingDRAGENModeConsistentWithPastResults(final String inputFileName, final String referenceFileName) throws Exception {
+        Utils.resetRandomGenerator();
+
+        final File output = createTempFile("testVCFModeIsConsistentWithPastResults", ".vcf");
+        final File expected = new File(TEST_FILES_DIR, "expected.pileupCallerDRAGEN.gatk4.vcf");
+
+        final String outputPath = UPDATE_EXACT_MATCH_EXPECTED_OUTPUTS ? expected.getAbsolutePath() : output.getAbsolutePath();
+
+        final String[] args = {
+                "-I", inputFileName,
+                "-R", referenceFileName,
+                "-L", "20:10000000-10100000",
+                "-O", outputPath,
+                "-pairHMM", "AVX_LOGLESS_CACHING",
+
+                // NOTE: These arguments are intended to force the assembly to fail at all sites in order to test what gets recovered by the pileup code
+                "--" + ReadThreadingAssemblerArgumentCollection.KMER_SIZE_LONG_NAME, "1",
+                "--" + ReadThreadingAssemblerArgumentCollection.DONT_INCREASE_KMER_SIZE_LONG_NAME,
+
+                // Pileup Caller args
+                "--" + PileupDetectionArgumentCollection.PILEUP_DETECTION_LONG_NAME,
+                "--" + PileupDetectionArgumentCollection.PILEUP_DETECTION_ABSOLUTE_ALT_DEPTH, "0",
+                "--" + PileupDetectionArgumentCollection.PILEUP_DETECTION_BAD_READ_RATIO_LONG_NAME, "0.01", // an excessive strict read badness filter designed to amplify the effect (the default here is 40%)
+                "--" + StandardArgumentDefinitions.ADD_OUTPUT_VCF_COMMANDLINE, "false"
+        };
+
+        runCommandLine(args);
+
+        // Test for an exact match against past results
+        if ( ! UPDATE_EXACT_MATCH_EXPECTED_OUTPUTS ) {
+            IntegrationTestSpec.assertEqualTextFiles(output, expected);
+        }
+    }
+
+
+    @DataProvider(name="PairHMMResultsModes")
+    public Object[][] PairHMMResultsModes() {
+        return new Object[][] {
+                {PairHMM.Implementation.AVX_LOGLESS_CACHING, new File(TEST_FILES_DIR, "expected.AVX.hmmresults.txt")},
+                {PairHMM.Implementation.LOGLESS_CACHING, new File(TEST_FILES_DIR, "expected.Java.hmmresults.txt")},
+                {PairHMM.Implementation.ORIGINAL, new File(TEST_FILES_DIR, "expected.Original.hmmresults.txt")},
+                {PairHMM.Implementation.EXACT, new File(TEST_FILES_DIR, "expected.Exact.hmmresults.txt")},
+
+        };
+    }
+
+    @Test(dataProvider = "PairHMMResultsModes")
+    public void testPairHMMResultsFile(final PairHMM.Implementation implementation, final File expected) throws Exception {
+        Utils.resetRandomGenerator();
+
+        final File vcfOutput = createTempFile("hmmResultFileTest", ".vcf");
+        final File hmmOutput = createTempFile("hmmResult", ".txt");
+
+        final String hmmOutputPath = UPDATE_EXACT_MATCH_EXPECTED_OUTPUTS ? expected.getAbsolutePath() : hmmOutput.getAbsolutePath();
+
+        final String[] args = {
+                "-I", NA12878_20_21_WGS_bam,
+                "-R", b37_reference_20_21,
+                "-L", "20:10000117",
+                "-ip", "100",
+                "-O", vcfOutput.getAbsolutePath(),
+                "--pair-hmm-results-file", hmmOutputPath,
+                "-pairHMM", implementation.name()
+        };
+
+        runCommandLine(args);
+
+        if ( ! UPDATE_EXACT_MATCH_EXPECTED_OUTPUTS ) {
+            // Travis instances appear to produce subtly different results for the AVX caching results. Here we ensure that
+            // the test is weak enough to pass even if there are some integer rounding mismatches.
+            // TODO It merits investigation into what exactly is mismatching on travis
+            if (implementation == PairHMM.Implementation.AVX_LOGLESS_CACHING) {
+                XReadLines actualLines = new XReadLines(hmmOutput);
+                XReadLines expectedLines = new XReadLines(expected);
+
+                while (actualLines.hasNext() && expectedLines.hasNext()) {
+                    final String expectedLine = expectedLines.next();
+                    final String actualLine = actualLines.next();
+                    Assert.assertEquals(actualLine.split(" ").length, expectedLine.split(" ").length);
+                }
+                Assert.assertEquals(actualLines.hasNext(), expectedLines.hasNext());
+            // For the java HMMs we expect exact matching outputs so we assert that.
+            } else {
+                IntegrationTestSpec.assertEqualTextFiles(hmmOutput, expected);
+            }
+        }
     }
 }

@@ -1,5 +1,6 @@
 package org.broadinstitute.hellbender.tools.genomicsdb;
 
+import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.tools.walkers.genotyper.GenotypeCalculationArgumentCollection;
 
 import java.nio.file.Path;
@@ -25,18 +26,28 @@ public final class GenomicsDBOptions {
     }
 
     public GenomicsDBOptions(final Path reference, GenomicsDBArgumentCollection genomicsdbArgs) {
-        this(reference, genomicsdbArgs, new GenotypeCalculationArgumentCollection(), false);
+        this(reference, genomicsdbArgs, new GenotypeCalculationArgumentCollection());
     }
 
     public GenomicsDBOptions(final Path reference, final GenomicsDBArgumentCollection genomicsdbArgs,
-                             final GenotypeCalculationArgumentCollection genotypeCalcArgs, final boolean forceCallGenotypes) {
+                             final GenotypeCalculationArgumentCollection genotypeCalcArgs) {
         this.reference = reference;
-        this.callGenotypes = genomicsdbArgs.callGenotypes || forceCallGenotypes;
-        this.maxDiploidAltAllelesThatCanBeGenotyped = genomicsdbArgs.maxDiploidAltAllelesThatCanBeGenotyped;
-        this.maxGenotypeCount = genotypeCalcArgs.MAX_GENOTYPE_COUNT;
+        this.callGenotypes = genomicsdbArgs.callGenotypes;
         this.useBCFCodec = genomicsdbArgs.useBCFCodec;
         this.sharedPosixFSOptimizations = genomicsdbArgs.sharedPosixFSOptimizations;
         this.useGcsHdfsConnector = genomicsdbArgs.useGcsHdfsConnector;
+        if (genomicsdbArgs.maxDiploidAltAllelesThatCanBeGenotyped - 1 < genotypeCalcArgs.maxAlternateAlleles) {  //-1 for <NON_REF>
+            throw new UserException.BadInput("GenomicsDB max alternate alleles (" + GenomicsDBArgumentCollection.MAX_ALTS_LONG_NAME
+                + ") must be at least one greater than genotype calculation max alternate alleles ("
+                + GenotypeCalculationArgumentCollection.MAX_ALTERNATE_ALLELES_LONG_NAME + "), accounting for the non-ref allele");
+        }
+        this.maxDiploidAltAllelesThatCanBeGenotyped = genomicsdbArgs.maxDiploidAltAllelesThatCanBeGenotyped;
+        if (genotypeCalcArgs != null) {
+            this.maxGenotypeCount = genotypeCalcArgs.maxGenotypeCount;
+        } else {
+            // Some defaults
+            this.maxGenotypeCount = GenotypeCalculationArgumentCollection.DEFAULT_MAX_GENOTYPE_COUNT;
+        }
     }
 
     public Path getReference() {

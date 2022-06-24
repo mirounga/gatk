@@ -256,6 +256,11 @@ public final class Mutect2 extends AssemblyRegionWalker {
     public AssemblyRegionEvaluator assemblyRegionEvaluator() { return m2Engine; }
 
     @Override
+    public boolean shouldTrackPileupsForAssemblyRegions() {
+        return MTAC.pileupDetectionArgs.usePileupDetection;
+    }
+
+    @Override
     public void onTraversalStart() {
         VariantAnnotatorEngine annotatorEngine = new VariantAnnotatorEngine(makeVariantAnnotations(), null, Collections.emptyList(), false, false);
         m2Engine = new Mutect2Engine(MTAC, assemblyRegionArgs, createOutputBamIndex, createOutputBamMD5, getHeaderForReads(), referenceArguments.getReferenceSpecifier(), annotatorEngine);
@@ -285,12 +290,6 @@ public final class Mutect2 extends AssemblyRegionWalker {
             annotations.add(new OriginalAlignment());
         }
 
-        if (MTAC.trainingDataMode) {
-            annotations.add(new FeaturizedReadSets(MTAC.maxRefCountInTrainingData));
-            annotations.add(new AssemblyComplexity());
-            annotations.add(new ReferenceBases());
-        }
-
         return annotations;
     }
 
@@ -312,7 +311,7 @@ public final class Mutect2 extends AssemblyRegionWalker {
             vcfWriter.close();
         }
         if (m2Engine != null) {
-            m2Engine.shutdown();
+            m2Engine.close();
         }
     }
 }

@@ -5,7 +5,6 @@ import htsjdk.samtools.SAMSequenceRecord;
 import htsjdk.samtools.seekablestream.ByteArraySeekableStream;
 import org.broadinstitute.hellbender.utils.codecs.BafEvidenceBCICodec;
 import org.broadinstitute.hellbender.utils.codecs.BafEvidenceCodec;
-import org.broadinstitute.hellbender.utils.codecs.FeaturesHeader;
 import org.broadinstitute.hellbender.utils.io.BlockCompressedIntervalStream.Reader;
 import org.broadinstitute.hellbender.utils.io.BlockCompressedIntervalStream.Writer;
 import org.testng.Assert;
@@ -18,7 +17,7 @@ import java.util.List;
 public class BafEvidenceUnitTest {
     private static final SAMSequenceDictionary dict = new SAMSequenceDictionary();
     private static final List<String> samples = new ArrayList<>(3);
-    private static final List<BafEvidence> bafs = new ArrayList<>(18);
+    private static final List<BafEvidence> bafs = new ArrayList<>(20);
     static {
         dict.addSequence(new SAMSequenceRecord("21", 46709983));
         dict.addSequence(new SAMSequenceRecord("22", 50818468));
@@ -43,12 +42,17 @@ public class BafEvidenceUnitTest {
         bafs.add(new BafEvidence("B","22",30012721,0.34782608695652173));
         bafs.add(new BafEvidence("C","22",30012825,0.6266666666666667));
         bafs.add(new BafEvidence("B","22",30016476,0.18181818181818182));
+        bafs.add(new BafEvidence("B","22",30016476,0.));
+        bafs.add(new BafEvidence("B","22",30016476,-.1));
     }
 
     @Test
     public void testTextRoundTrip() {
         final BafEvidenceCodec codec = new BafEvidenceCodec();
-        for ( final BafEvidence be : bafs ) {
+        for ( final BafEvidence bafEvidence : bafs ) {
+            // text codec prints just two significant digits to economize on file size
+            final double roundedValue = Math.round(100*bafEvidence.getValue())/100.;
+            final BafEvidence be = new BafEvidence(bafEvidence, roundedValue);
             Assert.assertEquals(codec.decode(BafEvidenceCodec.encode(be)), be);
         }
     }
@@ -57,8 +61,8 @@ public class BafEvidenceUnitTest {
     public void testBinaryRoundTrip() {
         final BafEvidenceBCICodec codec = new BafEvidenceBCICodec();
         final ByteArrayOutputStream os = new ByteArrayOutputStream(1024);
-        final FeaturesHeader header =
-                new FeaturesHeader(BafEvidence.class.getSimpleName(), BafEvidence.BCI_VERSION, dict, samples);
+        final SVFeaturesHeader header =
+                new SVFeaturesHeader(BafEvidence.class.getSimpleName(), BafEvidence.BCI_VERSION, dict, samples);
         final Writer<BafEvidence> writer =
                 new Writer<>("in-memory stream", os, header, codec::encode);
         for ( final BafEvidence be : bafs ) {
@@ -73,5 +77,16 @@ public class BafEvidenceUnitTest {
             recoveredBafs.add(reader.readStream());
         }
         Assert.assertEquals(recoveredBafs, bafs);
+    }
+
+    @Test
+    public void testValueAlteringConstructor() {
+        final BafEvidence bafEvidence = new BafEvidence("sample", "contig", 1234, .4);
+        final BafEvidence newValue = new BafEvidence(bafEvidence, .5);
+        Assert.assertEquals(newValue.getSample(), bafEvidence.getSample());
+        Assert.assertEquals(newValue.getContig(), bafEvidence.getContig());
+        Assert.assertEquals(newValue.getStart(), bafEvidence.getStart());
+        Assert.assertEquals(bafEvidence.getValue(), .4);
+        Assert.assertEquals(newValue.getValue(), .5);
     }
 }

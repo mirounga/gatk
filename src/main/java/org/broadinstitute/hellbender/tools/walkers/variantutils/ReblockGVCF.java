@@ -257,7 +257,7 @@ public final class ReblockGVCF extends MultiVariantWalker {
         hcArgs.standardArgs.annotateAllSitesWithPLs = true;
         hcArgs.standardArgs.genotypeArgs = genotypeArgs.clone();
         hcArgs.emitReferenceConfidence = ReferenceConfidenceMode.GVCF;   //this is important to force emission of all alleles at a multiallelic site
-        hcArgs.standardArgs.genotypeArgs.STANDARD_CONFIDENCE_FOR_CALLING = dropLowQuals ? genotypeArgs.STANDARD_CONFIDENCE_FOR_CALLING : 0.0;
+        hcArgs.standardArgs.genotypeArgs.standardConfidenceForCalling = dropLowQuals ? genotypeArgs.standardConfidenceForCalling : 0.0;
         return new HaplotypeCallerGenotypingEngine(hcArgs, samples, true, false);
 
     }
@@ -505,11 +505,15 @@ public final class ReblockGVCF extends MultiVariantWalker {
             if (posteriorsKey != null && genotype.hasExtendedAttribute(posteriorsKey)) {
                 subsetHomRefPosteriorsToRefVersusNonRef(lowQualVariant, gb);
             } else {
-                final List<Allele> bestAlleles = AlleleSubsettingUtils.calculateMostLikelyAlleles(lowQualVariant, genotype.getPloidy(), 1);
+                //find best ALT so we can use its likelihood for NON_REF
+                final List<Allele> bestAlleles = AlleleSubsettingUtils.calculateMostLikelyAlleles(lowQualVariant, genotype.getPloidy(), 1, true);
                 final Allele bestAlt = bestAlleles.stream().filter(a -> !a.isReference()).findFirst().orElse(Allele.NON_REF_ALLELE);  //allow span dels
+                //we care about the best alt even though it's getting removed because NON_REF should get the best likelihoods
+                //it shouldn't matter that we're passing in different alt alleles since the GenotypesContext only knows
+                // the called alleles and this is a reference genotype that will stay hom-ref
                 final GenotypesContext context = AlleleSubsettingUtils.subsetAlleles(lowQualVariant.getGenotypes(),
                         genotype.getPloidy(), lowQualVariant.getAlleles(), Arrays.asList(inputRefAllele, bestAlt),
-                        null, GenotypeAssignmentMethod.BEST_MATCH_TO_ORIGINAL, lowQualVariant.getAttributeAsInt(VCFConstants.DEPTH_KEY, 0), false);  //BEST_MATCH to avoid no-calling low qual genotypes
+                        null, GenotypeAssignmentMethod.BEST_MATCH_TO_ORIGINAL);  //BEST_MATCH to avoid no-calling low qual genotypes
                 final Genotype subsetG = context.get(0);
                 gb = new GenotypeBuilder(subsetG).noAttributes();  //remove attributes because hom ref blocks shouldn't have posteriors
                 //subsetting may strip GQ and PLs for low qual genotypes
@@ -563,8 +567,7 @@ public final class ReblockGVCF extends MultiVariantWalker {
         if(allelesNeedSubsetting && !keepAllAlts) {
             newAlleleSetUntrimmed.removeAll(allelesToDrop);
             final GenotypesContext gc = AlleleSubsettingUtils.subsetAlleles(variant.getGenotypes(), genotype.getPloidy(), variant.getAlleles(),
-                    newAlleleSetUntrimmed, null, GenotypeAssignmentMethod.USE_PLS_TO_ASSIGN,
-                    variant.getAttributeAsInt(VCFConstants.DEPTH_KEY, 0), false);
+                    newAlleleSetUntrimmed, null, GenotypeAssignmentMethod.USE_PLS_TO_ASSIGN);
             if (gc.get(0).isHomRef() || !gc.get(0).hasGQ() || gc.get(0).getAlleles().contains(Allele.NO_CALL)) {  //could be low quality or no-call after subsetting
                 if (dropLowQuals) {
                     return null;
@@ -775,8 +778,8 @@ public final class ReblockGVCF extends MultiVariantWalker {
                 //TODO: this isn't going to work for DRAGEN's genotype posteriors
                 final GenotypesContext gc = AlleleSubsettingUtils.subsetAlleles(updatedAllelesVC.getGenotypes(),
                         updatedAllelesGenotype.getPloidy(), updatedAllelesVC.getAlleles(), Arrays.asList(updatedAllelesVC.getReference(), alt), null,
-                        GenotypeAssignmentMethod.BEST_MATCH_TO_ORIGINAL, 0, false);
-                //assignment method doens't really matter as long as we don't zero out PLs; don't need depth to get PLs for quals
+                        GenotypeAssignmentMethod.BEST_MATCH_TO_ORIGINAL);
+                //assignment method doesn't really matter as long as we don't zero out PLs; don't need depth to get PLs for quals
 
                 final Genotype subsettedGenotype = gc.get(0);
                 final int[] likelihoods = getGenotypePosteriorsOtherwiseLikelihoods(subsettedGenotype, posteriorsKey);
@@ -857,8 +860,10 @@ public final class ReblockGVCF extends MultiVariantWalker {
                             final List<String> subsetList;
                             if (alleleSpecificValues.size() > 0) {
                                 subsetList = AlleleSubsettingUtils.remapRLengthList(alleleSpecificValues, relevantIndices, "");
-                                //zero out non-ref value, just in case
-                                subsetList.set(subsetList.size()-1,((AlleleSpecificAnnotation)annotation).getEmptyRawValue());
+                                if (sourceVC.getAlleles().get(relevantIndices[relevantIndices.length - 1]).equals(Allele.NON_REF_ALLELE)) {
+                                    //zero out non-ref value, just in case
+                                    subsetList.set(subsetList.size() - 1, ((AlleleSpecificAnnotation) annotation).getEmptyRawValue());
+                                }
                             } else {
                                 subsetList = Collections.nCopies(relevantIndices.length, "");
                             }
@@ -924,7 +929,7 @@ public final class ReblockGVCF extends MultiVariantWalker {
     private void subsetHomRefPosteriorsToRefVersusNonRef(final VariantContext result, final GenotypeBuilder gb) {
         //TODO: bestAlleles needs to be modified for posteriors
         final Genotype genotype = result.getGenotype(0);
-        final List<Allele> bestAlleles = AlleleSubsettingUtils.calculateMostLikelyAlleles(result, genotype.getPloidy(), 1);
+        final List<Allele> bestAlleles = AlleleSubsettingUtils.calculateMostLikelyAlleles(result, genotype.getPloidy(), 1, false);
         final Allele bestAlt = bestAlleles.stream().filter(a -> !a.isReference()).findFirst().orElse(Allele.NON_REF_ALLELE);  //allow span dels
         final int[] idxVector = result.getGLIndicesOfAlternateAllele(bestAlt);
         final int[] multiallelicPLs = getGenotypePosteriorsOtherwiseLikelihoods(genotype, posteriorsKey);

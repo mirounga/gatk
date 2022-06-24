@@ -234,9 +234,9 @@ public final class VariantAnnotatorEngine {
                         final Map<String, Object> annotationsFromCurrentType = currentASannotation.combineRawData(allelesList, annotationValue);
                         if (annotationsFromCurrentType != null) {
                             combinedAnnotations.putAll(annotationsFromCurrentType);
-                            //remove all the raw keys for the annotation because we already used all of them in combineRawData
-                            annotationMap.keySet().removeAll(currentASannotation.getRawKeyNames());
                         }
+                        //remove all the raw keys for the annotation because we already used all of them in combineRawData
+                        annotationMap.keySet().removeAll(currentASannotation.getRawKeyNames());
                     }
                 }
             }
@@ -271,9 +271,14 @@ public final class VariantAnnotatorEngine {
                 }
             }
         }
-        //this is manual because the AS_QUAL "rawKey" get added by genotyping
+        //this is manual because:
+        // * the AS_QUAL "rawKey" get added by genotyping
+        // * QualByDepth isn't Reducible and doesn't have raw keys
         if (!keepRawCombinedAnnotations) {
             variantAnnotations.remove(GATKVCFConstants.AS_QUAL_KEY);
+            variantAnnotations.remove(GATKVCFConstants.RAW_QUAL_APPROX_KEY);
+            variantAnnotations.remove(GATKVCFConstants.VARIANT_DEPTH_KEY);
+            variantAnnotations.remove(GATKVCFConstants.RAW_GENOTYPE_COUNT_KEY);
         }
 
         // generate a new annotated VC

@@ -135,10 +135,12 @@ public final class GATKVCFConstants {
     public static final String STRAND_COUNT_BY_SAMPLE_KEY =         "SAC";
     public static final String STRAND_BIAS_BY_SAMPLE_KEY =          "SB";
     public static final String FEATURIZED_READ_SETS_KEY =           "FRS";
+    public static final String FEATURIZED_READ_SETS_COUNTS_KEY =    "FRSCNT";
     public static final String HAPLOTYPE_EQUIVALENCE_COUNTS_KEY =   "HEC";
     public static final String HAPLOTYPE_COMPLEXITY_KEY =           "HAPCOMP";
     public static final String HAPLOTYPE_DOMINANCE_KEY =            "HAPDOM";
     public final static String TRANSMISSION_PROBABILITY_KEY =       "TP"; //PhaseByTransmission
+    public static final String FRAGMENT_ALLELE_DEPTHS =             "FAD";
 
     // M2-specific FORMAT keys
     public static final String ALLELE_FRACTION_KEY =                "AF";

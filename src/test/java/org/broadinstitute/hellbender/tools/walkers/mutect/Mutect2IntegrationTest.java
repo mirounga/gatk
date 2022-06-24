@@ -13,12 +13,12 @@ import org.broadinstitute.hellbender.Main;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.cmdline.argumentcollections.IntervalArgumentCollection;
 import org.broadinstitute.hellbender.engine.FeatureDataSource;
+import org.broadinstitute.hellbender.engine.filters.ReadFilterLibrary;
+import org.broadinstitute.hellbender.engine.spark.AssemblyRegionArgumentCollection;
 import org.broadinstitute.hellbender.testutils.ArgumentsBuilder;
 import org.broadinstitute.hellbender.testutils.IntegrationTestSpec;
 import org.broadinstitute.hellbender.testutils.VariantContextTestUtils;
 import org.broadinstitute.hellbender.tools.walkers.annotator.AnnotationUtils;
-import org.broadinstitute.hellbender.tools.walkers.annotator.AssemblyComplexity;
-import org.broadinstitute.hellbender.tools.walkers.annotator.FeaturizedReadSets;
 import org.broadinstitute.hellbender.tools.walkers.haplotypecaller.AssemblyBasedCallerArgumentCollection;
 import org.broadinstitute.hellbender.tools.walkers.haplotypecaller.ReadThreadingAssemblerArgumentCollection;
 import org.broadinstitute.hellbender.tools.walkers.haplotypecaller.ReferenceConfidenceMode;
@@ -51,7 +51,6 @@ import java.util.stream.Collectors;
 public class Mutect2IntegrationTest extends CommandLineProgramTest {
     // positions 10,000,000 - 11,000,000 of chr 20 and with most annotations removed
     private static final File GNOMAD = new File(largeFileTestDir, "very-small-gnomad.vcf");
-
     private static final String DREAM_BAMS_DIR = largeFileTestDir + "mutect/dream_synthetic_bams/";
     private static final File DREAM_4_NORMAL = new File(DREAM_BAMS_DIR, "normal_4.bam");
     private static final File DREAM_3_NORMAL = new File(DREAM_BAMS_DIR, "normal_3.bam");
@@ -89,6 +88,7 @@ public class Mutect2IntegrationTest extends CommandLineProgramTest {
     private static final File FILTERING_DIR = new File(toolsTestDir, "mutect/filtering");
 
     private static final File GNOMAD_WITHOUT_AF_SNIPPET = new File(toolsTestDir, "mutect/gnomad-without-af.vcf");
+    private static final File UNPARSIMONIOUS_GNOMAD_SNIPPET = new File(toolsTestDir, "mutect/unparsimonious_germline.vcf");
 
     private static final double TLOD_MATCH_EPSILON = 0.05;
     private static final double VARIANT_TLOD_MATCH_PCT = 0.01;
@@ -134,10 +134,13 @@ public class Mutect2IntegrationTest extends CommandLineProgramTest {
         final File filteredVcf = createTempFile("filtered", ".vcf");
         final File f1r2Counts = createTempFile("f1r2", ".tar.gz");
         final File orientationModel = createTempFile("orientation", ".tar.gz");
+        final File dataset = createTempFile("dataset", ".txt");
 
         final List<File> normals = normal.isPresent() ? Collections.singletonList(normal.get()) : Collections.emptyList();
         runMutect2(Collections.singletonList(tumor), normals, unfilteredVcf, CHROMOSOME_20, b37Reference, Optional.of(GNOMAD),
                 args -> args.addMask(mask).add(M2ArgumentCollection.F1R2_TAR_GZ_NAME, f1r2Counts),
+                args -> args.add(M2ArgumentCollection.MUTECT3_DATASET_LONG_NAME, dataset),
+                args -> args.addFlag(M2ArgumentCollection.MUTECT3_TRAINING_MODE_LONG_NAME),
                 args -> errorCorrectReads ? args.add(ReadThreadingAssemblerArgumentCollection.PILEUP_ERROR_CORRECTION_LOG_ODDS_NAME, 3.0) : args
         );
 
@@ -300,26 +303,16 @@ public class Mutect2IntegrationTest extends CommandLineProgramTest {
         Assert.assertTrue(numVariantsPassingFilters < 2);
     }
     
-    // run tumor-only using our mini gnomAD on NA12878, which is not a tumor
     @Test
-    public void testTrainingDataMode() {
+    public void testMutect3Dataset() {
         Utils.resetRandomGenerator();
         final File tumor = new File(NA12878_20_21_WGS_bam);
         final File unfilteredVcf = createTempFile("unfiltered", ".vcf");
+        final File mutect3Dataset = createTempFile("mutect3", ".data");
         
-        final List<String> assemblyComplexityKeys = new AssemblyComplexity().getKeyNames();
-        final List<String> featurizedReadSetKeys = new FeaturizedReadSets().getKeyNames();
-        
-        //runMutect2(tumor, unfilteredVcf, "20:10000000-10010000", b37Reference, Optional.of(GNOMAD));
         runMutect2(tumor, unfilteredVcf, "20:10000000-10010000", b37Reference, Optional.of(GNOMAD),
                    args -> args.addFlag(ReadThreadingAssemblerArgumentCollection.LINKED_DE_BRUIJN_GRAPH_LONG_NAME),
-                   args -> args.addFlag(M2ArgumentCollection.TRAINING_DATA_MODE_LONG_NAME));
-        
-        VariantContextTestUtils.streamVcf(unfilteredVcf).forEach(vc -> {
-            Assert.assertTrue(vc.hasAttribute(GATKVCFConstants.REFERENCE_BASES_KEY));
-            assemblyComplexityKeys.forEach(key -> Assert.assertTrue(vc.hasAttribute(key)));
-            vc.getGenotypes().forEach(gt -> featurizedReadSetKeys.forEach(key -> Assert.assertTrue(gt.hasExtendedAttribute(key))));
-        });
+                   args -> args.add(M2ArgumentCollection.MUTECT3_DATASET_LONG_NAME, mutect3Dataset));
     }
 
     // make sure we can call tumor alts when the normal has a different alt at the same site
@@ -470,6 +463,40 @@ public class Mutect2IntegrationTest extends CommandLineProgramTest {
                 args -> args.addInterval(new SimpleInterval("20:10837425-10837426")));
     }
 
+    // make sure we have fixed a bug where germline resources with less parsimonious representations (eg AC -> TC when M2 calls A->T) still
+    // yield a correct annotation
+    @Test
+    public void testUnparsimoniousGermlineResource() {
+        final File unfilteredVcf = createTempFile("unfiltered", ".vcf");
+        final int position1 = 1366255;
+        final int position2 = 1401389;
+        final int position3 = 2289449;
+        final double defaultAF = 9.78e-7;
+        final String interval1 = "20:" + (position1 - 1000) + "-" + (position1 + 1000);
+        final String interval2 = "20:" + (position2 - 1000) + "-" + (position2 + 1000);
+        final String interval3 = "20:" + (position3 - 1000) + "-" + (position3 + 1000);
+        runMutect2(DREAM_4_TUMOR, unfilteredVcf, interval1, b37Reference, Optional.of(UNPARSIMONIOUS_GNOMAD_SNIPPET),
+                args -> args.addInterval(interval2).addInterval(interval3).add(M2ArgumentCollection.DEFAULT_AF_LONG_NAME, defaultAF)
+                        .addFlag(M2ArgumentCollection.GENOTYPE_GERMLINE_SITES_LONG_NAME));
+
+        // when we call on these intervals we should get variants 20:1366255 G->A, 20:1401389 G->C, and 20:2289449 TCTGGGGACAAA->T
+        // In the germline resource file the alleles are represented as GT -> AT (equivalent to G->A), GT -> CA (not equivalent to G->C),
+        // and TCTGGGGACAAA->TAA (equivalent to TCTGGGGACA->T) with an extraneous TCTGGGGACAAA->T, respectively
+        // In the first case, we should get AF = 0.1 from GG -> AG = G -> A; in the second case we should get the default AF; in the third case
+        // we should get AF = 0.1 from TCTGGGGACAAA->TAA and NOT AF = 0.2 from TCTGGGGACAAA->T
+
+        final Map<Integer, double[]> startToAFArray = VariantContextTestUtils.streamVcf(unfilteredVcf).collect(Collectors.toMap(VariantContext::getStart,
+                vc -> MathUtils.applyToArray(VariantContextGetters.getAttributeAsDoubleArray(vc, GATKVCFConstants.POPULATION_AF_KEY), x -> Math.pow(10, -x))));
+
+        Assert.assertTrue(startToAFArray.containsKey(position1));
+        Assert.assertTrue(startToAFArray.containsKey(position2));
+        Assert.assertTrue(startToAFArray.containsKey(position3));
+
+        Assert.assertEquals(startToAFArray.get(position1), new double[] {0.1}, 1e-8);
+        Assert.assertEquals(startToAFArray.get(position2), new double[] {defaultAF}, 1e-8);
+        Assert.assertEquals(startToAFArray.get(position3), new double[] {0.1}, 1e-8);
+    }
+
     @Test
     public void testContaminationFilter() {
         Utils.resetRandomGenerator();
@@ -584,6 +611,42 @@ public class Mutect2IntegrationTest extends CommandLineProgramTest {
         Assert.assertTrue(variantKeys.containsAll(expectedKeys));
 
         Assert.assertEquals(variants.get(0).getAttributeAsInt(GATKVCFConstants.ORIGINAL_CONTIG_MISMATCH_KEY, 0), 1741);
+    }
+
+    /**
+     * Several difficult force calling sites including regression test for a thorny force calling bug involving
+     * T -> A at chrM:8316.  Previously this call was lost while trimming the assemblyResultSet because every haplotype
+     * containing the allele contained a deletion that terminated exactly where trimming occurred, thereby causing the
+     * GATK to discard the trimmed haplotype.
+     */
+    @Test
+    public void testDifficultForceCalling() {
+        final File dir = new File(largeFileTestDir + "mutect/mito/");
+        final File ref = new File(dir, "mito_shifted_8000.fasta");
+        final File bam = new File(dir, "mito.bam");
+        final File force = new File(dir, "alleles.vcf");
+        final String interval = "chrM:8023-9140";
+
+        final File output = createTempFile("output", ".bam");
+
+        runMutect2(bam, output, interval, ref.getAbsolutePath(), Optional.empty(),
+                args -> args.add(AssemblyBasedCallerArgumentCollection.FORCE_CALL_ALLELES_LONG_NAME, force),
+                args -> args.addFlag(M2ArgumentCollection.MITOCHONDRIA_MODE_LONG_NAME),
+                args -> args.add(AssemblyRegionArgumentCollection.MAX_STARTS_LONG_NAME, 75));
+
+        final SimpleInterval callingInterval = new SimpleInterval(interval);
+
+        final Map<Integer, VariantContext> callsByLocus = VariantContextTestUtils.getVariantContexts(output).stream()
+                .collect(Collectors.toMap(vc -> vc.getStart(), vc -> vc));
+
+        final List<VariantContext> forceCallingVariants = VariantContextTestUtils.getVariantContexts(force).stream()
+                .filter(vc -> vc.overlaps(callingInterval))
+                .collect(Collectors.toList());
+
+        for (final VariantContext vc : forceCallingVariants) {
+            Assert.assertTrue(callsByLocus.containsKey(vc.getStart()));
+            Assert.assertTrue(callsByLocus.get(vc.getStart()).hasAllele(vc.getAlternateAllele(0)));
+        }
     }
 
     @DataProvider(name = "vcfsForFiltering")
