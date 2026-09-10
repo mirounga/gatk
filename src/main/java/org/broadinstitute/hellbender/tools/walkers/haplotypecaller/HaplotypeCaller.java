@@ -1,5 +1,6 @@
 package org.broadinstitute.hellbender.tools.walkers.haplotypecaller;
 
+import htsjdk.samtools.SAMFileHeader;
 import htsjdk.samtools.SAMSequenceDictionary;
 import htsjdk.variant.variantcontext.writer.VariantContextWriter;
 import org.broadinstitute.barclay.argparser.Argument;
@@ -14,9 +15,11 @@ import org.broadinstitute.hellbender.cmdline.programgroups.ShortVariantDiscovery
 import org.broadinstitute.hellbender.engine.*;
 import org.broadinstitute.hellbender.engine.filters.MappingQualityReadFilter;
 import org.broadinstitute.hellbender.engine.filters.ReadFilter;
+import org.broadinstitute.hellbender.engine.spark.AssemblyRegionArgumentCollection;
+import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.tools.walkers.annotator.Annotation;
+import org.broadinstitute.hellbender.tools.walkers.annotator.HaplotypeFilteringAnnotation;
 import org.broadinstitute.hellbender.tools.walkers.annotator.VariantAnnotatorEngine;
-import org.broadinstitute.hellbender.tools.walkers.genotyper.GenotypeAssignmentMethod;
 import org.broadinstitute.hellbender.transformers.DRAGENMappingQualityReadTransformer;
 import org.broadinstitute.hellbender.transformers.ReadTransformer;
 import org.broadinstitute.hellbender.utils.fasta.CachingIndexedFastaSequenceFile;
@@ -124,6 +127,21 @@ import java.util.Optional;
  * argument. Note however that very high ploidies (such as are encountered in large pooled experiments) may cause
  * performance challenges including excessive slowness. We are working on resolving these limitations.</p>
  *
+ * <p>For having variable ploidy in different regions, like making haploid calls outside the PAR on chrX or chrY,
+ * see the --ploidy-regions flag. The -ploidy flag sets the default ploidy to use everywhere, and --ploidy-regions
+ * should be a .bed or .interval_list with "name" column containing the desired ploidy to use in that region
+ * when genotyping. Note that variants near the boundary may not have the matching ploidy since the ploidy used will
+ * be determined using the following precedence: </p>
+ * <ol>
+ *     <li>ploidy given in --ploidy-regions for all intervals overlapping the active region when calling your variant
+ *     (with ties broken by using largest ploidy); note ploidy interval may only overlap the active region and determine
+ *     the ploidy of your variant even if the end coordinate written for your variant lies outside the given region;</li>
+ *     <li>ploidy given via global -ploidy flag;</li>
+ *     <li>ploidy determined by the default global built-in constant for humans (2).</li>
+ * </ol>
+ *
+ * <p>Coordinates for the PAR for CRCh38 can be found <a href='http://useast.ensembl.org/info/genome/genebuild/human_PARS.html'>here</a>.</p>
+ *
  * <h3>Additional Notes</h3>
  * <ul>
  *     <li>When working with PCR-free data, be sure to set `-pcr_indel_model NONE` (see argument below).</li>
@@ -140,7 +158,7 @@ import java.util.Optional;
         programGroup = ShortVariantDiscoveryProgramGroup.class
 )
 @DocumentedFeature
-public final class HaplotypeCaller extends AssemblyRegionWalker {
+public class HaplotypeCaller extends AssemblyRegionWalker {
 
     @ArgumentCollection
     private HaplotypeCallerArgumentCollection hcArgs = new HaplotypeCallerArgumentCollection();
@@ -148,7 +166,9 @@ public final class HaplotypeCaller extends AssemblyRegionWalker {
     /**
      * A raw, unfiltered, highly sensitive callset in VCF format.
      */
-    @Argument(fullName = StandardArgumentDefinitions.OUTPUT_LONG_NAME, shortName = StandardArgumentDefinitions.OUTPUT_SHORT_NAME, doc = "File to which variants should be written")
+    @Argument(fullName = StandardArgumentDefinitions.OUTPUT_LONG_NAME,
+            shortName = StandardArgumentDefinitions.OUTPUT_SHORT_NAME,
+            doc = "File to which variants should be written")
     public GATKPath outputVCF = null;
 
     private VariantContextWriter vcfWriter;
@@ -161,19 +181,31 @@ public final class HaplotypeCaller extends AssemblyRegionWalker {
     }
 
     /**
-     * This is being used to set the mapping quality filter when in dragen mode. This is also where make alterations to the input arguments based on DragenMode.
+     * This is being used to set the mapping quality filter when in dragen and/or flow mode. This is also where make alterations to the input arguments based on DragenMode.
      */
+    @Override
     protected String[] customCommandLineValidation() {
-        if (hcArgs.dragenMode) {
+        if ((hcArgs.isDragenGATKMode()) && hcArgs.isFlowBasedCallingMode()) {
+            throw new UserException("dragen mode and flow mode can't be both specified");
+        }
+
+        if (hcArgs.isDragenGATKMode()) {
             final GATKReadFilterPluginDescriptor readFilterPlugin =
                     getCommandLineParser().getPluginDescriptor(GATKReadFilterPluginDescriptor.class);
             Optional<ReadFilter> filterOptional = readFilterPlugin.getResolvedInstances().stream().filter(rf -> rf instanceof MappingQualityReadFilter).findFirst();
             filterOptional.ifPresent(readFilter -> ((MappingQualityReadFilter) readFilter).minMappingQualityScore = 1);
             ModeArgumentUtils.setArgValues(
                     getCommandLineParser(),
-                    hcArgs.getDragenNameValuePairs(),
-                    HaplotypeCallerArgumentCollection.DRAGEN_GATK_MODE_LONG_NAME);
+                    hcArgs.dragen378Mode? hcArgs.getDragenVersion378NameValuePairs() : hcArgs.getDragenVersion3412NameValuePairs(),
+                    hcArgs.dragen378Mode? HaplotypeCallerArgumentCollection.DRAGEN_378_GATK_MODE_LONG_NAME : HaplotypeCallerArgumentCollection.DRAGEN_3412_GATK_MODE_LONG_NAME);
         }
+        if (hcArgs.isFlowBasedCallingMode()) {
+            ModeArgumentUtils.setArgValues(
+                    getCommandLineParser(),
+                    hcArgs.flowMode.getNameValuePairs(),
+                    HaplotypeCallerArgumentCollection.FLOW_GATK_MODE_LONG_NAME);
+        }
+
         return null;
     }
 
@@ -203,6 +235,9 @@ public final class HaplotypeCaller extends AssemblyRegionWalker {
     public Collection<Annotation> makeVariantAnnotations() {
         final boolean confidenceMode = hcArgs.emitReferenceConfidence != ReferenceConfidenceMode.NONE;
         final Collection<Annotation> annotations = super.makeVariantAnnotations();
+        if (hcArgs.filterAlleles) {
+            annotations.add(new HaplotypeFilteringAnnotation());
+        }
         return confidenceMode? HaplotypeCallerEngine.filterReferenceConfidenceAnnotations(annotations): annotations;
     }
 
@@ -228,7 +263,7 @@ public final class HaplotypeCaller extends AssemblyRegionWalker {
 
         final VariantAnnotatorEngine variantAnnotatorEngine = new VariantAnnotatorEngine(makeVariantAnnotations(),
                 hcArgs.dbsnp.dbsnp, hcArgs.comps,  hcArgs.emitReferenceConfidence != ReferenceConfidenceMode.NONE, false);
-        hcEngine = new HaplotypeCallerEngine(hcArgs, assemblyRegionArgs, createOutputBamIndex, createOutputBamMD5, getHeaderForReads(), getReferenceReader(referenceArguments), variantAnnotatorEngine);
+        hcEngine = buildHaplotypeCallerEngine(hcArgs, assemblyRegionArgs, createOutputBamIndex, createOutputBamMD5, getHeaderForReads(), getReferenceReader(referenceArguments), variantAnnotatorEngine);
 
         // The HC engine will make the right kind (VCF or GVCF) of writer for us
         final SAMSequenceDictionary sequenceDictionary = getHeaderForReads().getSequenceDictionary();
@@ -236,7 +271,11 @@ public final class HaplotypeCaller extends AssemblyRegionWalker {
         hcEngine.writeHeader(vcfWriter, sequenceDictionary, getDefaultToolVCFHeaderLines());
     }
 
-    private static CachingIndexedFastaSequenceFile getReferenceReader(ReferenceInputArgumentCollection referenceArguments) {
+    protected HaplotypeCallerEngine buildHaplotypeCallerEngine(final HaplotypeCallerArgumentCollection hcArgs, final AssemblyRegionArgumentCollection assemblyRegionArgs, final boolean createOutputBamIndex, final boolean createOutputBamMD5, final SAMFileHeader headerForReads, final CachingIndexedFastaSequenceFile referenceReader, final VariantAnnotatorEngine variantAnnotatorEngine) {
+        return new HaplotypeCallerEngine(hcArgs, assemblyRegionArgs, createOutputBamIndex, createOutputBamMD5, getHeaderForReads(), getReferenceReader(referenceArguments), variantAnnotatorEngine);
+    }
+
+    protected static CachingIndexedFastaSequenceFile getReferenceReader(ReferenceInputArgumentCollection referenceArguments) {
         return new CachingIndexedFastaSequenceFile(referenceArguments.getReferenceSpecifier());
     }
 

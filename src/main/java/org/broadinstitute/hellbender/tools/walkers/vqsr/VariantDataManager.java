@@ -6,7 +6,7 @@ import htsjdk.variant.variantcontext.Allele;
 import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.variantcontext.VariantContextBuilder;
 import htsjdk.variant.vcf.VCFConstants;
-import org.apache.commons.lang.ArrayUtils;
+import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.AnnotationUtils;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.LogManager;
@@ -38,7 +38,7 @@ public class VariantDataManager {
         this.data = Collections.emptyList();
         final List<String> uniqueAnnotations = annotationKeys.stream().distinct().collect(Collectors.toList());
         if (annotationKeys.size() != uniqueAnnotations.size()) {
-            logger.warn("Ignoring duplicate annotations for recalibration %s.", Utils.getDuplicatedItems(annotationKeys));
+            logger.warn("Ignoring duplicate annotations for recalibration {}", Utils.getDuplicatedItems(annotationKeys));
         }
         this.annotationKeys = new ArrayList<>( uniqueAnnotations );
         this.VRAC = VRAC;

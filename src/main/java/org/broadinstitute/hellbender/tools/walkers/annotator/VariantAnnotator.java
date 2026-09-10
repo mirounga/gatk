@@ -75,7 +75,7 @@ import java.util.stream.IntStream;
  *   -V input.vcf \
  *   -o output.vcf \
  *   -L anotherInput.vcf \
- *   --resource foo:resource.vcf \
+ *   --resource:foo resource.vcf \
  *   -E foo.AF \
  *   --resource-allele-concordance
  * </pre>
@@ -86,13 +86,13 @@ import java.util.stream.IntStream;
  *   -R reference.fasta \
  *   -V input.vcf \
  *   -o output.vcf \
- *   --resource foo:resource.vcf \
+ *   --resource:foo resource.vcf \
  *   --expression foo.AF \
  *   --expression foo.FILTER
  * </pre>
  *
- * <h3>Caveat</h3>
- * <p>This tool outputs no annotations by default, all annotations/groups must be specified explicitly. </p>
+ * <h3>Caveats</h3>
+ * <p>This tool outputs no annotations by default, all annotations/groups must be specified explicitly. This tool accepts VCF format files only. Using GVCF files as input may result in unexpected behavior. </p>
  *
  * <h3>Special note on RankSumTestAnnotations</h3>
  * <p>RankSumAnnotations produced by this tool are not the same as those produced by the HaplotypeCaller. Without the

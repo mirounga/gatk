@@ -13,6 +13,7 @@ import org.broadinstitute.hellbender.tools.walkers.genotyper.afcalc.*;
 import org.broadinstitute.hellbender.tools.walkers.haplotypecaller.AssemblyBasedCallerUtils;
 import org.broadinstitute.hellbender.utils.*;
 import org.broadinstitute.hellbender.utils.genotyper.SampleList;
+import org.broadinstitute.hellbender.utils.haplotype.Event;
 import org.broadinstitute.hellbender.utils.logging.OneShotLogger;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFHeaderLines;
@@ -70,6 +71,7 @@ public abstract class GenotypingEngine<Config extends StandardCallerArgumentColl
         this.samples = samples;
         this.doAlleleSpecificCalcs = doAlleleSpecificCalcs;
         logger = LogManager.getLogger(getClass());
+        oneShotLogger = new OneShotLogger(logger);
         numberOfGenomes = this.samples.numberOfSamples() * configuration.genotypeArgs.samplePloidy;
         alleleFrequencyCalculator = AlleleFrequencyCalculator.makeCalculator(configuration.genotypeArgs);
     }
@@ -123,7 +125,7 @@ public abstract class GenotypingEngine<Config extends StandardCallerArgumentColl
      * @param vc                                 Input variant context to complete.
      * @return                                   VC with assigned genotypes
      */
-    public VariantContext calculateGenotypes(final VariantContext vc, final GenotypePriorCalculator gpc, final List<VariantContext> givenAlleles) {
+    public VariantContext calculateGenotypes(final VariantContext vc, final GenotypePriorCalculator gpc, final List<Event> givenAlleles) {
         // if input VC can't be genotyped, exit with either null VCC or, in case where we need to emit all sites, an empty call
         if (cannotBeGenotyped(vc) || vc.getNSamples() == 0) {
             return null;
@@ -149,7 +151,7 @@ public abstract class GenotypingEngine<Config extends StandardCallerArgumentColl
         }
 
         final AFCalculationResult AFresult = alleleFrequencyCalculator.calculate(reducedVC, defaultPloidy);
-        final Set<Allele> forcedAlleles = AssemblyBasedCallerUtils.getAllelesConsistentWithGivenAlleles(givenAlleles, vc);
+        final Set<Allele> forcedAlleles = AssemblyBasedCallerUtils.allelesConsistentWithGivenAlleles(givenAlleles, vc);
         final OutputAlleleSubset outputAlternativeAlleles = calculateOutputAlleleSubset(AFresult, vc, forcedAlleles);
 
         // note the math.abs is necessary because -10 * 0.0 => -0.0 which isn't nice
@@ -216,19 +218,16 @@ public abstract class GenotypingEngine<Config extends StandardCallerArgumentColl
         return extractPNoAlt(alleles, gt, gpArray);
     }
 
-    private static final GenotypeLikelihoodCalculators GL_CALCS = new GenotypeLikelihoodCalculators();
-
     private double extractPNoAlt(final List<Allele> alleles, final Genotype gt, final double[] posteriors) {
         if (!alleles.contains(Allele.SPAN_DEL)) {
             return posteriors[0] - Math.max(0, QualityUtils.phredSum(posteriors));
         } else {
             // here we need to get indices of genotypes composed of REF and * alleles
             final int ploidy = gt.getPloidy();
-            final GenotypeLikelihoodCalculator glCalc = GL_CALCS.getInstance(ploidy, alleles.size());
             final int spanDelIndex = alleles.indexOf(Allele.SPAN_DEL);
             // allele counts are in the GenotypeLikelihoodCalculator format of {ref index, ref count, span del index, span del count}
             final double[] nonVariantLog10Posteriors = IntStream.rangeClosed(0, ploidy)
-                    .map(n -> glCalc.alleleCountsToIndex(0, ploidy - n, spanDelIndex, n))
+                    .map(n -> GenotypeIndexCalculator.alleleCountsToIndex(0, ploidy - n, spanDelIndex, n))
                     .mapToDouble(n -> posteriors[n])
                     .toArray();
 
@@ -291,7 +290,7 @@ public abstract class GenotypingEngine<Config extends StandardCallerArgumentColl
      * Provided the exact mode computations it returns the appropriate subset of alleles that progress to genotyping.
      * @param afCalculationResult the allele fraction calculation result.
      * @param vc the variant context
-     * @param forcedAlleles alleles from the vc input that are consistent with forced alleles in the assembly region {@link AssemblyBasedCallerUtils#getAllelesConsistentWithGivenAlleles}
+     * @param forcedAlleles alleles from the vc input that are consistent with forced alleles in the assembly region {@link AssemblyBasedCallerUtils#allelesConsistentWithGivenAlleles}
      * @return information about the alternative allele subsetting {@code null}.
      */
     private OutputAlleleSubset calculateOutputAlleleSubset(final AFCalculationResult afCalculationResult, final VariantContext vc, final Set<Allele> forcedAlleles) {
@@ -396,7 +395,11 @@ public abstract class GenotypingEngine<Config extends StandardCallerArgumentColl
      */
     protected final boolean cannotBeGenotyped(final VariantContext vc) {
         if (vc.getNAlleles() <= GenotypeLikelihoods.MAX_DIPLOID_ALT_ALLELES_THAT_CAN_BE_GENOTYPED
-            && vc.getGenotypes().stream().anyMatch(Genotype::hasLikelihoods)) {  //likelihoods may be missing when reading from GenomicsDB if there are more alts that GDB args allow
+                // likelihoods may be missing when reading from GenomicsDB if there are more alts that GDB args allow
+                // so ensure all genotypes (outside of 0/0 and ./.) have likelihoods
+            && vc.getGenotypes().stream().filter( g -> !(g.isNoCall() || g.isHomRef()) ).allMatch(Genotype::hasLikelihoods)
+                // if all sites are no calls or hom refs then keep a site where any samples have likelihoods
+            && vc.getGenotypes().stream().anyMatch(Genotype::hasLikelihoods)) {
             return false;
         }
         // protect against too many alternate alleles that we can't even run AF on:
@@ -404,8 +407,8 @@ public abstract class GenotypingEngine<Config extends StandardCallerArgumentColl
             logger.warn("Attempting to genotype more than " + GenotypeLikelihoods.MAX_DIPLOID_ALT_ALLELES_THAT_CAN_BE_GENOTYPED +
                     " alleles. Site will be skipped at location " + vc.getContig() + ":" + vc.getStart());
             return true;
-        }else {
-            logger.warn("No genotype contained sufficient data to recalculate site and allele qualities. Site will be skipped at location "
+        } else {
+            logger.warn("Some genotypes contained insufficient data to recalculate site and allele qualities. Site will be skipped at location "
                     + vc.getContig() + ":" + vc.getStart());
             return true;
         }

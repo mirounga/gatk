@@ -51,6 +51,9 @@ public final class HaplotypeUnitTest extends GATKBaseTest {
         basicInsertTest("AACTG", "A", 7, h1Cigar, bases, h1bases);
         h1bases = "ACTGGTCAACTGGTCAATCAACTGGTCA";
         basicInsertTest("ACTGG", "A", 16, h1Cigar, bases, h1bases);
+        h1bases = "TGGTCAACTGGTCAACTGGTCAACTGGTCA";
+        basicInsertTest("TAC", "T", -1, h1Cigar, bases, h1bases);
+
     }
 
     @Test
@@ -203,8 +206,8 @@ public final class HaplotypeUnitTest extends GATKBaseTest {
         final Haplotype actual = full.trim(trimTo);
         if ( expected != null ) {
             Assert.assertEquals(actual.getBases(), expected.getBases());
-            Assert.assertEquals(actual.getStartPosition(), trimTo.getStart());
-            Assert.assertEquals(actual.getStopPosition(), trimTo.getStop());
+            Assert.assertEquals(actual.getStart(), trimTo.getStart());
+            Assert.assertEquals(actual.getEnd(), trimTo.getStop());
             Assert.assertEquals(actual.getCigar(), expected.getCigar());
             Assert.assertEquals(actual.getAlignmentStartHapwrtRef(), expected.getAlignmentStartHapwrtRef());
         } else {

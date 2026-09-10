@@ -46,7 +46,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
-import static org.broadinstitute.hellbender.utils.codecs.gtf.GencodeGtfFeature.FeatureTag.*;
+import static org.broadinstitute.hellbender.utils.codecs.gtf.GencodeGTFFieldConstants.FeatureTag.*;
 
 /**
  * A factory to create {@link GencodeFuncotation}s.
@@ -71,11 +71,6 @@ public class GencodeFuncotationFactory extends DataSourceFuncotationFactory {
 
     private static final String LOCAL_GENCODE_TRANSCRIPT_TMP_DIR_PREFIX = "localGencodeTranscriptFastaFolder";
     private static final String LOCAL_GENCODE_TRANSCRIPT_FILE_BASE_NAME = "gencodeTranscriptFastaFile";
-
-    /**
-     * The window around splice sites to mark variants as {@link org.broadinstitute.hellbender.tools.funcotator.dataSources.gencode.GencodeFuncotation.VariantClassification#SPLICE_SITE}.
-     */
-    private static final int spliceSiteVariantWindowBases = 2;
 
     /**
      * Number of bases to the left and right of a variant in which to calculate the GC content.
@@ -111,24 +106,22 @@ public class GencodeFuncotationFactory extends DataSourceFuncotationFactory {
     /**
      * List of valid Appris Ranks used for sorting funcotations to get the "best" one.z
      */
-    private static final HashSet<GencodeGtfGeneFeature.FeatureTag> apprisRanks = new HashSet<>(
-            Arrays.asList(
-                APPRIS_PRINCIPAL,
-                APPRIS_PRINCIPAL_1,
-                APPRIS_PRINCIPAL_2,
-                APPRIS_PRINCIPAL_3,
-                APPRIS_PRINCIPAL_4,
-                APPRIS_PRINCIPAL_5,
-                APPRIS_ALTERNATIVE_1,
-                APPRIS_ALTERNATIVE_2,
-                APPRIS_CANDIDATE_HIGHEST_SCORE,
-                APPRIS_CANDIDATE_LONGEST_CCDS,
-                APPRIS_CANDIDATE_CCDS,
-                APPRIS_CANDIDATE_LONGEST_SEQ,
-                APPRIS_CANDIDATE_LONGEST,
-                APPRIS_CANDIDATE
-            )
-    );
+    private static final LinkedHashMap<String, GencodeGTFFieldConstants.FeatureTag> apprisRanks = new LinkedHashMap<>() {{
+            put(APPRIS_PRINCIPAL.toString(), APPRIS_PRINCIPAL);
+            put(APPRIS_PRINCIPAL_1.toString(), APPRIS_PRINCIPAL_1);
+            put(APPRIS_PRINCIPAL_2.toString(), APPRIS_PRINCIPAL_2);
+            put(APPRIS_PRINCIPAL_3.toString(), APPRIS_PRINCIPAL_3);
+            put(APPRIS_PRINCIPAL_4.toString(), APPRIS_PRINCIPAL_4);
+            put(APPRIS_PRINCIPAL_5.toString(), APPRIS_PRINCIPAL_5);
+            put(APPRIS_ALTERNATIVE_1.toString(), APPRIS_ALTERNATIVE_1);
+            put(APPRIS_ALTERNATIVE_2.toString(), APPRIS_ALTERNATIVE_2);
+            put(APPRIS_CANDIDATE_HIGHEST_SCORE.toString(), APPRIS_CANDIDATE_HIGHEST_SCORE);
+            put(APPRIS_CANDIDATE_LONGEST_CCDS.toString(), APPRIS_CANDIDATE_LONGEST_CCDS);
+            put(APPRIS_CANDIDATE_CCDS.toString(), APPRIS_CANDIDATE_CCDS);
+            put(APPRIS_CANDIDATE_LONGEST_SEQ.toString(), APPRIS_CANDIDATE_LONGEST_SEQ);
+            put(APPRIS_CANDIDATE_LONGEST.toString(), APPRIS_CANDIDATE_LONGEST);
+            put(APPRIS_CANDIDATE.toString(), APPRIS_CANDIDATE);
+        }};
 
     /**
      * The set of {@link GencodeFuncotation.VariantClassification} types that are valid for coding regions.
@@ -225,6 +218,11 @@ public class GencodeFuncotationFactory extends DataSourceFuncotationFactory {
     private String ncbiBuildVersion = null;
 
     /**
+     * The window on either side of splice sites to mark variants as {@link org.broadinstitute.hellbender.tools.funcotator.dataSources.gencode.GencodeFuncotation.VariantClassification#SPLICE_SITE}.
+     */
+    private int spliceSiteVariantWindowBases = FuncotatorUtils.DEFAULT_SPLICE_SITE_WINDOW_SIZE;
+
+    /**
      * Comparator to be used when sorting {@link Funcotation}s created by this {@link GencodeFuncotationFactory}.
      * Will be either {@link TranscriptSelectionMode.BestEffectGencodeFuncotationComparator} or {@link TranscriptSelectionMode.CanonicalGencodeFuncotationComparator}.
      */
@@ -243,6 +241,11 @@ public class GencodeFuncotationFactory extends DataSourceFuncotationFactory {
      *  will be annotated with {@link org.broadinstitute.hellbender.tools.funcotator.dataSources.gencode.GencodeFuncotation.VariantClassification#COULD_NOT_DETERMINE}
      */
     private boolean isSegmentFuncotationEnabled;
+
+    /**
+     * If this is true, only MANE transcripts will be used for funcotation creation when at least one is present.
+     */
+    private boolean preferMANETranscripts;
 
     //==================================================================================================================
     // Constructors:
@@ -354,6 +357,42 @@ public class GencodeFuncotationFactory extends DataSourceFuncotationFactory {
                                      final boolean isSegmentFuncotationEnabled,
                                      final int minBasesForValidSegment) {
 
+        this(gencodeTranscriptFastaFilePath, version, name, transcriptSelectionMode, userRequestedTranscripts,
+                annotationOverrides, mainFeatureInput, flankSettings, isDataSourceB37, ncbiBuildVersion,
+                isSegmentFuncotationEnabled, minBasesForValidSegment, FuncotatorUtils.DEFAULT_SPLICE_SITE_WINDOW_SIZE, false);
+    }
+
+    /**
+     * Create a {@link GencodeFuncotationFactory}.
+     *
+     * @param gencodeTranscriptFastaFilePath {@link Path} to the FASTA file containing the sequences of all transcripts in the Gencode data source.
+     * @param version The version {@link String} of Gencode from which {@link Funcotation}s will be made.
+     * @param name A {@link String} containing the name of this {@link GencodeFuncotationFactory}.
+     * @param transcriptSelectionMode The {@link TranscriptSelectionMode} by which representative/verbose transcripts will be chosen for overlapping variants.
+     * @param userRequestedTranscripts A {@link Set<String>} containing Gencode TranscriptIDs that the user requests to be annotated with priority over all other transcripts for overlapping variants.
+     * @param annotationOverrides A {@link LinkedHashMap<String,String>} containing user-specified overrides for specific {@link Funcotation}s.
+     * @param mainFeatureInput The backing {@link FeatureInput} for this {@link GencodeFuncotationFactory}, from which all {@link Funcotation}s will be created.
+     * @param flankSettings Settings object containing our 5'/3' flank sizes
+     * @param isDataSourceB37 If {@code true}, indicates that the data source behind this {@link GencodeFuncotationFactory} contains B37 data.
+     * @param ncbiBuildVersion The NCBI build version for this {@link GencodeFuncotationFactory} (can be found in the datasource config file)
+     * @param minBasesForValidSegment The minimum number of bases for a segment to be considered valid.
+     * @param spliceSiteWindowSize The number of bases on either side of a splice site for a variant to be a {@link org.broadinstitute.hellbender.tools.funcotator.dataSources.gencode.GencodeFuncotation.VariantClassification#SPLICE_SITE} variant.
+     */
+    public GencodeFuncotationFactory(final Path gencodeTranscriptFastaFilePath,
+                                     final String version,
+                                     final String name,
+                                     final TranscriptSelectionMode transcriptSelectionMode,
+                                     final Set<String> userRequestedTranscripts,
+                                     final LinkedHashMap<String, String> annotationOverrides,
+                                     final FeatureInput<? extends Feature> mainFeatureInput,
+                                     final FlankSettings flankSettings,
+                                     final boolean isDataSourceB37,
+                                     final String ncbiBuildVersion,
+                                     final boolean isSegmentFuncotationEnabled,
+                                     final int minBasesForValidSegment,
+                                     final int spliceSiteWindowSize,
+                                     final boolean preferMANETranscriptsWhereApplicable) {
+
         super(mainFeatureInput, minBasesForValidSegment);
 
         // Set up our local transcript fasta file.
@@ -377,6 +416,8 @@ public class GencodeFuncotationFactory extends DataSourceFuncotationFactory {
 
         this.isSegmentFuncotationEnabled = isSegmentFuncotationEnabled;
 
+        this.spliceSiteVariantWindowBases = spliceSiteWindowSize;
+
         // Go through each requested transcript and remove the version numbers from them if they exist:
         this.userRequestedTranscripts = new HashSet<>();
         for ( final String transcript : userRequestedTranscripts ) {
@@ -384,7 +425,7 @@ public class GencodeFuncotationFactory extends DataSourceFuncotationFactory {
         }
 
         // Set our comparator for outputting our funcotations in the right order with the correct "best" transcript:
-        gencodeFuncotationComparator = transcriptSelectionMode.getComparator(userRequestedTranscripts);
+        gencodeFuncotationComparator = transcriptSelectionMode.getComparator(userRequestedTranscripts, preferMANETranscriptsWhereApplicable);
 
         // Initialize segment metadata.  This will only be used if funcotating segments.  If we are not doing that create
         //  an empty set of metadata for segments.
@@ -394,6 +435,8 @@ public class GencodeFuncotationFactory extends DataSourceFuncotationFactory {
 
         // Initialize overrides / defaults:
         initializeAnnotationOverrides( annotationOverrides );
+
+        this.preferMANETranscripts = preferMANETranscriptsWhereApplicable;
     }
 
     private Path localizeGencodeTranscriptFastaFile( final Path gencodeTranscriptFastaFilePath ) {
@@ -587,6 +630,27 @@ public class GencodeFuncotationFactory extends DataSourceFuncotationFactory {
                         .collect(Collectors.toList());
     }
 
+    /**
+     * Return all MANE transcripts (Select and Plus Clinical) that contain the variant along with the basic transcripts.
+     * Let base Funcotator transcript selection do the rest based on whether MANE is preferred or not.
+     * If there are no MANE transcripts covering the current variant, this would still return the basic transcripts.
+     * @param transcripts of GENCODE transcripts to possibly filter
+     * @return List of MANE and/or basic transcripts
+     */
+    @VisibleForTesting
+    static List<GencodeGtfTranscriptFeature> retrieveMANEAndBasicTranscripts(final VariantContext variant, final List<GencodeGtfTranscriptFeature> transcripts) {
+        final List<GencodeGtfTranscriptFeature> maneSelectAndPlusClinical = transcripts.stream().filter(g -> (hasTag(g, MANE_SELECT) || hasTag(g, MANE_PLUS_CLINICAL)) && g.contains(variant)).toList();
+
+        List<GencodeGtfTranscriptFeature> transcriptsToReturn = transcripts.stream().filter(GencodeFuncotationFactory::isBasic).collect(Collectors.toList());
+
+        for(GencodeGtfTranscriptFeature transcript : maneSelectAndPlusClinical) {
+            if(!transcriptsToReturn.contains(transcript)) {
+                transcriptsToReturn.add(transcript);
+            }
+        }
+
+        return transcriptsToReturn;
+    }
 
     /**
      * {@inheritDoc}
@@ -817,15 +881,26 @@ public class GencodeFuncotationFactory extends DataSourceFuncotationFactory {
      *         Will be an empty List if the variant was in the IGR for all transcripts.
      */
     private List<GencodeFuncotation> createFuncotationsHelper(final VariantContext variant, final Allele altAllele, final GencodeGtfGeneFeature gtfFeature, final ReferenceContext reference) {
+        List<GencodeGtfTranscriptFeature> transcriptList;
 
-        final List<GencodeGtfTranscriptFeature> transcriptList;
-
-        // Only get basic transcripts if we're using data from Gencode:
-        if ( gtfFeature.getGtfSourceFileType().equals(GencodeGtfCodec.GTF_FILE_TYPE_STRING) ) {
-            transcriptList = retrieveBasicTranscripts(gtfFeature);
+        if(gtfFeature.getGtfSourceFileType().equals(GencodeGtfCodec.GTF_FILE_TYPE_STRING)) {
+            if(preferMANETranscripts) {
+                transcriptList = retrieveMANEAndBasicTranscripts(variant, gtfFeature.getTranscripts());
+            }
+            else {
+                transcriptList = retrieveBasicTranscripts(gtfFeature);
+            }
         }
         else {
-            transcriptList = gtfFeature.getTranscripts();
+            // GENCODE GRCh37 liftover GTF files (>=v43) are in ENSEMBL format
+            // We still want to be able to use MANE transcripts with the hg19 data source, hence the condition below
+            if(preferMANETranscripts && gtfFeature.getGtfSourceFileType().equals(EnsemblGtfCodec.GTF_FILE_TYPE_STRING))
+            {
+                transcriptList = retrieveMANEAndBasicTranscripts(variant, gtfFeature.getTranscripts());
+            }
+            else {
+                transcriptList = gtfFeature.getTranscripts();
+            }
         }
 
         return createFuncotationsHelper(variant, altAllele, reference, transcriptList);
@@ -937,6 +1012,9 @@ public class GencodeFuncotationFactory extends DataSourceFuncotationFactory {
 
         gencodeFuncotationBuilder.setVariantClassification(GencodeFuncotation.VariantClassification.COULD_NOT_DETERMINE);
 
+        // Needed for some special cases to know whether this is a MANE transcript
+        gencodeFuncotationBuilder.setManeTranscript(hasTag(transcript, MANE_SELECT) || hasTag(transcript, MANE_PLUS_CLINICAL));
+
         gencodeFuncotationBuilder.setDataSourceName(dataSourceName);
 
         return gencodeFuncotationBuilder.build();
@@ -944,10 +1022,14 @@ public class GencodeFuncotationFactory extends DataSourceFuncotationFactory {
 
     private static boolean isBasic(final GencodeGtfTranscriptFeature transcript) {
         // Check if this transcript has the `basic` tag:
+        return hasTag(transcript, GencodeGTFFieldConstants.FeatureTag.BASIC);
+    }
+
+    private static boolean hasTag(final GencodeGtfTranscriptFeature transcript, final GencodeGTFFieldConstants.FeatureTag tag) {
+        // Check if this transcript has the given tag:
         return transcript.getOptionalFields().stream()
                 .filter( f -> f.getName().equals("tag") )
-                .filter( f -> f.getValue() instanceof GencodeGtfFeature.FeatureTag )
-                .filter( f -> f.getValue().equals(GencodeGtfFeature.FeatureTag.BASIC) )
+                .filter( f -> f.getValue().equals(tag.toString()) )
                 .count() > 0;
     }
 
@@ -1079,7 +1161,7 @@ public class GencodeFuncotationFactory extends DataSourceFuncotationFactory {
 
         // Before we get started, check to see if this is a non-protein-coding feature.
         // If it is, we must handle it differently:
-        if ( GencodeGtfFeature.KnownGeneBiotype.PROTEIN_CODING.toString().equals(transcript.getGeneType()) ) {
+        if ( GencodeGTFFieldConstants.KnownGeneBiotype.PROTEIN_CODING.toString().equals(transcript.getGeneType()) ) {
             return createCodingRegionFuncotationForProteinCodingFeature(variant, altAllele, reference, transcript, exon);
         }
         else {
@@ -1146,6 +1228,9 @@ public class GencodeFuncotationFactory extends DataSourceFuncotationFactory {
 
         // Set the VariantClassification through a simple equivalency on the gene type (since we have no transcript info):
         gencodeFuncotationBuilder.setVariantClassification( convertGeneTranscriptTypeToVariantClassification(exon.getGeneType()) );
+
+        // Needed for some special cases to know whether this is a MANE transcript
+        gencodeFuncotationBuilder.setManeTranscript(hasTag(transcript, MANE_SELECT) || hasTag(transcript, MANE_PLUS_CLINICAL));
 
         // Set our data source name:
         gencodeFuncotationBuilder.setDataSourceName(getName());
@@ -1273,7 +1358,9 @@ public class GencodeFuncotationFactory extends DataSourceFuncotationFactory {
                                      .setProteinChange(proteinChange);
 
             // Set the Variant Classification:
-            final GencodeFuncotation.VariantClassification varClass = createVariantClassification(variant, altAllele, variantType, exon, transcript.getExons().size(), sequenceComparison);
+            final GencodeFuncotation.VariantClassification varClass = createVariantClassification(
+                    variant, altAllele, variantType, exon, transcript.getExons().size(), sequenceComparison, spliceSiteVariantWindowBases
+            );
             final GencodeFuncotation.VariantClassification secondaryVarClass;
             gencodeFuncotationBuilder.setVariantClassification(varClass);
             if ( varClass == GencodeFuncotation.VariantClassification.SPLICE_SITE ) {
@@ -1286,6 +1373,9 @@ public class GencodeFuncotationFactory extends DataSourceFuncotationFactory {
             // We should have sequence information but we don't... this is not good, but we have to put something here:
             gencodeFuncotationBuilder.setVariantClassification( convertGeneTranscriptTypeToVariantClassification(exon.getGeneType()) );
         }
+
+        // Needed for some special cases to know whether this is a MANE transcript
+        gencodeFuncotationBuilder.setManeTranscript(hasTag(transcript, MANE_SELECT) || hasTag(transcript, MANE_PLUS_CLINICAL));
 
         // Set our data source name:
         gencodeFuncotationBuilder.setDataSourceName(getName());
@@ -1357,6 +1447,7 @@ public class GencodeFuncotationFactory extends DataSourceFuncotationFactory {
      * @param exon The {@link GencodeGtfExonFeature} in which the given {@code variant} occurs.
      * @param numberOfExonsInTranscript The number of exons in the transcript in which the given {@code variant} occurs. (Must be > 0).
      * @param sequenceComparison The {@link org.broadinstitute.hellbender.tools.funcotator.SequenceComparison} for the given {@code variant}.
+     * @param spliceSiteWindowBases The window on either side of splice sites to mark variants as {@link org.broadinstitute.hellbender.tools.funcotator.dataSources.gencode.GencodeFuncotation.VariantClassification#SPLICE_SITE}.
      * @return A {@link org.broadinstitute.hellbender.tools.funcotator.dataSources.gencode.GencodeFuncotation.VariantClassification} based on the given {@code allele}, {@code variant}, {@code exon}, and {@code sequenceComparison}.
      */
     @VisibleForTesting
@@ -1365,7 +1456,8 @@ public class GencodeFuncotationFactory extends DataSourceFuncotationFactory {
                                                                                 final GencodeFuncotation.VariantType variantType,
                                                                                 final GencodeGtfExonFeature exon,
                                                                                 final int numberOfExonsInTranscript,
-                                                                                final SequenceComparison sequenceComparison ){
+                                                                                final SequenceComparison sequenceComparison,
+                                                                                final int spliceSiteWindowBases){
         Utils.nonNull(variant);
         Utils.nonNull(altAllele);
         Utils.nonNull(variantType);
@@ -1425,12 +1517,17 @@ public class GencodeFuncotationFactory extends DataSourceFuncotationFactory {
             final int adjustedExonStart = adjustLocusForInsertion(exon.getStart(), variant, altAllele, realVariationInterval);
             final int adjustedExonEnd = adjustLocusForInsertion(exon.getEnd(), variant, altAllele, realVariationInterval);
 
+            // If we have 0 padding, we want to make sure the variant overlaps the exon start itself,
+            // not within a base of the exon start, so we have to create this adjustment here so that we can
+            // not subtract one and create an invalid interval.
+            final int intervalEndCoordAdjuster = spliceSiteWindowBases > 0 ? 1 : 0;
+
             if ( doLeftOverlapCheck ) {
-                final SimpleInterval leftSideInterval = new SimpleInterval(exon.getContig(), adjustedExonStart - spliceSiteVariantWindowBases, adjustedExonStart + (spliceSiteVariantWindowBases-1));
+                final SimpleInterval leftSideInterval = new SimpleInterval(exon.getContig(), adjustedExonStart - spliceSiteWindowBases, adjustedExonStart + (spliceSiteWindowBases-intervalEndCoordAdjuster));
                 overlapsLeft = leftSideInterval.overlaps(realVariationInterval);
             }
             if ( doRightOverlapCheck ) {
-                final SimpleInterval rightSideInterval = new SimpleInterval(exon.getContig(), adjustedExonEnd - spliceSiteVariantWindowBases + 1, adjustedExonEnd + (spliceSiteVariantWindowBases-1) + 1);
+                final SimpleInterval rightSideInterval = new SimpleInterval(exon.getContig(), adjustedExonEnd - spliceSiteWindowBases + 1, adjustedExonEnd + (spliceSiteWindowBases-intervalEndCoordAdjuster) + 1);
                 overlapsRight = rightSideInterval.overlaps(realVariationInterval);
             }
 
@@ -1661,6 +1758,9 @@ public class GencodeFuncotationFactory extends DataSourceFuncotationFactory {
             gencodeFuncotationBuilder.setVariantClassification(GencodeFuncotation.VariantClassification.THREE_PRIME_UTR);
         }
 
+        // Needed for some special cases to know whether this is a MANE transcript
+        gencodeFuncotationBuilder.setManeTranscript(hasTag(transcript, MANE_SELECT) || hasTag(transcript, MANE_PLUS_CLINICAL));
+
         // Set our version:
         gencodeFuncotationBuilder.setVersion(version);
 
@@ -1700,7 +1800,7 @@ public class GencodeFuncotationFactory extends DataSourceFuncotationFactory {
         gencodeFuncotationBuilder.setReferenceContext(referenceBases.getBaseString(Strand.POSITIVE));
 
         // Set the VariantClassification:
-        if ( GencodeGtfFeature.KnownGeneBiotype.PROTEIN_CODING.toString().equals(transcript.getGeneType()) ) {
+        if ( GencodeGTFFieldConstants.KnownGeneBiotype.PROTEIN_CODING.toString().equals(transcript.getGeneType()) ) {
             gencodeFuncotationBuilder.setVariantClassification(GencodeFuncotation.VariantClassification.INTRON);
         }
         else {
@@ -1739,6 +1839,9 @@ public class GencodeFuncotationFactory extends DataSourceFuncotationFactory {
                         strandCorrectedAltAllele.getBaseString()
                 )
         );
+
+        // Needed for some special cases to know whether this is a MANE transcript
+        gencodeFuncotationBuilder.setManeTranscript(hasTag(transcript, MANE_SELECT) || hasTag(transcript, MANE_PLUS_CLINICAL));
 
         // Set our version:
         gencodeFuncotationBuilder.setVersion(version);
@@ -2531,7 +2634,8 @@ public class GencodeFuncotationFactory extends DataSourceFuncotationFactory {
                 .setReferenceContext(referenceBasesString)
                 .setGcContent(gcContent)
                 .setNcbiBuild(ncbiBuildVersion)
-                .setGeneTranscriptType(transcript.getTranscriptType());
+                .setGeneTranscriptType(transcript.getTranscriptType())
+                .setManeTranscript(hasTag(transcript, MANE_SELECT) || hasTag(transcript, MANE_PLUS_CLINICAL));
 
         // Set our version:
         funcotationBuilder.setVersion(version);
@@ -2603,8 +2707,11 @@ public class GencodeFuncotationFactory extends DataSourceFuncotationFactory {
 
         final StrandCorrectedReferenceBases referenceBases = FuncotatorUtils.getBasesInWindowAroundReferenceAllele(variant.getReference(), reference, Strand.POSITIVE, referenceWindow);
 
-        // Set our reference context in the the FuncotatonBuilder:
+        // Set our reference context in the FuncotationBuilder:
         funcotationBuilder.setReferenceContext( referenceBases.getBaseString() );
+
+        // Needed for some special cases to know whether this is a MANE transcript
+        funcotationBuilder.setManeTranscript(hasTag(annotationTranscript, MANE_SELECT) || hasTag(annotationTranscript, MANE_PLUS_CLINICAL));
 
         // Set our version:
         funcotationBuilder.setVersion(version);
@@ -2664,8 +2771,11 @@ public class GencodeFuncotationFactory extends DataSourceFuncotationFactory {
 
         final StrandCorrectedReferenceBases referenceBases = FuncotatorUtils.getBasesInWindowAroundReferenceAllele(variant.getReference(), reference, Strand.POSITIVE, referenceWindow);
 
-        // Set our reference context in the the FuncotatonBuilder:
+        // Set our reference context in the FuncotationBuilder:
         funcotationBuilder.setReferenceContext(referenceBases.getBaseString(Strand.POSITIVE));
+
+        // Needed for some special cases to know whether this is a MANE transcript
+        funcotationBuilder.setManeTranscript(hasTag(annotationTranscript, MANE_SELECT) || hasTag(annotationTranscript, MANE_PLUS_CLINICAL));
 
         // Set our version:
         funcotationBuilder.setVersion(version);
@@ -2708,19 +2818,18 @@ public class GencodeFuncotationFactory extends DataSourceFuncotationFactory {
 
     /**
      * Get the Appris Rank from the given {@link GencodeGtfGeneFeature}.
-     * Appris ranks are specified as annotations using {@link org.broadinstitute.hellbender.utils.codecs.gtf.GencodeGtfFeature.FeatureTag}s.
+     * Appris ranks are specified as annotations using {@link GencodeGTFFieldConstants.FeatureTag}s.
      * @param gtfFeature The {@link GencodeGtfTranscriptFeature} from which to get the Appris Rank.
      * @return The highest Appris Rank found in the given {@code gtfFeature}; if no Appris Rank exists, {@code null}.
      */
     @VisibleForTesting
-    static GencodeGtfFeature.FeatureTag getApprisRank( final GencodeGtfTranscriptFeature gtfFeature ) {
+    static GencodeGTFFieldConstants.FeatureTag getApprisRank(final GencodeGtfTranscriptFeature gtfFeature ) {
 
-        // Get our appris tag(s) if it/they exist(s):
-        final List<GencodeGtfFeature.FeatureTag> gtfApprisTags = gtfFeature.getOptionalFields().stream()
+        // Get the Appris Rank tags and convert them to Sortable Enums:
+        final List<GencodeGTFFieldConstants.FeatureTag> gtfApprisTags = gtfFeature.getOptionalFields().stream()
                 .filter( f -> f.getName().equals("tag") )
-                .filter( f -> f.getValue() instanceof GencodeGtfFeature.FeatureTag )
-                .filter( f -> apprisRanks.contains( f.getValue() ) )
-                .map( f -> (GencodeGtfFeature.FeatureTag)f.getValue() ).collect(Collectors.toList());
+                .filter( f -> apprisRanks.containsKey( f.getValue() ) )
+                .map( f -> apprisRanks.get(f.getValue()) ).collect(Collectors.toList());
 
         if ( gtfApprisTags.isEmpty() ) {
             return null;
@@ -2737,7 +2846,7 @@ public class GencodeFuncotationFactory extends DataSourceFuncotationFactory {
 
     /**
      * Converts a given GeneTranscriptType {@link String} to a {@link org.broadinstitute.hellbender.tools.funcotator.dataSources.gencode.GencodeFuncotation.VariantClassification}.
-     * Assumes the given {@code type} is not {@link GencodeGtfFeature.KnownGeneBiotype#PROTEIN_CODING}.
+     * Assumes the given {@code type} is not {@link GencodeGTFFieldConstants.KnownGeneBiotype#PROTEIN_CODING}.
      * If no type can be assessed, returns {@code null}.
      * @param type A {@link String} representing a GeneTranscriptType to convert to a {@link org.broadinstitute.hellbender.tools.funcotator.dataSources.gencode.GencodeFuncotation.VariantClassification}.
      * @return A {@link org.broadinstitute.hellbender.tools.funcotator.dataSources.gencode.GencodeFuncotation.VariantClassification} representing the given GeneTranscriptType {@link String}, or {@code null}.
@@ -2745,8 +2854,8 @@ public class GencodeFuncotationFactory extends DataSourceFuncotationFactory {
     private static GencodeFuncotation.VariantClassification convertGeneTranscriptTypeToVariantClassification (final String type ) {
 
         //TODO: This all needs to be fixed so there is a 1:1 mapping of GencodeGtfFeature.KnownGeneBiotype->VariantClassification - Issue #4405
-        if (GencodeGtfFeature.KnownGeneBiotype.LINCRNA.toString().equals(type) ||
-                GencodeGtfFeature.KnownGeneBiotype.MACRO_LNCRNA.toString().equals(type)) {
+        if (GencodeGTFFieldConstants.KnownGeneBiotype.LINCRNA.toString().equals(type) ||
+                GencodeGTFFieldConstants.KnownGeneBiotype.MACRO_LNCRNA.toString().equals(type)) {
 			return GencodeFuncotation.VariantClassification.LINCRNA;
 		}
         return GencodeFuncotation.VariantClassification.RNA;

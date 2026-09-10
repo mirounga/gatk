@@ -4,14 +4,17 @@ import htsjdk.variant.variantcontext.*;
 import htsjdk.variant.vcf.*;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.engine.FeatureContext;
 import org.broadinstitute.hellbender.engine.FeatureDataSource;
 import org.broadinstitute.hellbender.engine.FeatureInput;
 import org.broadinstitute.hellbender.engine.ReferenceContext;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
+import org.broadinstitute.hellbender.tools.walkers.GenotypeGVCFsAnnotationArgumentCollection;
 import org.broadinstitute.hellbender.tools.walkers.annotator.allelespecific.ReducibleAnnotation;
 import org.broadinstitute.hellbender.tools.walkers.annotator.allelespecific.ReducibleAnnotationData;
+import org.broadinstitute.hellbender.utils.IntervalUtils;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.genotyper.AlleleLikelihoods;
 import org.broadinstitute.hellbender.utils.haplotype.Haplotype;
@@ -43,6 +46,7 @@ public final class VariantAnnotatorEngine {
     private boolean expressionAlleleConcordance;
     private final boolean useRawAnnotations;
     private final boolean keepRawCombinedAnnotations;
+    private final List<String> rawAnnotationsToKeep;
 
     private final static Logger logger = LogManager.getLogger(VariantAnnotatorEngine.class);
     private final static OneShotLogger jumboAnnotationsLogger = new OneShotLogger(VariantAnnotatorEngine.class);
@@ -59,17 +63,20 @@ public final class VariantAnnotatorEngine {
      * @param useRaw When this is set to true, the annotation engine will call {@link ReducibleAnnotation#annotateRawData(ReferenceContext, VariantContext, AlleleLikelihoods)}
 *               on annotations that extend {@link ReducibleAnnotation}, instead of {@link InfoFieldAnnotation#annotate(ReferenceContext, VariantContext, AlleleLikelihoods)},
      * @param keepCombined If true, retain the combined raw annotation values instead of removing them after finalizing
+     * @param rawAnnotationsToKeep List of raw annotations to keep even when others are removed
      */
     public VariantAnnotatorEngine(final Collection<Annotation> annotationList,
                                   final FeatureInput<VariantContext> dbSNPInput,
                                   final List<FeatureInput<VariantContext>> featureInputs,
                                   final boolean useRaw,
-                                  boolean keepCombined){
+                                  final boolean keepCombined,
+                                  final Collection<Annotation> rawAnnotationsToKeep){
         Utils.nonNull(featureInputs, "comparisonFeatureInputs is null");
         infoAnnotations = new ArrayList<>();
         genotypeAnnotations = new ArrayList<>();
         jumboInfoAnnotations = new ArrayList<>();
         jumboGenotypeAnnotations = new ArrayList<>();
+        this.rawAnnotationsToKeep = new ArrayList<>();
         for (Annotation annot : annotationList) {
             if (annot instanceof InfoFieldAnnotation) {
                 infoAnnotations.add((InfoFieldAnnotation) annot);
@@ -87,6 +94,9 @@ public final class VariantAnnotatorEngine {
         reducibleKeys = new LinkedHashSet<>();
         useRawAnnotations = useRaw;
         keepRawCombinedAnnotations = keepCombined;
+        for (final Annotation rawAnnot : rawAnnotationsToKeep) {
+            this.rawAnnotationsToKeep.addAll(((VariantAnnotation) rawAnnot).getKeyNames());
+        }
         for (InfoFieldAnnotation annot : infoAnnotations) {
             if (annot instanceof ReducibleAnnotation) {
                 for (final String rawKey : ((ReducibleAnnotation) annot).getRawKeyNames()) {
@@ -94,6 +104,14 @@ public final class VariantAnnotatorEngine {
                 }
             }
         }
+    }
+
+    public VariantAnnotatorEngine(final Collection<Annotation> annotationList,
+                                  final FeatureInput<VariantContext> dbSNPInput,
+                                  final List<FeatureInput<VariantContext>> featureInputs,
+                                  final boolean useRaw,
+                                  boolean keepCombined){
+        this(annotationList, dbSNPInput, featureInputs, useRaw, keepCombined, Collections.emptyList());
     }
 
     private VariantOverlapAnnotator initializeOverlapAnnotator(final FeatureInput<VariantContext> dbSNPInput, final List<FeatureInput<VariantContext>> featureInputs) {
@@ -125,6 +143,10 @@ public final class VariantAnnotatorEngine {
      */
     public List<InfoFieldAnnotation> getInfoAnnotations() {
         return Collections.unmodifiableList(infoAnnotations);
+    }
+
+    public List<JumboInfoAnnotation> getJumboInfoAnnotations() {
+        return Collections.unmodifiableList(jumboInfoAnnotations);
     }
 
     /**
@@ -253,6 +275,14 @@ public final class VariantAnnotatorEngine {
     public VariantContext finalizeAnnotations(VariantContext vc, VariantContext originalVC) {
         final Map<String, Object> variantAnnotations = new LinkedHashMap<>(vc.getAttributes());
 
+        //save annotations that have been requested to be kept
+        final Map<String, Object> savedRawAnnotations = new LinkedHashMap<>();
+        for(final String rawAnnot : rawAnnotationsToKeep) {
+            if (variantAnnotations.containsKey(rawAnnot)) {
+                savedRawAnnotations.put(rawAnnot, variantAnnotations.get(rawAnnot));
+            }
+        }
+
         // go through all the requested info annotationTypes
         for (final InfoFieldAnnotation annotationType : infoAnnotations) {
             if (annotationType instanceof ReducibleAnnotation) {
@@ -280,6 +310,8 @@ public final class VariantAnnotatorEngine {
             variantAnnotations.remove(GATKVCFConstants.VARIANT_DEPTH_KEY);
             variantAnnotations.remove(GATKVCFConstants.RAW_GENOTYPE_COUNT_KEY);
         }
+        //add back raw annotations that have specifically been requested to keep
+        variantAnnotations.putAll(savedRawAnnotations);
 
         // generate a new annotated VC
         final VariantContextBuilder builder = new VariantContextBuilder(vc).attributes(variantAnnotations);
@@ -303,7 +335,7 @@ public final class VariantAnnotatorEngine {
                                           final ReferenceContext ref,
                                           final AlleleLikelihoods<GATKRead, Allele> likelihoods,
                                           final Predicate<VariantAnnotation> addAnnot) {
-        return annotateContext(vc, features, ref, likelihoods, Optional.empty(), Optional.empty(), addAnnot);
+        return annotateContext(vc, features, ref, likelihoods, Optional.empty(), Optional.empty(), Optional.empty(), addAnnot);
     }
 
     /**
@@ -320,7 +352,8 @@ public final class VariantAnnotatorEngine {
                                           final ReferenceContext ref,
                                           final AlleleLikelihoods<GATKRead, Allele> readLikelihoods,
                                           final Optional<AlleleLikelihoods<Fragment, Allele>> fragmentLikelihoods,
-                                          final Optional<AlleleLikelihoods<Fragment, Haplotype>> haplotypeLikelihoods,
+                                          final Optional<AlleleLikelihoods<Fragment, Haplotype>> fragmentHaplotypeLikelihoods,
+                                          final Optional<AlleleLikelihoods<GATKRead, Haplotype>> readHaplotypeAlleleLikelihoods,
                                           final Predicate<VariantAnnotation> addAnnot) {
         Utils.nonNull(vc, "vc cannot be null");
         Utils.nonNull(features, "features cannot be null");
@@ -328,21 +361,27 @@ public final class VariantAnnotatorEngine {
 
         // annotate genotypes, creating another new VC in the process
         final VariantContextBuilder builder = new VariantContextBuilder(vc);
-        builder.genotypes(annotateGenotypes(ref, features, vc, readLikelihoods, fragmentLikelihoods, haplotypeLikelihoods, addAnnot));
+        builder.genotypes(annotateGenotypes(ref, features, vc, readLikelihoods, fragmentLikelihoods, fragmentHaplotypeLikelihoods, addAnnot));
         final VariantContext newGenotypeAnnotatedVC = builder.make();
 
-        final Map<String, Object> infoAnnotMap = addInfoAnnotations(vc, features, ref, readLikelihoods, fragmentLikelihoods, haplotypeLikelihoods, addAnnot, newGenotypeAnnotatedVC);
+        final Map<String, Object> infoAnnotMap = addInfoAnnotations(vc, features, ref, readLikelihoods, fragmentLikelihoods, fragmentHaplotypeLikelihoods, readHaplotypeAlleleLikelihoods, addAnnot, newGenotypeAnnotatedVC);
 
         // create a new VC with info and genotype annotations
         final VariantContext annotated = builder.attributes(infoAnnotMap).make();
 
         // annotate db occurrences
-        return variantOverlapAnnotator.annotateOverlaps(features, variantOverlapAnnotator.annotateRsID(features, annotated));
+        try {
+            return variantOverlapAnnotator.annotateOverlaps(features, variantOverlapAnnotator.annotateRsID(features, annotated));
+        } catch (UserException.WarnableAnnotationFailure e) {
+            logger.warn("failed to apply variantOverlapAnnotator to VC at " + IntervalUtils.locatableToString(annotated) + ": " + e.getMessage());
+            return annotated;
+        }
     }
 
     private Map<String, Object> addInfoAnnotations(VariantContext vc, FeatureContext features, ReferenceContext ref,
                                                    AlleleLikelihoods<GATKRead, Allele> likelihoods, final Optional<AlleleLikelihoods<Fragment, Allele>> fragmentLikelihoods,
-                                                   final Optional<AlleleLikelihoods<Fragment, Haplotype>> haplotypeLikelihoods, Predicate<VariantAnnotation> addAnnot, VariantContext newGenotypeAnnotatedVC) {
+                                                   final Optional<AlleleLikelihoods<Fragment, Haplotype>> haplotypeLikelihoods, final Optional<AlleleLikelihoods<GATKRead, Haplotype>> readHaplotypeAlleleLikelihoods,
+                                                   Predicate<VariantAnnotation> addAnnot, VariantContext newGenotypeAnnotatedVC) {
         final Map<String, Object> infoAnnotMap = new LinkedHashMap<>(newGenotypeAnnotatedVC.getAttributes());
         annotateExpressions(vc, features, ref, infoAnnotMap);
 
@@ -359,9 +398,12 @@ public final class VariantAnnotatorEngine {
                 }
             }
         }
-        if (fragmentLikelihoods.isPresent() && haplotypeLikelihoods.isPresent()) {
+        //TODO see #7543. This spiderweb of cases should be addressed as part of a more comprehensive refactor of the annotation code with JumboAnnotations.
+        if ((fragmentLikelihoods.isPresent() && haplotypeLikelihoods.isPresent()) || readHaplotypeAlleleLikelihoods.isPresent()) {
             jumboInfoAnnotations.stream()
-                    .map(annot -> annot.annotate(ref, features, vc, likelihoods, fragmentLikelihoods.get(), haplotypeLikelihoods.get()))
+                    .map(annot -> annot.annotate(ref, features, vc, likelihoods,
+                            fragmentLikelihoods.isPresent()? fragmentLikelihoods.get() : null,
+                            haplotypeLikelihoods.isPresent()? haplotypeLikelihoods.get(): readHaplotypeAlleleLikelihoods.get()))
                     .forEach(infoAnnotMap::putAll);
         }
         return infoAnnotMap;
@@ -384,12 +426,15 @@ public final class VariantAnnotatorEngine {
         final GenotypesContext genotypes = GenotypesContext.create(vc.getNSamples());
         for ( final Genotype genotype : vc.getGenotypes() ) {
             final GenotypeBuilder gb = new GenotypeBuilder(genotype);
-            genotypeAnnotations.stream().filter(addAnnot).forEach(annot -> annot.annotate(ref, vc, genotype, gb, likelihoods));
+
+            genotypeAnnotations.stream().filter(addAnnot)
+                    .forEach(annot -> annot.annotate(ref, vc, genotype, gb, likelihoods));
 
             if (fragmentLikelihoods.isPresent() && haplotypeLikelihoods.isPresent()) {
                 jumboGenotypeAnnotations.stream().filter(addAnnot).forEach(annot ->
                         annot.annotate(ref, features, vc, genotype, gb, likelihoods, fragmentLikelihoods.get(), haplotypeLikelihoods.get()));
             }
+
             genotypes.add(gb.make());
         }
 

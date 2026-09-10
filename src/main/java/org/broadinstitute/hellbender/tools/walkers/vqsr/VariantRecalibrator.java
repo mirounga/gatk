@@ -9,14 +9,9 @@ import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.variantcontext.writer.VariantContextWriter;
 import htsjdk.variant.vcf.VCFHeader;
 import htsjdk.variant.vcf.VCFHeaderLine;
+import org.broadinstitute.barclay.argparser.*;
 import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.cmdline.*;
-import org.broadinstitute.barclay.argparser.CommandLineException;
-import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
-import org.broadinstitute.barclay.argparser.Advanced;
-import org.broadinstitute.barclay.argparser.Argument;
-import org.broadinstitute.barclay.argparser.ArgumentCollection;
-import org.broadinstitute.barclay.argparser.Hidden;
 import org.broadinstitute.hellbender.engine.FeatureContext;
 import org.broadinstitute.hellbender.engine.FeatureInput;
 import org.broadinstitute.hellbender.engine.GATKPath;
@@ -145,7 +140,8 @@ import java.util.*;
  * <h3>Additional notes</h3>
  * <ul>
  *     <li>This tool only accepts a single input variant file unlike earlier version of GATK, which accepted multiple
- *     input variant files.</li>
+ *     input variant files. </li>
+ *     <li>The input VCF must be genotyped, raw GVCF files will not work correctly.</li>
  *     <li>SNPs and indels must be recalibrated in separate runs, but it is not necessary to separate them into different
  * files. See the tutorial linked above for an example workflow. Note that mixed records are treated as indels.</li>
  *     <li></li>
@@ -172,6 +168,7 @@ public class VariantRecalibrator extends MultiVariantWalker {
     /**
      * These additional calls should be unfiltered and annotated with the error covariates that are intended to be used for modeling.
      */
+    @DeprecatedFeature(detail="This argument is not tested or used in any pipeline")
     @Argument(fullName="aggregate",
             shortName = "aggregate", doc="Additional raw input variants to be used in building the model",
             optional=true)
@@ -356,6 +353,12 @@ public class VariantRecalibrator extends MultiVariantWalker {
     @VisibleForTesting
     protected int max_attempts = 1;
 
+    @Advanced
+    @Argument(fullName="dont-run-rscript",
+            doc="Disable the RScriptExecutor to allow RScript to be generated but not run",
+            optional=true)
+    private boolean disableRScriptExecutor = false;
+
     /////////////////////////////
     // Debug Arguments
     /////////////////////////////
@@ -401,11 +404,12 @@ public class VariantRecalibrator extends MultiVariantWalker {
         dataManager = new VariantDataManager( new ArrayList<>(USE_ANNOTATIONS), VRAC );
 
         if (RSCRIPT_FILE != null) {
+            RScriptExecutor.checkIfRunningInGatkLiteDocker("Using rscript-file file requires R, which is not available in the GATK Lite Docker image.");
             rScriptExecutor = new RScriptExecutor();
             if(!rScriptExecutor.externalExecutableExists()) {
-                Utils.warnUser(logger, String.format(
-                        "Rscript not found in environment path. %s will be generated but PDF plots will not.",
-                        RSCRIPT_FILE));
+                if(!disableRScriptExecutor) {
+                    throw new UserException("Rscript not found in environment path. Fix executor or run with --dont-run-rscript argument to generate rscript file without running.");
+                }
             }
         }
 
@@ -653,7 +657,7 @@ public class VariantRecalibrator extends MultiVariantWalker {
                     engine.evaluateData(dataManager.getData(), goodModel, false);
                     if (goodModel.failedToConverge) {
                         if (outputModel != null) {
-                            final GATKReport report = writeModelReport(goodModel, null, USE_ANNOTATIONS);
+                            final GATKReport report = writeModelReport(goodModel, null, dataManager.getAnnotationKeys());
                             saveModelReport(report, outputModel);
                         }
                         throw new UserException.VQSRPositiveModelFailure("Positive training model failed to converge.  One or more annotations " +
@@ -676,7 +680,7 @@ public class VariantRecalibrator extends MultiVariantWalker {
                 engine.evaluateData(dataManager.getData(), badModel, true);
 
                 if (outputModel != null) {
-                    final GATKReport report = writeModelReport(goodModel, badModel, USE_ANNOTATIONS);
+                    final GATKReport report = writeModelReport(goodModel, badModel, dataManager.getAnnotationKeys());
                     saveModelReport(report, outputModel);
                 }
 
@@ -709,7 +713,7 @@ public class VariantRecalibrator extends MultiVariantWalker {
                             goodModel,
                             badModel,
                             0.0,
-                            dataManager.getAnnotationKeys().toArray(new String[USE_ANNOTATIONS.size()]));
+                            dataManager.getAnnotationKeys().toArray(new String[dataManager.getAnnotationKeys().size()]));
                 }
 
                 if (VRAC.MODE == VariantRecalibratorArgumentCollection.Mode.INDEL) {
@@ -719,12 +723,14 @@ public class VariantRecalibrator extends MultiVariantWalker {
                     //skip R plots for scattered tranches because the format is different and the R code parses them
                     logger.info("Tranches plot will not be generated since we are running in scattered mode");
                 } else if (RSCRIPT_FILE != null) { //we don't use the RSCRIPT_FILE for tranches, but here it's an indicator if we're setup to run R
-                    // Execute the RScript command to plot the table of truth values
-                    rScriptExecutor.addScript(new Resource(PLOT_TRANCHES_RSCRIPT, VariantRecalibrator.class));
-                    rScriptExecutor.addArgs(TRANCHES_FILE.getAbsoluteFile(), TARGET_TITV);
-                    // Print out the command line to make it clear to the user what is being executed and how one might modify it
-                    logger.info("Executing: " + rScriptExecutor.getApproximateCommandLine());
-                    rScriptExecutor.exec();
+                    if(!disableRScriptExecutor) {
+                        // Execute the RScript command to plot the table of truth values
+                        rScriptExecutor.addScript(new Resource(PLOT_TRANCHES_RSCRIPT, VariantRecalibrator.class));
+                        rScriptExecutor.addArgs(TRANCHES_FILE.getAbsoluteFile(), TARGET_TITV);
+                        // Print out the command line to make it clear to the user what is being executed and how one might modify it
+                        logger.info("Executing: " + rScriptExecutor.getApproximateCommandLine());
+                        rScriptExecutor.exec();
+                    }
                 }
                 return true;
             }
@@ -1113,7 +1119,7 @@ private GATKReportTable makeVectorTable(final String tableName,
                 stream.println("dummyData$x <- NaN");
                 stream.println("dummyData$y <- NaN");
                 stream.println("p <- ggplot(data=" + surfaceFrame + ", aes(x=x, y=y)) +theme(panel.background = element_rect(fill = \"white\"), panel.grid.minor = element_line(colour = \"white\"), panel.grid.major = element_line(colour = \"white\"))");
-                stream.println("p1 = p +ggtitle(\"model PDF\") + labs(x=\""+ annotationKeys[iii] +"\", y=\""+ annotationKeys[jjj] +"\") + geom_tile(aes(fill = lod)) + scale_fill_gradient(high=\"green\", low=\"red\", space=\"rgb\")");
+                stream.println("p1 = p +ggtitle(\"model PDF\") + labs(x=\""+ annotationKeys[iii] +"\", y=\""+ annotationKeys[jjj] +"\") + geom_tile(aes(fill = lod)) + scale_fill_gradient(high=\"green\", low=\"red\", space=\"Lab\")");
                 stream.println("p <- qplot(x,y,data=" + dataFrame + ", color=retained, alpha=I(1/7),legend=FALSE) +theme(panel.background = element_rect(fill = \"white\"), panel.grid.minor = element_line(colour = \"white\"), panel.grid.major = element_line(colour = \"white\"))");
                 stream.println("q <- geom_point(aes(x=x,y=y,color=retained),data=dummyData, alpha=1.0, na.rm=TRUE)");
                 stream.println("p2 = p + q + labs(x=\""+ annotationKeys[iii] +"\", y=\""+ annotationKeys[jjj] +"\") + scale_colour_gradient(name=\"outcome\", high=\"black\", low=\"red\",breaks=c(-1,1),guide=\"legend\",labels=c(\"filtered\",\"retained\"))");
@@ -1136,9 +1142,11 @@ private GATKReportTable makeVectorTable(final String tableName,
 
         // Execute Rscript command to generate the clustering plots
         final RScriptExecutor executor = new RScriptExecutor();
-        executor.addScript(RSCRIPT_FILE);
-        logger.info("Executing: " + executor.getApproximateCommandLine());
-        executor.exec();
+        if(!disableRScriptExecutor) {
+            executor.addScript(RSCRIPT_FILE);
+            logger.info("Executing: " + executor.getApproximateCommandLine());
+            executor.exec();
+        }
     }
 
     // The Arrange function is how we place the 4 model plots on one page

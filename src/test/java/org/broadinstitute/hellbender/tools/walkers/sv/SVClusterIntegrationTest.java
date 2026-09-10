@@ -13,16 +13,18 @@ import org.broadinstitute.hellbender.testutils.VariantContextTestUtils;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
 import org.broadinstitute.hellbender.tools.sv.SVCallRecord;
 import org.broadinstitute.hellbender.tools.sv.SVCallRecordUtils;
+import org.broadinstitute.hellbender.tools.sv.SVTestUtils;
 import org.broadinstitute.hellbender.tools.sv.cluster.*;
 import org.broadinstitute.hellbender.utils.IntervalUtils;
 import org.broadinstitute.hellbender.utils.reference.ReferenceUtils;
 import org.broadinstitute.hellbender.utils.variant.VariantContextGetters;
-import org.spark_project.guava.collect.Lists;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 import java.io.File;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -42,7 +44,7 @@ public class SVClusterIntegrationTest extends CommandLineProgramTest {
                 .addVCF(inputVcfPath)
                 .add(SVCluster.PLOIDY_TABLE_LONG_NAME, getToolTestDataDir() + "1kgp.batch1.ploidy.tsv")
                 .add(SVCluster.VARIANT_PREFIX_LONG_NAME, "SVx")
-                .add(SVCluster.ALGORITHM_LONG_NAME, SVCluster.CLUSTER_ALGORITHM.DEFRAGMENT_CNV)
+                .add(SVCluster.ALGORITHM_LONG_NAME, SVClusterWalker.CLUSTER_ALGORITHM.DEFRAGMENT_CNV)
                 .add(SVCluster.DEFRAG_PADDING_FRACTION_LONG_NAME, 0.25)
                 .add(SVClusterEngineArgumentsCollection.DEPTH_SAMPLE_OVERLAP_FRACTION_NAME, 0.5);
 
@@ -112,7 +114,7 @@ public class SVClusterIntegrationTest extends CommandLineProgramTest {
                 .add(SVCluster.ALGORITHM_LONG_NAME, SVCluster.CLUSTER_ALGORITHM.SINGLE_LINKAGE)
                 .add(SVClusterEngineArgumentsCollection.DEPTH_SAMPLE_OVERLAP_FRACTION_NAME, 0)
                 .add(SVClusterEngineArgumentsCollection.DEPTH_INTERVAL_OVERLAP_FRACTION_NAME, 1)
-                .add(SVClusterEngineArgumentsCollection.DEPTH_BREAKEND_WINDOW_NAME, 0)
+                .add(SVClusterEngineArgumentsCollection.DEPTH_BREAKEND_WINDOW_NAME, 10000000)
                 .add(SVClusterEngineArgumentsCollection.MIXED_SAMPLE_OVERLAP_FRACTION_NAME, 0)
                 .add(SVClusterEngineArgumentsCollection.MIXED_INTERVAL_OVERLAP_FRACTION_NAME, 1)
                 .add(SVClusterEngineArgumentsCollection.MIXED_BREAKEND_WINDOW_NAME, 0)
@@ -129,7 +131,7 @@ public class SVClusterIntegrationTest extends CommandLineProgramTest {
         final VCFHeader header = vcf.getKey();
         final List<VariantContext> records = vcf.getValue();
 
-        Assert.assertEquals(header.getSampleNamesInOrder(), Lists.newArrayList("HG00096", "HG00129", "HG00140", "NA18945", "NA18956"));
+        Assert.assertEquals(header.getSampleNamesInOrder(), List.of("HG00096", "HG00129", "HG00140", "NA18945", "NA18956"));
 
         Assert.assertEquals(records.size(), 1793);
 
@@ -187,7 +189,7 @@ public class SVClusterIntegrationTest extends CommandLineProgramTest {
                 .add(StandardArgumentDefinitions.REFERENCE_LONG_NAME, REFERENCE_PATH)
                 .add(SVClusterEngineArgumentsCollection.DEPTH_SAMPLE_OVERLAP_FRACTION_NAME, 0)
                 .add(SVClusterEngineArgumentsCollection.DEPTH_INTERVAL_OVERLAP_FRACTION_NAME, 0.5)
-                .add(SVClusterEngineArgumentsCollection.DEPTH_BREAKEND_WINDOW_NAME, 2000)
+                .add(SVClusterEngineArgumentsCollection.DEPTH_BREAKEND_WINDOW_NAME, 10000000)
                 .add(SVClusterEngineArgumentsCollection.MIXED_SAMPLE_OVERLAP_FRACTION_NAME, 0)
                 .add(SVClusterEngineArgumentsCollection.MIXED_INTERVAL_OVERLAP_FRACTION_NAME, 0.1)
                 .add(SVClusterEngineArgumentsCollection.MIXED_BREAKEND_WINDOW_NAME, 2000)
@@ -201,9 +203,9 @@ public class SVClusterIntegrationTest extends CommandLineProgramTest {
         final VCFHeader header = vcf.getKey();
         final List<VariantContext> records = vcf.getValue();
 
-        Assert.assertEquals(header.getSampleNamesInOrder(), Lists.newArrayList("HG00096", "HG00129", "HG00140", "NA18945", "NA18956"));
+        Assert.assertEquals(header.getSampleNamesInOrder(), Arrays.asList("HG00096", "HG00129", "HG00140", "NA18945", "NA18956"));
 
-        Assert.assertEquals(records.size(), 1338);
+        Assert.assertEquals(records.size(), 1344);
 
         // Check for one record
         int expectedRecordsFound = 0;
@@ -251,11 +253,10 @@ public class SVClusterIntegrationTest extends CommandLineProgramTest {
                 .add(SVCluster.ALGORITHM_LONG_NAME, SVCluster.CLUSTER_ALGORITHM.SINGLE_LINKAGE)
                 .add(JointGermlineCNVSegmentation.BREAKPOINT_SUMMARY_STRATEGY_LONG_NAME, CanonicalSVCollapser.BreakpointSummaryStrategy.MEDIAN_START_MEDIAN_END)
                 .add(JointGermlineCNVSegmentation.ALT_ALLELE_SUMMARY_STRATEGY_LONG_NAME, CanonicalSVCollapser.AltAlleleSummaryStrategy.COMMON_SUBTYPE)
-                .add(SVCluster.INSERTION_LENGTH_SUMMARY_STRATEGY_LONG_NAME, CanonicalSVCollapser.InsertionLengthSummaryStrategy.MEDIAN)
                 .add(StandardArgumentDefinitions.REFERENCE_LONG_NAME, REFERENCE_PATH)
                 .add(SVClusterEngineArgumentsCollection.DEPTH_SAMPLE_OVERLAP_FRACTION_NAME, 0)
                 .add(SVClusterEngineArgumentsCollection.DEPTH_INTERVAL_OVERLAP_FRACTION_NAME, 0.5)
-                .add(SVClusterEngineArgumentsCollection.DEPTH_BREAKEND_WINDOW_NAME, 2000)
+                .add(SVClusterEngineArgumentsCollection.DEPTH_BREAKEND_WINDOW_NAME, 10000000)
                 .add(SVClusterEngineArgumentsCollection.MIXED_SAMPLE_OVERLAP_FRACTION_NAME, 0)
                 .add(SVClusterEngineArgumentsCollection.MIXED_INTERVAL_OVERLAP_FRACTION_NAME, 0.1)
                 .add(SVClusterEngineArgumentsCollection.MIXED_BREAKEND_WINDOW_NAME, 2000)
@@ -263,7 +264,7 @@ public class SVClusterIntegrationTest extends CommandLineProgramTest {
                 .add(SVClusterEngineArgumentsCollection.PESR_INTERVAL_OVERLAP_FRACTION_NAME, 0.1)
                 .add(SVClusterEngineArgumentsCollection.PESR_BREAKEND_WINDOW_NAME, 500);
 
-        final List<String> vcfInputFilenames = Lists.newArrayList(
+        final List<String> vcfInputFilenames = Arrays.asList(
                 "1kgp_test.cnvs.vcf.gz",
                 "HG00096.manta.vcf.gz",
                 "HG00096.wham.vcf.gz",
@@ -279,14 +280,13 @@ public class SVClusterIntegrationTest extends CommandLineProgramTest {
         final Pair<VCFHeader, List<VariantContext>> testVcf = VariantContextTestUtils.readEntireVCFIntoMemory(output.getAbsolutePath());
 
         final ReferenceSequenceFile referenceSequenceFile = ReferenceUtils.createReferenceReader(new GATKPath(REFERENCE_PATH));
-        final ClusteringParameters depthParameters = ClusteringParameters.createDepthParameters(0.5, 2000, 0);
-        final ClusteringParameters mixedParameters = ClusteringParameters.createMixedParameters(0.1, 2000, 0);
-        final ClusteringParameters pesrParameters = ClusteringParameters.createPesrParameters(0.1, 500, 0);
-        final SVClusterEngine<SVCallRecord> engine = SVClusterEngineFactory.createCanonical(
+        final ClusteringParameters depthParameters = ClusteringParameters.createDepthParameters(0.5, 0, 10000000, 0);
+        final ClusteringParameters mixedParameters = ClusteringParameters.createMixedParameters(0.1, 0, 2000, 0);
+        final ClusteringParameters pesrParameters = ClusteringParameters.createPesrParameters(0.1, 0, 500, 0);
+        final SVClusterEngine engine = SVClusterEngineFactory.createCanonical(
                 SVClusterEngine.CLUSTERING_TYPE.SINGLE_LINKAGE,
                 CanonicalSVCollapser.BreakpointSummaryStrategy.MEDIAN_START_MEDIAN_END,
                 CanonicalSVCollapser.AltAlleleSummaryStrategy.COMMON_SUBTYPE,
-                CanonicalSVCollapser.InsertionLengthSummaryStrategy.MEDIAN,
                 referenceSequenceFile.getSequenceDictionary(),
                 referenceSequenceFile,
                 false,
@@ -294,17 +294,23 @@ public class SVClusterIntegrationTest extends CommandLineProgramTest {
                 mixedParameters,
                 pesrParameters);
 
-        vcfInputFilenames.stream()
-                .flatMap(vcfFilename -> VariantContextTestUtils.readEntireVCFIntoMemory(getToolTestDataDir() + vcfFilename).getValue().stream())
-                .sorted(IntervalUtils.getDictionaryOrderComparator(referenceSequenceFile.getSequenceDictionary()))
-                .map(SVCallRecordUtils::create)
-                .forEach(engine::add);
+        final List<SVCallRecord> expectedRecords = new ArrayList<>();
+        expectedRecords.addAll(
+            vcfInputFilenames.stream()
+                    .flatMap(vcfFilename -> VariantContextTestUtils.readEntireVCFIntoMemory(getToolTestDataDir() + vcfFilename).getValue().stream())
+                    .sorted(IntervalUtils.getDictionaryOrderComparator(referenceSequenceFile.getSequenceDictionary()))
+                    .map(v -> SVCallRecordUtils.create(v, SVTestUtils.hg38Dict))
+                    .map(engine::addAndFlush)
+                    .flatMap(List::stream)
+                    .collect(Collectors.toList())
+        );
+        expectedRecords.addAll(engine.flush());
 
-        final Comparator<SVCallRecord> recordComparator = SVCallRecordUtils.getCallComparator(referenceSequenceFile.getSequenceDictionary());
-        final List<VariantContext> expectedVariants = engine.forceFlush().stream()
-                .sorted(recordComparator)
+        final Comparator<VariantContext> recordComparator = testVcf.getLeft().getVCFRecordComparator();
+        final List<VariantContext> expectedVariants = expectedRecords.stream()
                 .map(SVCallRecordUtils::getVariantBuilder)
                 .map(VariantContextBuilder::make)
+                .sorted(recordComparator)
                 .collect(Collectors.toList());
         final List<VariantContext> testVariants = testVcf.getValue();
 
@@ -348,7 +354,7 @@ public class SVClusterIntegrationTest extends CommandLineProgramTest {
                 .add(SVCluster.ALGORITHM_LONG_NAME, SVCluster.CLUSTER_ALGORITHM.MAX_CLIQUE)
                 .add(SVClusterEngineArgumentsCollection.DEPTH_SAMPLE_OVERLAP_FRACTION_NAME, 0)
                 .add(SVClusterEngineArgumentsCollection.DEPTH_INTERVAL_OVERLAP_FRACTION_NAME, 0.5)
-                .add(SVClusterEngineArgumentsCollection.DEPTH_BREAKEND_WINDOW_NAME, 2000)
+                .add(SVClusterEngineArgumentsCollection.DEPTH_BREAKEND_WINDOW_NAME, 10000000)
                 .add(SVClusterEngineArgumentsCollection.MIXED_SAMPLE_OVERLAP_FRACTION_NAME, 0)
                 .add(SVClusterEngineArgumentsCollection.MIXED_INTERVAL_OVERLAP_FRACTION_NAME, 0.1)
                 .add(SVClusterEngineArgumentsCollection.MIXED_BREAKEND_WINDOW_NAME, 2000)
@@ -365,7 +371,7 @@ public class SVClusterIntegrationTest extends CommandLineProgramTest {
         final VCFHeader header = vcf.getKey();
         final List<VariantContext> records = vcf.getValue();
 
-        Assert.assertEquals(header.getSampleNamesInOrder(), Lists.newArrayList("HG00096", "HG00129", "HG00140", "NA18945", "NA18956"));
+        Assert.assertEquals(header.getSampleNamesInOrder(), Arrays.asList("HG00096", "HG00129", "HG00140", "NA18945", "NA18956"));
 
         //Assert.assertEquals(records.size(), 1353);
 
@@ -377,7 +383,7 @@ public class SVClusterIntegrationTest extends CommandLineProgramTest {
             if (variant.getContig().equals("chr20") && variant.getStart() == 28654436) {
                 expectedRecordsFound++;
                 Assert.assertEquals(variant.getEnd(), 28719092);
-                Assert.assertFalse(variant.hasAttribute(GATKSVVCFConstants.SVLEN));
+                Assert.assertTrue(variant.hasAttribute(GATKSVVCFConstants.SVLEN));
                 final List<String> algorithms = variant.getAttributeAsStringList(GATKSVVCFConstants.ALGORITHMS_ATTRIBUTE, null);
                 Assert.assertEquals(algorithms.size(), 1);
                 Assert.assertTrue(algorithms.contains("manta"));
@@ -415,7 +421,7 @@ public class SVClusterIntegrationTest extends CommandLineProgramTest {
                 .add(SVCluster.ALGORITHM_LONG_NAME, SVCluster.CLUSTER_ALGORITHM.SINGLE_LINKAGE)
                 .add(SVClusterEngineArgumentsCollection.DEPTH_SAMPLE_OVERLAP_FRACTION_NAME, 0.5)
                 .add(SVClusterEngineArgumentsCollection.DEPTH_INTERVAL_OVERLAP_FRACTION_NAME, 0.5)
-                .add(SVClusterEngineArgumentsCollection.DEPTH_BREAKEND_WINDOW_NAME, 2000)
+                .add(SVClusterEngineArgumentsCollection.DEPTH_BREAKEND_WINDOW_NAME, 10000000)
                 .add(SVClusterEngineArgumentsCollection.MIXED_SAMPLE_OVERLAP_FRACTION_NAME, 0.5)
                 .add(SVClusterEngineArgumentsCollection.MIXED_INTERVAL_OVERLAP_FRACTION_NAME, 0.1)
                 .add(SVClusterEngineArgumentsCollection.MIXED_BREAKEND_WINDOW_NAME, 2000)
@@ -431,18 +437,15 @@ public class SVClusterIntegrationTest extends CommandLineProgramTest {
 
         Assert.assertEquals(header.getSampleNamesInOrder().size(), 156);
 
-        Assert.assertEquals(records.size(), 1705);
+        Assert.assertEquals(records.size(), 1703);
 
         // Check for one record
         int expectedRecordsFound = 0;
         for (final VariantContext variant : records) {
             Assert.assertTrue(variant.hasAttribute(GATKSVVCFConstants.CLUSTER_MEMBER_IDS_KEY));
             Assert.assertTrue(variant.hasAttribute(GATKSVVCFConstants.ALGORITHMS_ATTRIBUTE));
-            if (variant.getID().equals("SVx0000041c")) {
+            if (variant.getContig().equals("chr22") && variant.getStart() == 38898103 && variant.getEnd() == 38902679) {
                 expectedRecordsFound++;
-                Assert.assertEquals(variant.getContig(), "chr22");
-                Assert.assertEquals(variant.getStart(), 38898103);
-                Assert.assertEquals(variant.getEnd(), 38902679);
                 final List<String> algorithms = variant.getAttributeAsStringList(GATKSVVCFConstants.ALGORITHMS_ATTRIBUTE, null);
                 Assert.assertEquals(algorithms.size(), 2);
                 Assert.assertTrue(algorithms.contains(GATKSVVCFConstants.DEPTH_ALGORITHM));
@@ -482,7 +485,7 @@ public class SVClusterIntegrationTest extends CommandLineProgramTest {
                 .add(StandardArgumentDefinitions.REFERENCE_LONG_NAME, REFERENCE_PATH)
                 .add(SVClusterEngineArgumentsCollection.DEPTH_SAMPLE_OVERLAP_FRACTION_NAME, 0)
                 .add(SVClusterEngineArgumentsCollection.DEPTH_INTERVAL_OVERLAP_FRACTION_NAME, 0.5)
-                .add(SVClusterEngineArgumentsCollection.DEPTH_BREAKEND_WINDOW_NAME, 2000)
+                .add(SVClusterEngineArgumentsCollection.DEPTH_BREAKEND_WINDOW_NAME, 10000000)
                 .add(SVClusterEngineArgumentsCollection.MIXED_SAMPLE_OVERLAP_FRACTION_NAME, 0)
                 .add(SVClusterEngineArgumentsCollection.MIXED_INTERVAL_OVERLAP_FRACTION_NAME, 0.1)
                 .add(SVClusterEngineArgumentsCollection.MIXED_BREAKEND_WINDOW_NAME, 2000)
@@ -496,7 +499,7 @@ public class SVClusterIntegrationTest extends CommandLineProgramTest {
         final VCFHeader header = vcf.getKey();
         final List<VariantContext> records = vcf.getValue();
 
-        Assert.assertEquals(header.getSampleNamesInOrder(), Lists.newArrayList("HG00096", "HG00129", "HG00150"));
+        Assert.assertEquals(header.getSampleNamesInOrder(), Arrays.asList("HG00096", "HG00129", "HG00150"));
 
         Assert.assertEquals(records.size(), 536);
 
@@ -505,11 +508,8 @@ public class SVClusterIntegrationTest extends CommandLineProgramTest {
         for (final VariantContext variant : records) {
             Assert.assertTrue(variant.hasAttribute(GATKSVVCFConstants.CLUSTER_MEMBER_IDS_KEY));
             Assert.assertTrue(variant.hasAttribute(GATKSVVCFConstants.ALGORITHMS_ATTRIBUTE));
-            if (variant.getID().equals("SVx00000203")) {
+            if (variant.getContig().equals("chrY") && variant.getStart() == 10676436 && variant.getEnd() == 10694243) {
                 expectedRecordsFound++;
-                Assert.assertEquals(variant.getContig(), "chrY");
-                Assert.assertEquals(variant.getStart(), 10676436);
-                Assert.assertEquals(variant.getEnd(), 10694243);
                 final List<String> algorithms = variant.getAttributeAsStringList(GATKSVVCFConstants.ALGORITHMS_ATTRIBUTE, null);
                 Assert.assertEquals(algorithms.size(), 1);
                 Assert.assertTrue(algorithms.contains("manta"));
@@ -521,7 +521,7 @@ public class SVClusterIntegrationTest extends CommandLineProgramTest {
                 Assert.assertEquals(variant.getStructuralVariantType(), StructuralVariantType.DUP);
                 for (final Genotype g : variant.getGenotypes()) {
                     if (g.getSampleName().equals("HG00096")) {
-                        Assert.assertTrue(g.isHomVar());
+                        Assert.assertTrue(g.isNoCall());
                         Assert.assertEquals(g.getAlleles().size(), 1);
                         Assert.assertEquals(VariantContextGetters.getAttributeAsInt(g, GATKSVVCFConstants.EXPECTED_COPY_NUMBER_FORMAT, -1), 1);
                         Assert.assertEquals(VariantContextGetters.getAttributeAsInt(g, GATKSVVCFConstants.COPY_NUMBER_FORMAT, -1), 3);
@@ -539,6 +539,35 @@ public class SVClusterIntegrationTest extends CommandLineProgramTest {
             }
         }
         Assert.assertEquals(expectedRecordsFound, 1);
+    }
+    @Test
+    public void testCleanedVcf() {
+        final File output = createTempFile("cleaned_vcf_cluster", ".vcf");
+        // Note we use very loose clustering criteria on a normal cleaned vcf to ensure some clustering happens
+        final ArgumentsBuilder args = new ArgumentsBuilder()
+                .addOutput(output)
+                .addVCF(getToolTestDataDir() + "bwa_melt.cleaned.chr22_chrY.vcf.gz")
+                .add(SVCluster.PLOIDY_TABLE_LONG_NAME, getToolTestDataDir() + "1kgp.batch1.ploidy.tsv")
+                .add(SVCluster.VARIANT_PREFIX_LONG_NAME, "SVx")
+                .add(SVCluster.ALGORITHM_LONG_NAME, SVCluster.CLUSTER_ALGORITHM.SINGLE_LINKAGE)
+                .add(StandardArgumentDefinitions.REFERENCE_LONG_NAME, REFERENCE_PATH)
+                .add(SVClusterEngineArgumentsCollection.DEPTH_SAMPLE_OVERLAP_FRACTION_NAME, 0)
+                .add(SVClusterEngineArgumentsCollection.DEPTH_INTERVAL_OVERLAP_FRACTION_NAME, 0.1)
+                .add(SVClusterEngineArgumentsCollection.DEPTH_BREAKEND_WINDOW_NAME, 10000000)
+                .add(SVClusterEngineArgumentsCollection.MIXED_SAMPLE_OVERLAP_FRACTION_NAME, 0)
+                .add(SVClusterEngineArgumentsCollection.MIXED_INTERVAL_OVERLAP_FRACTION_NAME, 0.1)
+                .add(SVClusterEngineArgumentsCollection.MIXED_BREAKEND_WINDOW_NAME, 5000)
+                .add(SVClusterEngineArgumentsCollection.PESR_SAMPLE_OVERLAP_FRACTION_NAME, 0)
+                .add(SVClusterEngineArgumentsCollection.PESR_INTERVAL_OVERLAP_FRACTION_NAME, 0.1)
+                .add(SVClusterEngineArgumentsCollection.PESR_BREAKEND_WINDOW_NAME, 5000);
+
+        runCommandLine(args, SVCluster.class.getSimpleName());
+
+        final Pair<VCFHeader, List<VariantContext>> vcf = VariantContextTestUtils.readEntireVCFIntoMemory(output.getAbsolutePath());
+        final VCFHeader header = vcf.getKey();
+        Assert.assertEquals(header.getSampleNamesInOrder().size(), 161);
+        final List<VariantContext> records = vcf.getValue();
+        Assert.assertEquals(records.size(), 1227);
     }
 
 }

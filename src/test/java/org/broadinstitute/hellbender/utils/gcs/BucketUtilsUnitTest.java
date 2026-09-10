@@ -2,7 +2,6 @@ package org.broadinstitute.hellbender.utils.gcs;
 
 import com.google.cloud.storage.StorageException;
 import com.google.cloud.storage.contrib.nio.CloudStorageConfiguration;
-import com.google.cloud.storage.contrib.nio.CloudStorageFileSystemProvider;
 import com.google.cloud.storage.contrib.nio.SeekableByteChannelPrefetcher;
 import htsjdk.samtools.util.IOUtil;
 import org.broadinstitute.hellbender.GATKBaseTest;
@@ -12,14 +11,13 @@ import org.broadinstitute.hellbender.testutils.MiniClusterUtils;
 import org.broadinstitute.hellbender.utils.config.ConfigFactory;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
 import org.testng.Assert;
+import org.testng.SkipException;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.nio.channels.SeekableByteChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -85,7 +83,8 @@ public final class BucketUtilsUnitTest extends GATKBaseTest {
                 {"file:///local/file", false},
                 {"http://www.somewhere.com", true},
                 {"https://www.somewhere.com", true},
-                {"gs://abucket/bucket", true}
+                {"gs://abucket/bucket", true},
+                {"gs://abucket_with_underscores", true},
         };
     }
 
@@ -201,6 +200,11 @@ public final class BucketUtilsUnitTest extends GATKBaseTest {
         final String src = publicTestDir + "empty.vcf";
         File dest = createTempFile("copy-empty", ".vcf");
 
+        // see https://github.com/eclipse/jetty.project/issues/8549
+        if (isGATKDockerContainer()) {
+            // for the docker tests, the test dependencies are in a separate jar
+            throw new SkipException("skipping due to jetty jar parsing issues (https://github.com/eclipse/jetty.project/issues/8549)");
+        }
         MiniClusterUtils.runOnIsolatedMiniCluster( cluster -> {
             final String intermediate = BucketUtils.randomRemotePath(MiniClusterUtils.getWorkingDir(cluster).toString(), "test-copy-empty", ".vcf");
             Assert.assertTrue(BucketUtils.isHadoopUrl(intermediate), "!BucketUtils.isHadoopUrl(intermediate)");

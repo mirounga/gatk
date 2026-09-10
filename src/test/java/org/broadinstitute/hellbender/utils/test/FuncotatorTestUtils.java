@@ -23,10 +23,7 @@ import org.broadinstitute.hellbender.tools.funcotator.dataSources.gencode.Gencod
 import org.broadinstitute.hellbender.tools.funcotator.dataSources.gencode.GencodeFuncotationFactory;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
-import org.broadinstitute.hellbender.utils.codecs.gtf.GencodeGtfCodec;
-import org.broadinstitute.hellbender.utils.codecs.gtf.GencodeGtfFeature;
-import org.broadinstitute.hellbender.utils.codecs.gtf.GencodeGtfFeatureBaseData;
-import org.broadinstitute.hellbender.utils.codecs.gtf.GencodeGtfTranscriptFeature;
+import org.broadinstitute.hellbender.utils.codecs.gtf.*;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
 import org.broadinstitute.hellbender.utils.param.ParamUtils;
 import org.broadinstitute.hellbender.utils.reference.ReferenceBases;
@@ -293,17 +290,17 @@ public class FuncotatorTestUtils {
                         GencodeGtfFeature.GenomicPhase.DOT,
                         "FakeGeneID",
                         "FakeTranscriptID",
-                        GencodeGtfFeature.KnownGeneBiotype.PROTEIN_CODING.toString(),
+                        GencodeGTFFieldConstants.KnownGeneBiotype.PROTEIN_CODING.toString(),
                         null,
                         "FakeGeneName",
-                        GencodeGtfFeature.KnownGeneBiotype.PROTEIN_CODING.toString(),
+                        GencodeGTFFieldConstants.KnownGeneBiotype.PROTEIN_CODING.toString(),
                         null,
                         "FakeTranscriptName",
                         -1,
                         null,
-                        GencodeGtfFeature.LocusLevel.AUTOMATICALLY_ANNOTATED,
-                        Collections.emptyList(),
-                        null)
+                        GencodeGTFFieldConstants.LocusLevel.AUTOMATICALLY_ANNOTATED.toString(),
+                        Collections.emptyList()
+                )
         );
     }
 
@@ -464,9 +461,10 @@ public class FuncotatorTestUtils {
      *
      * @param dummyTranscriptName An aritrary string.  Never {@code null}
      * @param dummyVariantContext An aritrary {@link VariantContext}.  Never {@code null}
+     * @param gencodeVersion Should be a valid gencode version.  Never {@code null}
      * @return Never {@code null}
      */
-    public static Funcotation createDummyGencodeFuncotation(final String dummyTranscriptName, final VariantContext dummyVariantContext) {
+    public static Funcotation createDummyGencodeFuncotation(final String dummyTranscriptName, final VariantContext dummyVariantContext, final String gencodeVersion) {
         Utils.nonNull(dummyTranscriptName);
         Utils.nonNull(dummyVariantContext);
         return createGencodeFuncotation("GENE","b37", dummyVariantContext.getContig(), dummyVariantContext.getStart(),dummyVariantContext.getEnd(),
@@ -477,7 +475,10 @@ public class FuncotatorTestUtils {
         1, 1500, 1500,
         " ", " ",
         "p.L300P", 0.5,
-        "ACTGATCGATCGA",Collections.singletonList("FAKE00002.5"), "27");
+        "ACTGATCGATCGA",Collections.singletonList("FAKE00002.5"), gencodeVersion);
+    }
+    public static Funcotation createDummyGencodeFuncotation(final String dummyTranscriptName, final VariantContext dummyVariantContext) {
+        return createDummyGencodeFuncotation(dummyTranscriptName, dummyVariantContext, "27");
     }
 
     /**

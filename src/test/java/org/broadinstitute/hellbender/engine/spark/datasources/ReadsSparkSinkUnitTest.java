@@ -19,6 +19,7 @@ import org.broadinstitute.hellbender.utils.read.ReadsWriteFormat;
 import org.broadinstitute.hellbender.GATKBaseTest;
 import org.broadinstitute.hellbender.testutils.MiniClusterUtils;
 import org.testng.Assert;
+import org.testng.SkipException;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.DataProvider;
@@ -38,6 +39,11 @@ public class ReadsSparkSinkUnitTest extends GATKBaseTest {
 
     @BeforeClass(alwaysRun = true)
     private void setupMiniCluster() throws IOException {
+        // see https://github.com/eclipse/jetty.project/issues/8549
+        if (isGATKDockerContainer()) {
+            // for the docker tests, the test dependencies are in a separate jar
+            throw new SkipException("skipping due to jetty jar parsing issues (https://github.com/eclipse/jetty.project/issues/8549)");
+        }
         cluster = MiniClusterUtils.getMiniCluster();
     }
 
@@ -65,27 +71,6 @@ public class ReadsSparkSinkUnitTest extends GATKBaseTest {
                                                 publicTestDir + "human_g1k_v37.chr17_1Mb.fasta", ".cram", true, true, 100L},
 
                 {testDataDir + "tools/BQSR/HiSeq.1mb.1RG.2k_lines.bam", "ReadsSparkSinkUnitTest6", null, ".sam", true, true, 100L},
-        };
-    }
-
-    @DataProvider(name = "loadReadsADAM")
-    public Object[][] loadReadsADAM() {
-        return new Object[][]{
-                {testDataDir + "tools/BQSR/HiSeq.1mb.1RG.2k_lines.bam", "ReadsSparkSinkUnitTest1_ADAM"},
-                {testDataDir + "tools/BQSR/expected.HiSeq.1mb.1RG.2k_lines.alternate.recalibrated.DIQ.bam", "ReadsSparkSinkUnitTest2_ADAM"},
-
-                // This file has unmapped reads that are set to the position of their mates -- the ordering check
-                // in the tests below will fail if our ordering of these reads relative to the mapped reads
-                // is not consistent with the definition of coordinate sorting as defined in
-                // htsjdk.samtools.SAMRecordCoordinateComparator
-                //
-                // This test is currently disabled, as this test case doesn't pass for ADAM (we have an open ticket for this:
-                // https://github.com/broadinstitute/gatk/issues/1254)
-                // {testDataDir + "tools/BQSR/CEUTrio.HiSeq.WGS.b37.ch20.1m-1m1k.NA12878.bam", "ReadsSparkSinkUnitTest3_ADAM"},
-
-                //This test is disabled because it fails on travis (passes locally though)
-                //https://github.com/broadinstitute/gatk/issues/1254
-                // {NA12878_chr17_1k_BAM, "ReadsSparkSinkUnitTest4_ADAM"}
         };
     }
 
@@ -235,47 +220,5 @@ public class ReadsSparkSinkUnitTest extends GATKBaseTest {
         JavaRDD<GATKRead> rddParallelReads2 = readSource.getParallelReads(new GATKPath(outputFile.getAbsolutePath()), referencePath);
         // reads are not globally sorted, so don't test that
         Assert.assertEquals(rddParallelReads.count(), rddParallelReads2.count());
-    }
-
-    @Test(enabled = false, dataProvider = "loadReadsADAM", groups = "spark")
-    public void readsSinkADAMTest(String inputBam, String outputDirectoryName) throws IOException {
-        // Since the test requires that we not create the actual output directory in advance,
-        // we instead create its parent directory and mark it for deletion on exit. This protects
-        // us from naming collisions across multiple instances of the test suite.
-        final File outputParentDirectory = createTempDir(outputDirectoryName + "_parent");
-        final File outputDirectory = new File(outputParentDirectory, outputDirectoryName);
-        final GATKPath inputBamSpecifier = new GATKPath(inputBam);
-
-        JavaSparkContext ctx = SparkContextFactory.getTestSparkContext();
-
-        ReadsSparkSource readSource = new ReadsSparkSource(ctx);
-        JavaRDD<GATKRead> rddParallelReads = readSource.getParallelReads(inputBamSpecifier, null)
-                .filter(r -> !r.isUnmapped()); // filter out unmapped reads (see comment below)
-        SAMFileHeader header = readSource.getHeader(inputBamSpecifier, null);
-
-        ReadsSparkSink.writeReads(ctx, outputDirectory.getAbsolutePath(), null, rddParallelReads, header, ReadsWriteFormat.ADAM, 0, null, true, SBIIndexWriter.DEFAULT_GRANULARITY);
-
-        JavaRDD<GATKRead> rddParallelReads2 = readSource.getADAMReads(new GATKPath(outputDirectory.getAbsolutePath()), null, header);
-        Assert.assertEquals(rddParallelReads.count(), rddParallelReads2.count());
-
-        // Test the round trip
-        List<GATKRead> samList = new ArrayList<>(rddParallelReads.collect());//make a mutable copy for sort
-        List<GATKRead> adamList = new ArrayList<>(rddParallelReads2.collect());//make a mutable copy for sort
-        Comparator<GATKRead> comparator = new ReadCoordinateComparator(header);
-        samList.sort(comparator);
-        adamList.sort(comparator);
-        for (int i = 0; i < samList.size(); i++) {
-            SAMRecord expected = samList.get(i).convertToSAMRecord(header);
-            SAMRecord observed = adamList.get(i).convertToSAMRecord(header);
-            // manually test equality of some fields, as there are issues with roundtrip BAM -> ADAM -> BAM
-            // see https://github.com/bigdatagenomics/adam/issues/823
-            Assert.assertEquals(observed.getReadName(), expected.getReadName(), "readname");
-            Assert.assertEquals(observed.getAlignmentStart(), expected.getAlignmentStart(), "getAlignmentStart");
-            Assert.assertEquals(observed.getAlignmentEnd(), expected.getAlignmentEnd(), "getAlignmentEnd");
-            Assert.assertEquals(observed.getFlags(), expected.getFlags(), "getFlags");
-            Assert.assertEquals(observed.getMappingQuality(), expected.getMappingQuality(), "getMappingQuality");
-            Assert.assertEquals(observed.getMateAlignmentStart(), expected.getMateAlignmentStart(), "getMateAlignmentStart");
-            Assert.assertEquals(observed.getCigar(), expected.getCigar(), "getCigar");
-        }
     }
 }

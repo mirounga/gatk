@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 env:
-  CROMWELL_VERSION: 51
+  CROMWELL_VERSION: 84
   TERM: dumb
   GRADLE_OPTS: "-Xmx2048m -Dorg.gradle.daemon=false"
   HELLBENDER_TEST_INPUTS: gs://hellbender/test/resources/
@@ -32,7 +32,7 @@ jobs:
         env:
           GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
         if: "${{ env.GCP_CREDENTIALS != '' }}"
-        run: echo "::set-output name=defined::true"
+        run: echo defined=true >> $GITHUB_OUTPUT
 
 
   buildDocker:
@@ -40,29 +40,31 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: checkout gatk
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
+
+      - uses: ./.github/actions/purge-runner-disk
 
       - name: Extract metadata (tags, labels) for Docker
         id: meta
-        uses: docker/metadata-action@98669ae865ea3cffbcbaa878cf57c20bbf1c6c38
+        uses: docker/metadata-action@v4
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=${{github.sha}}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v1
+        uses: docker/setup-buildx-action@v2
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@ad44023a93711e3deb337508980b4b5e9bcdc5dc
+        uses: docker/build-push-action@v4
         with:
           context: .
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           outputs: type=docker,dest=/tmp/myimage.tar
       # By uploading the docker image as an artifact we save ourselves the requirement for the image to be built with ghcr push permission
-      - name: Upload docker image as artifact
-        uses: actions/upload-artifact@v2
+      - name: Upload docker image as artifact 
+        uses: actions/upload-artifact@v4
         with:
           name: gatkDockerImage
           path: /tmp/myimage.tar
@@ -73,34 +75,26 @@ jobs:
     needs: check-secrets
     strategy:
       matrix:
-        java: [ 8, 11 ]
+        java: [ 17.0.6+10 ]
         experimental: [ false ]
-        scalaVersion: [ 2.11, 2.12 ]
+        scalaVersion: [ 2.13 ]
         testType: [ cloud, integration, unit ]
-        exclude:
-          - java: 11
-            scalaVersion: 2.11
-          - java: 8
-            scalaVersion: 2.12
-          - java: 8
-            testType: integration
-          - java: 8
-            testType: unit
       fail-fast: false
     continue-on-error: ${{ matrix.experimental }}
     env:
       TEST_TYPE: ${{ matrix.testType }}
       SCALA_VERSION: ${{ matrix.scalaVersion }}
-    name: Java ${{ matrix.Java }} build and test ${{ matrix.testType }}
+    name: ${{ matrix.testType }} build and test Java ${{ matrix.Java }}
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           fetch-depth: 0
+      - uses: ./.github/actions/purge-runner-disk
       - name: 'Set up java ${{ matrix.Java }}'
-        uses: actions/setup-java@v2
+        uses: actions/setup-java@v3
         with:
           java-version: ${{ matrix.Java }}
-          distribution: 'adopt'
+          distribution: 'temurin'
           cache: gradle
 
       - name: 'Compile with Gradle'
@@ -110,7 +104,7 @@ jobs:
       #Google Cloud stuff
       - id: 'gcloud-auth'
         if: needs.check-secrets.outputs.google-credentials == 'true'
-        uses: google-github-actions/auth@v0
+        uses: google-github-actions/auth@v3
         with:
           credentials_json: ${{ secrets.GCP_CREDENTIALS }}
           project_id: ${{ env.HELLBENDER_TEST_PROJECT }}
@@ -122,7 +116,7 @@ jobs:
 
       - name: 'Set up Cloud SDK'
         if: needs.check-secrets.outputs.google-credentials == 'true'
-        uses: google-github-actions/setup-gcloud@v0
+        uses: google-github-actions/setup-gcloud@v2
 
       - name: pull lfs files
         run: git lfs pull
@@ -134,7 +128,7 @@ jobs:
         if: ${{ needs.check-secrets.outputs.google-credentials == 'true' || matrix.testType != 'cloud'}}
         id: jacoco-tests
         run: |
-          ./gradlew -Dscala.version=${{ env.SCALA_VERSION }} jacocoTestReport
+          ./gradlew --daemon -Dscala.version=${{ env.SCALA_VERSION }} jacocoTestReport
 
       - uses: ./.github/actions/upload-gatk-test-results
         if: always()
@@ -154,9 +148,9 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        java: [ 8 ]
+        java: [ 17.0.6+10 ]
         experimental: [ false ]
-        scalaVersion: [ 2.11 ]
+        scalaVersion: [ 2.13 ]
         testType: [ integration, unit, variantcalling, conda ]
       fail-fast: false
     continue-on-error: ${{ matrix.experimental }}
@@ -164,22 +158,24 @@ jobs:
       TEST_TYPE: ${{ matrix.testType }}
       SCALA_VERSION: ${{ matrix.scalaVersion }}
 
-    name: Java ${{ matrix.Java }} test on docker ${{matrix.testType}}
+    name: ${{ matrix.testType }} test on docker Java ${{ matrix.Java }}
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           fetch-depth: 0 #TODO make this shallow
 
+      - uses: ./.github/actions/purge-runner-disk
+
       - name: 'Set up java ${{ matrix.Java }}'
-        uses: actions/setup-java@v2
+        uses: actions/setup-java@v3
         with:
           java-version: ${{ matrix.Java }}
-          distribution: 'adopt'
+          distribution: 'temurin'
           cache: gradle
 
       #Google Cloud stuff
       - id: 'gcloud-auth'
-        uses: google-github-actions/auth@v0
+        uses: google-github-actions/auth@v3
         if: needs.check-secrets.outputs.google-credentials == 'true'
         with:
           credentials_json: ${{ secrets.GCP_CREDENTIALS }}
@@ -192,7 +188,7 @@ jobs:
 
       - name: 'Set up Cloud SDK'
         if: needs.check-secrets.outputs.google-credentials == 'true'
-        uses: google-github-actions/setup-gcloud@v0
+        uses: google-github-actions/setup-gcloud@v2
 
       - name: build test jars
         run: ./gradlew clean shadowTestClassJar shadowTestJar
@@ -208,7 +204,7 @@ jobs:
           cp scripts/docker/dockertest.gradle .
 
       - name: Download docker image artifact
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v4
         with:
           name: gatkDockerImage
           path: /tmp
@@ -234,10 +230,6 @@ jobs:
             bash --init-file /gatk/gatkenv.rc /root/run_unit_tests.sh;
           TEST_EXIT_VALUE=$?;
           $( exit ${TEST_EXIT_VALUE} );
-          sudo chmod -R a+w build/reports/;
-          mkdir build/reports/tests/test \
-           && cp -rp build/reports/tests/testOnPackagedReleaseJar/* build/reports/tests/test \
-           && rm -r build/reports/tests/testOnPackagedReleaseJar;
 
       - uses: ./.github/actions/upload-gatk-test-results
         if: always()
@@ -256,9 +248,16 @@ jobs:
     runs-on: ubuntu-latest
     name: Validate script WDLs using womtools
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
-          fetch: 0
+          fetch-depth: 0
+      - uses: ./.github/actions/purge-runner-disk
+      - name: Set up java 17
+        uses: actions/setup-java@v3
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
       - uses: ./.github/actions/install-cromwell
         with:
           CROMWELL_VERSION: ${{ env.CROMWELL_VERSION }}
@@ -270,14 +269,15 @@ jobs:
     runs-on: ubuntu-latest
     name: Validate generated WDLs using womtools
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
-          fetch: 0
-      - name: Set up java 8
-        uses: actions/setup-java@v2
+          fetch-depth: 0
+      - uses: ./.github/actions/purge-runner-disk
+      - name: Set up java 17
+        uses: actions/setup-java@v3
         with:
-          java-version: '8'
-          distribution: 'adopt'
+          java-version: '17'
+          distribution: 'temurin'
           cache: gradle
       - uses: ./.github/actions/install-cromwell
         with:
@@ -291,20 +291,21 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        wdlTest: [ 'RUN_CNV_GERMLINE_COHORT_WDL', 'RUN_CNV_GERMLINE_CASE_WDL', 'RUN_CNV_SOMATIC_WDL', 'RUN_M2_WDL', 'RUN_CNN_WDL' ]
+        wdlTest: [ 'RUN_CNV_GERMLINE_COHORT_WDL', 'RUN_CNV_GERMLINE_CASE_WDL', 'RUN_CNV_SOMATIC_WDL', 'RUN_M2_WDL', 'RUN_VCF_SITE_LEVEL_FILTERING_WDL' ]
     continue-on-error: true
     name: WDL test ${{ matrix.wdlTest }} on cromwell
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           fetch-depth: 0
+      - uses: ./.github/actions/purge-runner-disk
       - name: pull lfs files
         run: git lfs pull
-      - name: Set up java 8
-        uses: actions/setup-java@v2
+      - name: Set up java 17
+        uses: actions/setup-java@v3
         with:
-          java-version: '8'
-          distribution: 'adopt'
+          java-version: '17'
+          distribution: 'temurin'
           cache: gradle
       - uses: ./.github/actions/install-cromwell
         with:
@@ -344,8 +345,8 @@ jobs:
           echo "Running M2 WDL";
           bash scripts/m2_cromwell_tests/run_m2_wdl.sh;
 
-      - name: "CNN_WDL_TEST"
-        if: ${{ matrix.wdlTest == 'RUN_CNN_WDL' }}
+      - name: "VCF_SITE_LEVEL_FILTERING_WDL_TEST"
+        if: ${{ matrix.wdlTest == 'RUN_VCF_SITE_LEVEL_FILTERING_WDL' }}
         run: |
-          echo "Running CNN WDL";
-          bash scripts/cnn_variant_cromwell_tests/run_cnn_variant_wdl.sh;
+          echo "Running VCF Site Level Filtering WDL";
+          bash scripts/vcf_site_level_filtering_cromwell_tests/run_vcf_site_level_filtering_wdl.sh;

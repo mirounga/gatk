@@ -36,6 +36,8 @@ public class FuncotatorArgumentDefinitions {
     public static final String TRANSCRIPT_SELECTION_MODE_LONG_NAME = "transcript-selection-mode";
     public static final TranscriptSelectionMode TRANSCRIPT_SELECTION_MODE_DEFAULT_VALUE = TranscriptSelectionMode.CANONICAL;
 
+    public static final String PREFER_MANE_TRANSCRIPT_MODE = "prefer-mane-transcripts";
+
     /**
      * Do not give this a static default value or the integration tests will get hosed.
      */
@@ -68,6 +70,8 @@ public class FuncotatorArgumentDefinitions {
     public static final String MIN_NUM_BASES_FOR_SEGMENT_FUNCOTATION = "min-num-bases-for-segment-funcotation";
 
     public static final String CUSTOM_VARIANT_CLASS_ORDER_FILE = "custom-variant-classification-order";
+
+    public static final String SPLICE_SITE_WINDOW_SIZE = "splice-site-window-size";
 
     // ------------------------------------------------------------
     // Helper Types:

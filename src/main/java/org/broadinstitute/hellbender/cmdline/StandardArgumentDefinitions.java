@@ -26,6 +26,7 @@ public final class StandardArgumentDefinitions {
     public static final String ENABLE_ALL_ANNOTATIONS = "enable-all-annotations";
     public static final String CREATE_OUTPUT_BAM_INDEX_LONG_NAME = "create-output-bam-index";
     public static final String CREATE_OUTPUT_BAM_MD5_LONG_NAME = "create-output-bam-md5";
+    public static final String OUTPUT_CRAM_VERSION_LONG_NAME = "output-cram-version";
     public static final String CREATE_OUTPUT_VARIANT_INDEX_LONG_NAME = "create-output-variant-index";
     public static final String CREATE_OUTPUT_VARIANT_MD5_LONG_NAME = "create-output-variant-md5";
     public static final String MAX_VARIANTS_PER_SHARD_LONG_NAME = "max-variants-per-shard";
@@ -45,7 +46,8 @@ public final class StandardArgumentDefinitions {
     public static final String SITES_ONLY_LONG_NAME = "sites-only-vcf-output";
     public static final String INVALIDATE_PREVIOUS_FILTERS_LONG_NAME = "invalidate-previous-filters";
     public static final String SORT_ORDER_LONG_NAME = "sort-order";
-
+    public static final String FLOW_ORDER_FOR_ANNOTATIONS = "flow-order-for-annotations";
+    public static final String VARIANT_OUTPUT_INTERVAL_FILTERING_MODE_LONG_NAME = "variant-output-filtering";
 
     public static final String INPUT_SHORT_NAME = "I";
     public static final String OUTPUT_SHORT_NAME = "O";

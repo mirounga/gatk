@@ -9,6 +9,7 @@ import org.broadinstitute.hellbender.CommandLineProgramTest;
 import org.broadinstitute.hellbender.GATKBaseTest;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.engine.FeatureDataSource;
+import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.testutils.ArgumentsBuilder;
 import org.broadinstitute.hellbender.testutils.CommandLineProgramTester;
@@ -30,6 +31,8 @@ public class ReblockGVCFIntegrationTest extends CommandLineProgramTest {
     private static final String hg38_reference_20_21 = largeFileTestDir + "Homo_sapiens_assembly38.20.21.fasta";
     private static final String b37_reference_20_21 = largeFileTestDir + "human_g1k_v37.20.21.fasta";
     public static final String WARP_PROD_REBLOCKING_ARGS = " -do-qual-approx --floor-blocks -GQB 20 -GQB 30 -GQB 40 ";
+
+    private static final String pf_reference = largeFileTestDir + "PlasmoDB-61_Pfalciparum3D7_Genome.fasta";
 
     @DataProvider(name = "getCommandLineArgsForExactTest")
     public Object[][] getCommandLineArgsForExactTest() {
@@ -339,6 +342,7 @@ public class ReblockGVCFIntegrationTest extends CommandLineProgramTest {
     }
 
     @Test(expectedExceptions = UserException.class)
+    //ReblockGVCF can take multiple inputs, but only if they're non-overlapping shards from the same sample
     public void testMixedSamples() {
         final File output = createTempFile("reblockedgvcf", ".vcf");
         final ArgumentsBuilder args = new ArgumentsBuilder();
@@ -441,5 +445,304 @@ public class ReblockGVCFIntegrationTest extends CommandLineProgramTest {
         Assert.assertEquals(outVCs.size(), 2);
         Assert.assertEquals(outVCs.get(0).getStart(), 1);
         Assert.assertEquals(outVCs.get(1).getStart(), 1);
+    }
+
+    @Test
+    public void testTreeScoreThreshold() {
+        final File inputGvcf = new File(getToolTestDataDir() + "treeScoreGvcf.g.vcf");
+        final File output = createTempFile("reblockedgvcf", ".vcf");
+
+        final ArgumentsBuilder args = new ArgumentsBuilder();
+        args.add("V", inputGvcf)
+                .addOutput(output)
+                .addReference(hg38_reference_20_21)
+                .add(ReblockGVCF.TREE_SCORE_THRESHOLD_LONG_NAME, 0.3)
+                .add(ReblockGVCF.ANNOTATIONS_TO_KEEP_LONG_NAME, "TREE_SCORE")
+                .add("do-qual-approx", true);
+
+        runCommandLine(args);
+
+        final List<VariantContext> outVCs = VariantContextTestUtils.readEntireVCFIntoMemory(output.getAbsolutePath()).getRight();
+        for (VariantContext vc : outVCs) {
+            if(vc.getStart() == 69511) {
+                Assert.assertEquals(vc.getGenotype(0).getGQ(), 99, "Site chr20:69511 should not have been changed from GQ 99.");
+            }
+            if(vc.getStart() == 69512) {
+                Assert.assertEquals(vc.getGenotype(0).getGQ(), 99, "Ref block chr20:69512 should not have been changed from GQ 99.");
+            }
+            if(vc.getStart() == 69767) {
+                Assert.assertEquals(vc.getGenotype(0).getGQ(), 0, "Ref block chr20:69767 should have been grouped with GQ 0 block.");
+                Assert.assertEquals(vc.getEnd(), 69783, "Ref block chr20:69767 should have been expanded to include site 69771.");
+            }
+            Assert.assertNotEquals(vc.getStart(), 69771, "Site chr20:69771 should have been made into a ref block due to low TREE_SCORE.");
+            if(vc.getStart() == 69785){
+                Assert.assertEquals(vc.getGenotype(0).getGQ(), 0, "Site chr20:69785 should have been made GQ 0 due to missing TREE_SCORE");
+            }
+            if(!vc.isReferenceBlock()) {
+                Assert.assertTrue(vc.hasAttribute(GATKVCFConstants.TREE_SCORE));
+            }
+        }
+    }
+
+    /**
+     * Regression test for https://github.com/broadinstitute/gatk/issues/7884 using 2-record snippet of gVCF discussed there.
+     */
+    @Test
+    public void testFirstPositionOnContigNotDropped() {
+        final File input = getTestFile("testFirstPositionOnContigNotDropped.g.vcf");
+        final File output = createTempFile("reblockedgvcf", ".vcf");
+
+        final ArgumentsBuilder args = new ArgumentsBuilder();
+        args.addReference(new File(hg38Reference))
+                .add("V", input)
+                .add("L", "chr12:18282464") // in the original gVCF, 18282464 is the first variant position on chr12 that is greater than the dropped position 18173860 on chr13
+                .add("L", "chr13:18173860")
+                .addOutput(output);
+        runCommandLine(args);
+
+        // we only check that records at both positions are retained
+        final List<VariantContext> outVCs = VariantContextTestUtils.readEntireVCFIntoMemory(output.getAbsolutePath()).getRight();
+        Assert.assertEquals(outVCs.get(0).getContig(), "chr12");
+        Assert.assertEquals(outVCs.get(0).getStart(), 18282464);
+        Assert.assertEquals(outVCs.get(1).getContig(), "chr13");
+        Assert.assertEquals(outVCs.get(1).getStart(), 18173860);
+    }
+
+    @Test
+    public void testTreeScoreWithNoAnnotation() {
+        final File output = createTempFile("reblockedgvcf", ".vcf");
+
+        final ArgumentsBuilder args = new ArgumentsBuilder();
+        args.add("V", largeFileTestDir + "NA12878.prod.chr20snippet.g.vcf.gz")
+                .addOutput(output)
+                .addReference(b37_reference_20_21)
+                .add(ReblockGVCF.TREE_SCORE_THRESHOLD_LONG_NAME, 0.3)
+                .add("do-qual-approx", true);
+
+        Assert.assertThrows(UserException.class, () -> runCommandLine(args));
+    }
+
+    @Test
+    public void testDragenGvcfs() {
+        final File input = getTestFile("dragen.g.vcf");
+        final File output = createTempFile("reblockedgvcf", ".vcf");
+
+        final ArgumentsBuilder args = new ArgumentsBuilder();
+        args.addReference(new File(hg38Reference))
+                .add("V", input)
+                .add("L", "chr1:939436")
+                .addOutput(output);
+        runCommandLine(args);
+
+        final VCFHeader outHeader = VariantContextTestUtils.readEntireVCFIntoMemory(output.getAbsolutePath()).getLeft();
+        final VariantContext outVC = VariantContextTestUtils.readEntireVCFIntoMemory(output.getAbsolutePath()).getRight().get(0);
+        // The extra allele was dropped so this site is now one alt allele and the <NON_REF> allele
+        Assert.assertEquals(outVC.getAlternateAlleles().size(), 2);
+        final Genotype g = outVC.getGenotype(0);
+        Assert.assertEquals(g.getExtendedAttribute(GATKVCFConstants.ALLELE_FRACTION_KEY),"1.00,0.00");
+        Assert.assertEquals(g.getExtendedAttribute(GATKVCFConstants.F1R2_KEY), "0,3,0");
+        Assert.assertEquals(g.getExtendedAttribute(GATKVCFConstants.F2R1_KEY), "0,3,0");
+        for (String attribute : g.getExtendedAttributes().keySet()) {
+            final VCFHeaderLineCount countType = outHeader.getFormatHeaderLine(attribute).getCountType();
+            if (countType.equals(VCFHeaderLineCount.A)) {
+                Assert.assertEquals(((String) g.getExtendedAttribute(attribute)).split(",").length, 2);
+            }
+            if (countType.equals(VCFHeaderLineCount.R)) {
+                Assert.assertEquals(((String) g.getExtendedAttribute(attribute)).split(",").length, 3);
+            }
+            if (countType.equals(VCFHeaderLineCount.G)) {
+                Assert.assertEquals(((String) g.getExtendedAttribute(attribute)).split(",").length, 6);
+            }
+        }
+    }
+
+    @Test
+    public void testFilters() throws IOException {
+        final File input = getTestFile("dragen.g.vcf");
+        final File output = createTempFile("reblockedgvcf", ".vcf");
+
+        final ArgumentsBuilder args = new ArgumentsBuilder();
+        args.addReference(new File(hg38Reference))
+                .add("V", input)
+                .add("L", "chr1")
+                .add(ReblockGVCF.KEEP_SITE_FILTERS_LONG_NAME, true)
+                .addOutput(output);
+        runCommandLine(args);
+
+        final VariantContext filteredVC = VariantContextTestUtils.readEntireVCFIntoMemory(output.getAbsolutePath()).getRight().get(3); // last site in the file
+        Assert.assertTrue(filteredVC.isFiltered());
+
+        final VariantContext unfilteredVC = VariantContextTestUtils.readEntireVCFIntoMemory(output.getAbsolutePath()).getRight().get(1);
+        Assert.assertFalse(unfilteredVC.isFiltered());
+
+        final VariantContext filteredRefBlockVC = VariantContextTestUtils.readEntireVCFIntoMemory(output.getAbsolutePath()).getRight().get(0);
+        Assert.assertFalse(filteredRefBlockVC.isFiltered()); // Ref block is unfiltered even though the input RefBlock and low qual variant were both filtered
+        Assert.assertEquals(filteredRefBlockVC.getGenotype(0).getDP(), 12); // Ref block is combination of filtered variant with depth 22 and filtered ref block with depth 1
+    }
+
+    @Test
+    public void testMovingFilters() throws IOException {
+        final File input = getTestFile("dragen.g.vcf");
+        final File output = createTempFile("reblockedgvcf", ".vcf");
+
+        final ArgumentsBuilder args = new ArgumentsBuilder();
+        args.addReference(new File(hg38Reference))
+                .add("V", input)
+                .add("L", "chr1")
+                .add(ReblockGVCF.ADD_FILTERS_TO_GENOTYPE, true)
+                .addOutput(output);
+        runCommandLine(args);
+
+        final VariantContext filteredVC = VariantContextTestUtils.readEntireVCFIntoMemory(output.getAbsolutePath()).getRight().get(3); // last site in the file
+        Assert.assertFalse(filteredVC.isFiltered());
+        Assert.assertTrue(filteredVC.getGenotype(0).isFiltered());
+
+        final VariantContext unfilteredVC = VariantContextTestUtils.readEntireVCFIntoMemory(output.getAbsolutePath()).getRight().get(1);
+        Assert.assertFalse(unfilteredVC.isFiltered());
+        Assert.assertFalse(unfilteredVC.getGenotype(0).isFiltered());
+
+        final VariantContext filteredRefBlockVC = VariantContextTestUtils.readEntireVCFIntoMemory(output.getAbsolutePath()).getRight().get(0);
+        Assert.assertFalse(filteredRefBlockVC.isFiltered()); // Ref block is unfiltered even though the input RefBlock and low qual variant were both filtered
+        Assert.assertFalse(filteredRefBlockVC.getGenotype(0).isFiltered()); // Ref block genotype is also unfiltered
+    }
+
+    @Test
+    public void testRemovingFormatAnnotations() {
+        final File input = getTestFile("dragen.g.vcf");
+        final File output = createTempFile("reblockedgvcf", ".vcf");
+        final String priKey = "PRI";
+
+        final ArgumentsBuilder args = new ArgumentsBuilder();
+        args.addReference(new File(hg38Reference))
+                .add("V", input)
+                .add(ReblockGVCF.ANNOTATIONS_TO_REMOVE_LONG_NAME, priKey)
+                .addOutput(output);
+        runCommandLine(args);
+
+        final Pair<VCFHeader, List<VariantContext>> outVCF = VariantContextTestUtils.readEntireVCFIntoMemory(output.getAbsolutePath());
+        Assert.assertNull(outVCF.getLeft().getFormatHeaderLine(priKey));
+        final List<VariantContext> outVCs = outVCF.getRight();
+        for(VariantContext vc : outVCs){
+            Assert.assertNull(vc.getGenotype(0).getExtendedAttribute(priKey));
+        }
+    }
+
+    @Test
+    public void testNonGVCFInput() {
+        final File output = createTempFile("reblockedgvcf", ".vcf");
+
+        final ArgumentsBuilder args = new ArgumentsBuilder();
+        args.addReference(new File(b37_reference_20_21))
+                .add("V", "src/test/resources/large/NA12878.HiSeq.WGS.b37_decoy.indel.recalibrated.chr20.vcf")
+                .addOutput(output);
+
+        Assert.assertThrows(GATKException.class, () -> runCommandLine(args));
+    }
+
+    @Test
+    public void testAddedHcAsAnnotations() throws IOException {
+
+        final File input = new File(largeFileTestDir + "reblockGVCFs_AS_test.p_falciparum.g.vcf");
+        final File output = createTempFile("reblockedgvcf", ".vcf");
+        final File expected = new File(largeFileTestDir + "expected.reblockGVCFs_AS_test.p_falciparum.rb.g.vcf");
+
+        final ArgumentsBuilder args = new ArgumentsBuilder();
+
+        args.addReference(new File(pf_reference))
+                .add("V", input)
+                .addFlag("do-qual-approx")
+                .add(StandardArgumentDefinitions.ADD_OUTPUT_VCF_COMMANDLINE, "false")
+                .add("A", "AssemblyComplexity")
+                .addFlag("floor-blocks")
+                .add("GQB", 20)
+                .add("GQB", 30)
+                .add("GQB", 40)
+                .addOutput(output);
+
+        runCommandLine(args);
+
+        IntegrationTestSpec.assertEqualTextFiles(
+                output.toPath(),
+                expected.toPath(),
+                "#",
+                true
+        );
+    }
+    @Test
+    public void testSpanDelRegression() throws IOException {
+
+        final File input = getTestFile("reblock_cleanup_bug_variant.g.vcf");
+        final File output = createTempFile("reblockedgvcf", ".vcf");
+
+        final ArgumentsBuilder args = new ArgumentsBuilder();
+
+        args.addReference(new File(pf_reference))
+                .add("V", input)
+                .addFlag("do-qual-approx")
+                .add(StandardArgumentDefinitions.ADD_OUTPUT_VCF_COMMANDLINE, "false")
+                .add("A", "AssemblyComplexity")
+                .addFlag("floor-blocks")
+                .add("GQB", 20)
+                .add("GQB", 30)
+                .add("GQB", 40)
+                .addOutput(output);
+
+        runCommandLine(args);
+
+        Pair<VCFHeader, List<VariantContext>> actual = VariantContextTestUtils.readEntireVCFIntoMemory(output.getAbsolutePath());
+        List<VariantContext> variants = actual.getRight();
+        Assert.assertEquals(variants.size(), 4);
+        VariantContext v0 = variants.get(0);
+        //crappy deletions are all collapsed into GQ0 ref block
+        Assert.assertEquals(v0.getStart(), 646914);
+        Assert.assertEquals(v0.getAttributeAsInt(VCFConstants.END_KEY, 0), 646953);
+        Assert.assertTrue(v0.getGenotype(0).isHomRef());
+        Assert.assertEquals(v0.getGenotype(0).getGQ(), 0);
+        //no more star alleles because deletions are all gone
+        Assert.assertFalse(variants.stream().anyMatch(v -> v.getAlternateAlleles().contains(Allele.SPAN_DEL)));
+    }
+
+    @Test
+    public void testRemovingAnnotationFromEmptyAttributes() {
+        final File input = getTestFile("gvcfWithNoPRI.vcf");
+        final File output = createTempFile("reblockedgvcf", ".vcf");
+        final ArgumentsBuilder args = new ArgumentsBuilder();
+
+        args.addReference(hg38Reference)
+                .addVCF(input)
+                .addOutput(output)
+                .add("format-annotations-to-remove", "PRI");
+
+        //make sure it doesn't error
+        runCommandLine(args);
+    }
+
+    @Test
+    public void testNoCallWhenGQ0InNonRefAllele() {
+        final File input = getTestFile("reblockEdgeCase.vcf");
+        final File output = createTempFile("reblockedgvcf", ".vcf");
+        final ArgumentsBuilder args = new ArgumentsBuilder();
+
+        args.addReference(hg38Reference)
+                .add("V", input)
+                .add("do-qual-approx", true)
+                .add("floor-blocks", true)
+                .add("GQB", 20)
+                .add("GQB", 30)
+                .add("GQB", 40)
+                .addOutput(output);
+
+        runCommandLine(args);
+
+        final List<VariantContext> outVCs = VariantContextTestUtils.readEntireVCFIntoMemory(output.getAbsolutePath()).getRight();
+        boolean foundNoCallSite = false;
+        for (VariantContext vc : outVCs) {
+            if (vc.getStart() == 13675308) {
+                Assert.assertEquals(vc.getEnd(), 13675325);
+                Assert.assertEquals(vc.getGenotype(0).getGQ(), 0);
+                foundNoCallSite = true;
+            }
+        }
+        Assert.assertTrue(foundNoCallSite);
     }
 }

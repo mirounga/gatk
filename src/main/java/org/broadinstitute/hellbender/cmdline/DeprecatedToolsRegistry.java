@@ -6,8 +6,8 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * When a tool is removed from GATK (after having been @Deprecated for a suitable period), an entry should
- * be added to this list to issue a message when the user tries to run that tool.
+ * When a tool is removed from GATK (after having been tagged with @DeprecatedFeature for a suitable period), an
+ * entry should be added to this list to issue a message when the user tries to run that tool.
  *
  * NOTE: Picard tools should be listed here as well, since by definition such tools will not be found in
  * the Picard jar.
@@ -22,6 +22,14 @@ public class DeprecatedToolsRegistry {
         // Indicate version in which the tool disappeared, and recommended replacement in parentheses if applicable
         deprecatedTools.put("IndelRealigner", Pair.of("4.0.0.0", "Please use GATK3 to run this tool"));
         deprecatedTools.put("RealignerTargetCreator", Pair.of("4.0.0.0", "Please use GATK3 to run this tool"));
+        deprecatedTools.put("CNNScoreVariants", Pair.of("4.6.1.0",
+                "Please use the replacement tool NVScoreVariants instead, which produces virtually identical results"));
+        deprecatedTools.put("CNNVariantTrain", Pair.of("4.6.1.0",
+                "Please use a version of GATK prior to 4.6.1.0 to run this tool, " +
+                        "or wait for the forthcoming Pytorch-based training tool for NVScoreVariants to be released"));
+        deprecatedTools.put("CNNVariantWriteTensors", Pair.of("4.6.1.0",
+                "Please use a version of GATK prior to 4.6.1.0 to run this tool, " +
+                        "or wait for the forthcoming Pytorch-based training tool for NVScoreVariants to be released"));
     }
 
     /**

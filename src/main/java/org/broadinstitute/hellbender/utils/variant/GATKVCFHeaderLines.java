@@ -1,6 +1,7 @@
 package org.broadinstitute.hellbender.utils.variant;
 
 import htsjdk.variant.vcf.*;
+
 import org.broadinstitute.hellbender.tools.walkers.annotator.*;
 import org.broadinstitute.hellbender.utils.Utils;
 
@@ -83,12 +84,15 @@ public class GATKVCFHeaderLines {
 
     static {
         addInfoLine(new VCFInfoHeaderLine(SB_TABLE_KEY, 4, VCFHeaderLineType.Integer, "Forward/reverse read counts for strand bias tests"));
-        addFormatLine(new VCFFormatHeaderLine(GENOTYPE_QUALITY_BY_ALLELE_BALANCE, 1, VCFHeaderLineType.Integer, ":"));
-        addFormatLine(new VCFFormatHeaderLine(GENOTYPE_QUALITY_BY_ALT_CONFIDENCE, 1, VCFHeaderLineType.Integer, ":"));
         addInfoLine(new VCFInfoHeaderLine(GATKVCFConstants.AC_ADJUSTED_KEY, VCFHeaderLineCount.A, VCFHeaderLineType.Integer, "Allele count for each ALT, adjusted to represent high quality genotypes only"));
 
         addFilterLine(new VCFFilterHeaderLine(LOW_QUAL_FILTER_NAME, "Low quality"));
         addFilterLine(new VCFFilterHeaderLine(VCFConstants.PASSES_FILTERS_v4, "Site contains at least one allele that passes filters"));
+
+        addFilterLine(new VCFFilterHeaderLine(NAY_FROM_YNG, "Considered a NAY in the Yay, Nay, Grey table"));
+        addFilterLine(new VCFFilterHeaderLine(EXCESS_ALLELES,"Site has an excess of alternate alleles based on the input threshold"));
+        addFilterLine(new VCFFilterHeaderLine(NO_HQ_GENOTYPES, "Site has no high quality variant genotypes"));
+        addFilterLine(new VCFFilterHeaderLine(EXCESS_HET_KEY, "Site has excess het value larger than the threshold"));
 
         // M2-related filters
         addFilterLine(new VCFFilterHeaderLine(ALIGNMENT_ARTIFACT_FILTER_NAME, "Alignment artifact"));
@@ -151,6 +155,7 @@ public class GATKVCFHeaderLines {
         addInfoLine(new VCFInfoHeaderLine(FISHER_STRAND_KEY, 1, VCFHeaderLineType.Float, "Phred-scaled p-value using Fisher's exact test to detect strand bias"));
         addInfoLine(new VCFInfoHeaderLine(AS_FISHER_STRAND_KEY, VCFHeaderLineCount.A, VCFHeaderLineType.Float, "allele specific phred-scaled p-value using Fisher's exact test to detect strand bias of each alt allele"));
         addInfoLine(new VCFInfoHeaderLine(AS_SB_TABLE_KEY, 1, VCFHeaderLineType.String, "Allele-specific forward/reverse read counts for strand bias tests. Includes the reference and alleles separated by |."));
+        addInfoLine(new VCFInfoHeaderLine(AS_SBP_TABLE_KEY, 1, VCFHeaderLineType.String, "Allele-specific forward/reverse read counts for strand bias tests (with probability). Includes the reference and alleles separated by |."));
         addInfoLine(new VCFInfoHeaderLine(NOCALL_CHROM_KEY, 1, VCFHeaderLineType.Integer, "Number of no-called samples"));
         addInfoLine(new VCFInfoHeaderLine(GQ_MEAN_KEY, 1, VCFHeaderLineType.Float, "Mean of all GQ values"));
         addInfoLine(new VCFInfoHeaderLine(GQ_STDEV_KEY, 1, VCFHeaderLineType.Float, "Standard deviation of all GQ values"));
@@ -158,7 +163,7 @@ public class GATKVCFHeaderLines {
         addInfoLine(new VCFInfoHeaderLine(INBREEDING_COEFFICIENT_KEY, 1, VCFHeaderLineType.Float, "Inbreeding coefficient as estimated from the genotype likelihoods per-sample when compared against the Hardy-Weinberg expectation"));
         addInfoLine(new VCFInfoHeaderLine(AS_INBREEDING_COEFFICIENT_KEY, VCFHeaderLineCount.A, VCFHeaderLineType.Float, "Allele-specific inbreeding coefficient as estimated from the genotype likelihoods per-sample when compared against the Hardy-Weinberg expectation"));
         addInfoLine(new VCFInfoHeaderLine(EXCESS_HET_KEY, 1, VCFHeaderLineType.Float, "Phred-scaled p-value for exact test of excess heterozygosity"));
-        addInfoLine(new VCFInfoHeaderLine(RAW_GENOTYPE_COUNT_KEY, 3, VCFHeaderLineType.Integer, "Counts of genotypes w.r.t. the reference allele: 0/0, 0/*, */*, i.e. all alts lumped together; for use in calculating excess heterozygosity"));
+        addInfoLine(new VCFInfoHeaderLine(RAW_GENOTYPE_COUNT_KEY, 3, VCFHeaderLineType.Integer, "Counts of genotypes w.r.t. the reference allele in the following order: 0/0, 0/*, */*, i.e. all alts lumped together; for use in calculating excess heterozygosity"));
         addInfoLine(new VCFInfoHeaderLine(LIKELIHOOD_RANK_SUM_KEY, 1, VCFHeaderLineType.Float, "Z-score from Wilcoxon rank sum test of Alt Vs. Ref haplotype likelihoods"));
         addInfoLine(new VCFInfoHeaderLine(MAP_QUAL_RANK_SUM_KEY, 1, VCFHeaderLineType.Float, "Z-score From Wilcoxon rank sum test of Alt vs. Ref read mapping qualities"));
         addInfoLine(new VCFInfoHeaderLine(AS_MAP_QUAL_RANK_SUM_KEY, VCFHeaderLineCount.A, VCFHeaderLineType.Float, "allele specific Z-score From Wilcoxon rank sum test of each Alt vs. Ref read mapping qualities"));
@@ -172,7 +177,11 @@ public class GATKVCFHeaderLines {
         addInfoLine(new VCFInfoHeaderLine(AS_FILTER_STATUS_KEY, VCFHeaderLineCount.A, VCFHeaderLineType.String, "Filter status for each allele, as assessed by ApplyVQSR. Note that the VCF filter field will reflect the most lenient/sensitive status across all alleles."));
         addInfoLine(new VCFInfoHeaderLine(AS_CULPRIT_KEY, VCFHeaderLineCount.A, VCFHeaderLineType.String, "For each alt allele, the annotation which was the worst performing in the Gaussian mixture model, likely the reason why the variant was filtered out"));
         addInfoLine(new VCFInfoHeaderLine(AS_VQS_LOD_KEY, VCFHeaderLineCount.A, VCFHeaderLineType.String, "For each alt allele, the log odds of being a true variant versus being false under the trained gaussian mixture model"));
+        addInfoLine(new VCFInfoHeaderLine(AS_VQS_SENS_KEY, VCFHeaderLineCount.A, VCFHeaderLineType.String, "For each alt allele, the calibration sensitivity threshold of being a true variant versus being false under the trained gaussian mixture model"));
+        addInfoLine(new VCFInfoHeaderLine(AS_YNG_STATUS_KEY, VCFHeaderLineCount.A, VCFHeaderLineType.String, "For each alt allele, the yay/nay/grey status (yay are known good alleles, nay are known false positives, grey are unknown)"));
 
+        addInfoLine(new VCFInfoHeaderLine(TRANSMITTED_SINGLETON, 1, VCFHeaderLineType.String, "Possible transmitted singleton (site with AC=2 from parent and child). Parent ID is listed."));
+        addInfoLine(new VCFInfoHeaderLine(NON_TRANSMITTED_SINGLETON, 1, VCFHeaderLineType.String, "Possible non transmitted singleton (site with AC=1 in just one parent). Parent ID is listed."));
         addInfoLine(new VCFInfoHeaderLine(HI_CONF_DENOVO_KEY, 1, VCFHeaderLineType.String, "High confidence possible de novo mutation (GQ >= 20 for all trio members)=[comma-delimited list of child samples]"));
         addInfoLine(new VCFInfoHeaderLine(LO_CONF_DENOVO_KEY, 1, VCFHeaderLineType.String, "Low confidence possible de novo mutation (GQ >= 10 for child, GQ > 0 for parents)=[comma-delimited list of child samples]"));
         addInfoLine(new VCFInfoHeaderLine(QUAL_BY_DEPTH_KEY, 1, VCFHeaderLineType.Float, "Variant Confidence/Quality by Depth"));
@@ -189,6 +198,7 @@ public class GATKVCFHeaderLines {
         addInfoLine(new VCFInfoHeaderLine(SAMPLE_LIST_KEY, VCFHeaderLineCount.UNBOUNDED, VCFHeaderLineType.String, "List of polymorphic samples"));
         addInfoLine(new VCFInfoHeaderLine(STRAND_ODDS_RATIO_KEY, 1, VCFHeaderLineType.Float, "Symmetric Odds Ratio of 2x2 contingency table to detect strand bias"));
         addInfoLine(new VCFInfoHeaderLine(AS_STRAND_ODDS_RATIO_KEY, VCFHeaderLineCount.A, VCFHeaderLineType.Float, "Allele specific strand Odds Ratio of 2x|Alts| contingency table to detect allele specific strand bias"));
+        addInfoLine(new VCFInfoHeaderLine(AS_STRAND_ODDS_RATIO_PROB_KEY, VCFHeaderLineCount.A, VCFHeaderLineType.Float, "Allele specific strand Odds Ratio of 2x|Alts| contingency table to detect allele specific strand bias (using probability)"));
         addInfoLine(new VCFInfoHeaderLine(STR_PRESENT_KEY, 0, VCFHeaderLineType.Flag, "Variant is a short tandem repeat"));
         addInfoLine(new VCFInfoHeaderLine(REPEAT_UNIT_KEY, 1, VCFHeaderLineType.String, "Tandem repeat unit (bases)"));
         addInfoLine(new VCFInfoHeaderLine(REPEATS_PER_ALLELE_KEY, VCFHeaderLineCount.R, VCFHeaderLineType.Integer, "Number of times tandem repeat unit is repeated, for each allele (including reference)"));
@@ -210,8 +220,11 @@ public class GATKVCFHeaderLines {
                 "Base quality counts for each allele represented sparsely as alternating entries of qualities and counts for each allele." +
                         "For example [10,1,0,20,0,1] means one ref base with quality 10 and one alt base with quality 20."));
 
+        addInfoLine(new VCFInfoHeaderLine(TREE_SCORE, 1, VCFHeaderLineType.Float, "Score from single sample filtering with random forest model."));
+
         // M2-related info lines
-        addInfoLine(new VCFInfoHeaderLine(EVENT_COUNT_IN_HAPLOTYPE_KEY, 1, VCFHeaderLineType.Integer, "Number of events in this haplotype"));
+        addInfoLine(new VCFInfoHeaderLine(EVENT_COUNT_IN_HAPLOTYPE_KEY, VCFHeaderLineCount.A, VCFHeaderLineType.Integer, "Number of somatic events in best supporting haplotype for each alt allele"));
+        addInfoLine(new VCFInfoHeaderLine(EVENT_COUNT_IN_REGION_KEY, 1, VCFHeaderLineType.Integer, "Number of potential somatic events in the assembly region"));
         addInfoLine(new VCFInfoHeaderLine(NORMAL_LOG_10_ODDS_KEY, VCFHeaderLineCount.A, VCFHeaderLineType.Float, "Normal log 10 likelihood ratio of diploid het or hom alt genotypes"));
         addInfoLine(new VCFInfoHeaderLine(TUMOR_LOG_10_ODDS_KEY, VCFHeaderLineCount.A, VCFHeaderLineType.Float, "Log 10 likelihood ratio score of variant existing versus not existing"));
         addFormatLine(new VCFFormatHeaderLine(TUMOR_LOG_10_ODDS_KEY, VCFHeaderLineCount.A, VCFHeaderLineType.Float, "Log 10 likelihood ratio score of variant existing versus not existing"));
@@ -223,7 +236,7 @@ public class GATKVCFHeaderLines {
         addInfoLine(new VCFInfoHeaderLine(STRAND_QUAL_KEY, 1, VCFHeaderLineType.Integer, "Phred-scaled quality of strand bias artifact"));
         addInfoLine(new VCFInfoHeaderLine(CONTAMINATION_QUAL_KEY, 1, VCFHeaderLineType.Float, "Phred-scaled qualities that alt allele are not due to contamination"));
         addInfoLine(new VCFInfoHeaderLine(READ_ORIENTATION_QUAL_KEY, 1, VCFHeaderLineType.Float, "Phred-scaled qualities that alt allele are not due to read orientation artifact"));
-        addInfoLine(new VCFInfoHeaderLine(NORMAL_ARTIFACT_LOG_10_ODDS_KEY, VCFHeaderLineCount.A, VCFHeaderLineType.Float, "Negative log 10 odds of artifact in normal with same allele fraction as tumor"));
+        addInfoLine(new VCFInfoHeaderLine(NORMAL_ARTIFACT_LOG_10_ODDS_KEY, VCFHeaderLineCount.A, VCFHeaderLineType.Float, "Log 10 odds of artifact in normal with same allele fraction as tumor"));
         addInfoLine(new VCFInfoHeaderLine(ORIGINAL_CONTIG_MISMATCH_KEY, 1, VCFHeaderLineType.Integer, "Number of alt reads whose original alignment doesn't match the current contig."));
         addInfoLine(new VCFInfoHeaderLine(N_COUNT_KEY, 1, VCFHeaderLineType.Integer, "Count of N bases in the pileup"));
         addInfoLine(new VCFInfoHeaderLine(AS_UNIQUE_ALT_READ_SET_COUNT_KEY, VCFHeaderLineCount.A, VCFHeaderLineType.Integer, "Number of reads with unique start and mate end positions for each alt at a variant site"));
@@ -235,10 +248,24 @@ public class GATKVCFHeaderLines {
         addInfoLine(new VCFInfoHeaderLine(UNITIG_SIZES_KEY, VCFHeaderLineCount.UNBOUNDED, VCFHeaderLineType.Integer, "Sizes of reassembled unitigs"));
         addInfoLine(new VCFInfoHeaderLine(JOINT_ALIGNMENT_COUNT_KEY, 1, VCFHeaderLineType.Integer, "Number of joint alignments"));
         addInfoLine(new VCFInfoHeaderLine(ALIGNMENT_SCORE_DIFFERENCE_KEY, 1, VCFHeaderLineType.Integer, "Difference in alignment score between best and next-best alignment"));
+        addInfoLine(new VCFInfoHeaderLine(EXT_COLLAPSED_KEY,1, VCFHeaderLineType.Integer, "Indicates longer hmer collapsing took place (this is a flow-based specific tag)"));
+        addInfoLine(new VCFInfoHeaderLine(POSSIBLE_FP_ADJACENT_TP_KEY,1, VCFHeaderLineType.Flag, "Indicates a locus where false positive allele might be affecting a true positive allele"));
+
+        // flow annotations
+        addInfoLine(new VCFInfoHeaderLine(FLOW_INDEL_CLASSIFY, VCFHeaderLineCount.A, VCFHeaderLineType.String, "Flow: indel class: ins, del, NA"));
+        addInfoLine(new VCFInfoHeaderLine(FLOW_INDEL_LENGTH, VCFHeaderLineCount.A, VCFHeaderLineType.Integer, "Flow: length of indel"));
+        addInfoLine(new VCFInfoHeaderLine(FLOW_HMER_INDEL_LENGTH, VCFHeaderLineCount.A, VCFHeaderLineType.Integer, "Flow: length of the hmer indel, if so"));
+        addInfoLine(new VCFInfoHeaderLine(FLOW_HMER_INDEL_NUC, VCFHeaderLineCount.A, VCFHeaderLineType.String, "Flow: nucleotide of the hmer indel, if so"));
+        addInfoLine(new VCFInfoHeaderLine(FLOW_LEFT_MOTIF, VCFHeaderLineCount.A, VCFHeaderLineType.String, "Flow: motif to the left of the indel"));
+        addInfoLine(new VCFInfoHeaderLine(FLOW_RIGHT_MOTIF, VCFHeaderLineCount.A, VCFHeaderLineType.String, "Flow: motif to the right of the indel"));
+        addInfoLine(new VCFInfoHeaderLine(FLOW_GC_CONTENT, 1, VCFHeaderLineType.Float, "Flow: percentage of G or C in the window around hmer"));
+        addInfoLine(new VCFInfoHeaderLine(FLOW_CYCLESKIP_STATUS, VCFHeaderLineCount.A, VCFHeaderLineType.String, "Flow: cycle skip status: cycle-skip, possible-cycle-skip, non-skip"));
+        addInfoLine(new VCFInfoHeaderLine(FLOW_VARIANT_TYPE, 1, VCFHeaderLineType.String, "Flow: type of variant: SNP/NON-H-INDEL/H-INDEL"));
         addInfoLine(new VCFInfoHeaderLine(REFERENCE_BASES_KEY, 1, VCFHeaderLineType.String, "local reference bases."));
         addInfoLine(new VCFInfoHeaderLine(HAPLOTYPE_EQUIVALENCE_COUNTS_KEY, VCFHeaderLineCount.UNBOUNDED, VCFHeaderLineType.Integer, "Counts of support for haplotype groups excluding difference at the site in question."));
         addInfoLine(new VCFInfoHeaderLine(HAPLOTYPE_COMPLEXITY_KEY, VCFHeaderLineCount.A, VCFHeaderLineType.Integer, "Edit distances of each alt allele's most common supporting haplotype from closest germline haplotype, excluding differences at the site in question."));
         addInfoLine(new VCFInfoHeaderLine(HAPLOTYPE_DOMINANCE_KEY, VCFHeaderLineCount.A, VCFHeaderLineType.Float, "For each alt allele, fraction of read support that best fits the most-supported haplotype containing the allele"));
-
+        addInfoLine(new VCFInfoHeaderLine(HAPLOTYPES_BEFORE_FILTERING_KEY, 1, VCFHeaderLineType.Integer, "Haplotypes detected by the assembly region before haplotype filtering is applied"));
+        addInfoLine(new VCFInfoHeaderLine(HAPLOTYPES_FILTERED_KEY, 1, VCFHeaderLineType.Integer, "Haplotypes filtered out by the haplotype filtering code"));
     }
 }

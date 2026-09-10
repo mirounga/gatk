@@ -1,12 +1,16 @@
 package org.broadinstitute.hellbender.utils.read;
 
 import htsjdk.samtools.*;
+import htsjdk.samtools.cram.common.CRAMVersion;
+import htsjdk.samtools.cram.common.CramVersions;
+import htsjdk.samtools.cram.structure.CRAMEncodingStrategy;
 import htsjdk.samtools.util.FileExtensions;
 import org.apache.commons.lang3.tuple.MutablePair;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
+import org.broadinstitute.hellbender.cmdline.argumentcollections.MarkDuplicatesSparkArgumentCollection;
 import org.broadinstitute.hellbender.engine.ReadsContext;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
@@ -813,6 +817,7 @@ public final class ReadUtils {
         return read.hasAttribute(BQSR_BASE_INSERTION_QUALITIES) || read.hasAttribute(BQSR_BASE_DELETION_QUALITIES);
     }
 
+
     /**
      * @return the base deletion quality or null if read doesn't have one
      */
@@ -946,8 +951,27 @@ public final class ReadUtils {
         final Path referenceFile,
         final SAMFileHeader header,
         final boolean preSorted,
-        boolean createOutputBamIndex,
+        final boolean createOutputBamIndex,
         final boolean createMD5)
+    {
+        return createCommonSAMWriter(outputPath, referenceFile, header, preSorted, createOutputBamIndex, createMD5, null);
+    }
+
+    /**
+     * Create a common SAMFileWriter for use with GATK tools, requesting a specific CRAM version for CRAM output.
+     *
+     * @param cramVersion - the CRAM version to write for CRAM output; if null, htsjdk's default is used. Ignored for
+     *                      non-CRAM output.
+     * @see #createCommonSAMWriter(Path, Path, SAMFileHeader, boolean, boolean, boolean)
+     */
+    public static SAMFileWriter createCommonSAMWriter(
+        final Path outputPath,
+        final Path referenceFile,
+        final SAMFileHeader header,
+        final boolean preSorted,
+        boolean createOutputBamIndex,
+        final boolean createMD5,
+        final CRAMVersion cramVersion)
     {
         Utils.nonNull(outputPath);
         Utils.nonNull(header);
@@ -959,7 +983,26 @@ public final class ReadUtils {
         }
 
         final SAMFileWriterFactory factory = new SAMFileWriterFactory().setCreateIndex(createOutputBamIndex).setCreateMd5File(createMD5);
+        if (cramVersion != null && outputPath.toString().endsWith(FileExtensions.CRAM)) {
+            // Only affects CRAM output; BAM/SAM writers ignore the encoding strategy.
+            factory.setCRAMEncodingStrategy(new CRAMEncodingStrategy().setCramVersion(cramVersion));
+        }
         return ReadUtils.createCommonSAMWriterFromFactory(factory, outputPath, referenceFile, header, preSorted);
+    }
+
+    /**
+     * Map a user-supplied CRAM version string ("3.0" or "3.1") to the corresponding htsjdk {@link CRAMVersion},
+     * throwing a {@link UserException.BadInput} for any other value.
+     */
+    public static CRAMVersion getCRAMVersion(final String cramVersionString) {
+        Utils.nonNull(cramVersionString);
+        switch (cramVersionString.trim()) {
+            case "3.0": return CramVersions.CRAM_v3;
+            case "3.1": return CramVersions.CRAM_v3_1;
+            default:
+                throw new UserException.BadInput(String.format(
+                    "Unsupported CRAM version '%s'. Supported values are '3.0' and '3.1'.", cramVersionString));
+        }
     }
 
     /**
@@ -1143,11 +1186,6 @@ public final class ReadUtils {
      *     In most cases for mapped reads, this is typically equal to the sum of the size of soft-clipping at the
      *     beginning of the alignment.
      * </p>
-     * <p>
-     *     Notice that this index makes reference to the offset of that first base in the array returned by {@link GATKRead#getBases()}, If you
-     *     are after the first base in the original unclipped and not reverse-complemented read, you must use
-     *     {@link #getFirstAlignedReadPosition} instead.
-     * </p>
      *
      * @throws IllegalArgumentException if the input {@code read} is {@code null} or does not have any base aligned
      *  against the reference (e.g. is unmapped).
@@ -1199,4 +1237,5 @@ public final class ReadUtils {
     public static boolean readHasReasonableMQ(final GATKRead read){
         return read.getMappingQuality() != 0 && read.getMappingQuality() != QualityUtils.MAPPING_QUALITY_UNAVAILABLE;
     }
+
 }

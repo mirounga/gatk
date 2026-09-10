@@ -6,6 +6,7 @@ import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.hellbender.metrics.MetricsUtils;
 import org.broadinstitute.hellbender.metrics.analysis.AlleleFrequencyQCMetric;
 import org.broadinstitute.hellbender.utils.R.RScriptExecutor;
+import org.broadinstitute.hellbender.utils.io.IOUtils;
 import org.broadinstitute.hellbender.utils.io.Resource;
 import org.broadinstitute.hellbender.utils.report.GATKReport;
 import org.broadinstitute.hellbender.utils.report.GATKReportTable;
@@ -16,6 +17,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -48,6 +50,7 @@ public class AlleleFrequencyQC extends VariantEval {
 
     @Override
     public void onTraversalStart() {
+        RScriptExecutor.checkIfRunningInGatkLiteDocker();
         variantEvalArgs.noStandardModules = true;
         variantEvalArgs.modulesToUse = Collections.singletonList("VariantAFEvaluator");
         variantEvalArgs.keepSitesWithAC0 = true;
@@ -59,15 +62,8 @@ public class AlleleFrequencyQC extends VariantEval {
         metricOutput = outFile; // output file for summary metrics
 
         // have to set the output file for variant eval; if not given a debug file to return the variant eval results
-        // from, this will just be a temporary file that wil lbe deleted after the tool runs
-        try {
-            outFile = debugFile == null ? File.createTempFile("variant_eval" ,".txt") : debugFile;
-        } catch (IOException e) {
-            throw new RuntimeException("Trouble creating temporary variant eval file", e);
-        }
-        if (debugFile == null) {
-            outFile.deleteOnExit();
-        }
+        // from, this will just be a temporary file that will be deleted after the tool runs
+        outFile = debugFile == null ? IOUtils.createTempFile("variant_eval" ,".txt") : debugFile;
         sample = getHeaderForVariants().getOtherHeaderLine("sampleAlias").getValue();
         super.onTraversalStart();
     }

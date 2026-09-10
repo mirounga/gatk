@@ -19,6 +19,7 @@ releases of the toolkit.
 * [Requirements](#requirements)
 * [Quick Start Guide](#quickstart)
 * [Downloading GATK4](#downloading)
+  * [Tools Included in Docker Image](#dockerSoftware)
 * [Building GATK4](#building)
 * [Running GATK4](#running)
     * [Passing JVM options to gatk](#jvmoptions)
@@ -47,21 +48,20 @@ releases of the toolkit.
 * [How to contribute to GATK](#contribute)
 * [Discussions](#discussions)
 * [Authors](#authors)
+* [Citing GATK](#citing)
 * [License](#license)
 
 ## <a name="requirements">Requirements</a>
 * To run GATK:
-    * Java 8 is needed to run or build GATK. 
-    We recommend either of the following:
-        * OpenJDK 8 with Hotspot from [AdoptOpenJdk](https://adoptopenjdk.net/)
-        * [OracleJDK 8](https://www.oracle.com/technetwork/java/javase/downloads/jdk8-downloads-2133151.html)
-    which requires an Oracle account to download and comes with restrictive [license conditions](https://www.oracle.com/downloads/licenses/javase-license1.html).
-    * Python 2.6 or greater (required to run the `gatk` frontend script)
-    * Python 3.6.2, along with a set of additional Python packages, is required to run some tools and workflows.
+    * Java 17 is needed to run or build GATK. 
+    We recommend one of the following:
+        * Download the Eclipse Foundation's distribution of OpenJDK 17 from [adoptium.net](https://adoptium.net/). Navigate to the [release archive](https://adoptium.net/temurin/archive/?version=17) to find downloads for Java 17.
+        * On Mac OS, you can install the [Homebrew package manager](https://brew.sh/) and run `brew install temurin@17` to install the Eclipse Foundation's OpenJDK 17.
+    * Python 3.10.13, along with a set of additional Python packages, is required to run some tools and workflows (also required to run the `gatk` frontend script).
       See [Python Dependencies](#python) for more information.
-    * R 3.2.5 (needed for producing plots in certain tools)
+    * R 4.3.1 (needed for producing plots in certain tools)
 * To build GATK:
-    * A Java 8 JDK
+    * A Java 17 JDK
     * Git 2.5 or greater
     * [git-lfs](https://git-lfs.github.com/) 1.1.0 or greater. Required to download the large files used to build GATK, and
       test files required to run the test suite. Run `git lfs install` after downloading, followed by `git lfs pull` from
@@ -72,21 +72,37 @@ releases of the toolkit.
       the size of the download.
     * Gradle 5.6. We recommend using the `./gradlew` script which will
       download and use an appropriate gradle version automatically (see examples below).
-    * R 3.2.5 (needed for running the test suite)
+    * R 4.3.1 (needed for running the test suite)
 * Pre-packaged Docker images with all needed dependencies installed can be found on
   [our dockerhub repository](https://hub.docker.com/r/broadinstitute/gatk/). This requires a recent version of the
    docker client, which can be found on the [docker website](https://www.docker.com/get-docker).
 * Python Dependencies:<a name="python"></a>
     * GATK4 uses the [Conda](https://conda.io/docs/index.html) package manager to establish and manage the
-      Python environment and dependencies required by GATK tools that have a Python dependency. This environment also 
-      includes the R dependencies used for plotting in some of the tools. The ```gatk``` environment 
-      requires hardware with AVX support for tools that depend on TensorFlow (e.g. CNNScoreVariant). The GATK Docker image 
-      comes with the ```gatk``` environment pre-configured.
-      	* At this time, the only supported platforms are 64-bit Linux distributions. The required Conda environment is not
-	  currently supported on OS X/macOS. 
+      Python environment and dependencies required by Python-based GATK tools. This environment also 
+      includes the R dependencies used for plotting in some of the tools. The GATK Docker image 
+      comes with the ```gatk``` conda environment pre-configured and activated.
     * To establish the environment when not using the Docker image, a conda environment must first be "created", and
       then "activated":
-        * First, make sure [Miniconda or Conda](https://conda.io/docs/index.html) is installed (Miniconda is sufficient).
+        * First, make sure [Miniconda or Conda](https://conda.io/docs/index.html) is installed. We recommend installing
+          ```Miniconda3-py310_23.10.0-1``` from [the miniconda download page](https://repo.anaconda.com/miniconda/), selecting the Linux or
+          MacOS version of the installer as appropriate.
+            * This is the same version of ```miniconda``` used by the official GATK docker image.
+            * If you use a different version, you may run into issues.
+            * If you have an ARM-based Mac, you must select the `MacOSX-x86_64` installer, not the `MacOSX-arm64` installer,
+              and rely on Mac OS's built-in x86 emulation.
+        * Set up miniconda:
+            * Install miniconda to a location on your PATH such as ```/opt/miniconda```, and then restart your shell: 
+              ```
+              bash Miniconda3-py310_23.10.0-1-[YOUR_OS].sh -p /opt/miniconda -b
+              ```
+            * Disable conda auto-updates, which can cause compatibility issues with GATK: 
+              ```
+              conda config --set auto_update_conda false
+              ```
+            * Enable the (much) faster ```libmamba``` solver to greatly speed up creation of the conda environment: 
+              ```
+              conda config --set solver libmamba
+              ```
         * To "create" the conda environment:
             * If running from a zip or tar distribution, run the command ```conda env create -f gatkcondaenv.yml``` to
               create the ```gatk``` environment.
@@ -116,6 +132,34 @@ You can download and run pre-built versions of GATK4 from the following places:
 * You can download a GATK4 docker image from [our dockerhub repository](https://hub.docker.com/r/broadinstitute/gatk/). We also host unstable nightly development builds on [this dockerhub repository](https://hub.docker.com/r/broadinstitute/gatk-nightly/).
     * Within the docker image, run gatk commands as usual from the default startup directory (/gatk).
 
+### <a name="dockerSoftware">Tools Included in Docker Image</a>
+
+Our docker image contains the following bioinformatics tools, which can be run by invoking the tool name from the command line:
+* bedtools (v2.30.0)
+* samtools (1.13)
+* bcftools (1.13)
+* tabix (1.13+ds)
+
+We also include an installation of Python3 (3.10.13) with the following popular packages included:
+* numpy
+* scipy
+* pytorch
+* pymc3
+* keras
+* scikit-learn
+* matplotlib
+* pandas
+* biopython
+* pyvcf
+* pysam
+
+We also include an installation of R (4.3.1) with the following popular packages included:
+* data.table
+* dplyr
+* ggplot2
+
+For more details on system packages, see the GATK [Base Dockerfile](scripts/docker/gatkbase/Dockerfile) and for more details on the Python3/R packages, see the [Conda environment setup file](scripts/gatkcondaenv.yml.template). Versions for the Python3/R packages can be found there.
+
 ## <a name="building">Building GATK4</a>
 
 * **To do a full build of GATK4, first clone the GATK repository using "git clone", then run:**
@@ -128,7 +172,9 @@ You can download and run pre-built versions of GATK4 from the following places:
         
     * This creates a zip archive in the `build/` directory with a name like `gatk-VERSION.zip` containing a complete standalone GATK distribution, including our launcher `gatk`, both the local and spark jars, and this README.    
     * You can also run GATK commands directly from the root of your git clone after running this command.
-    * Note that you *must* have a full git clone in order to build GATK, including the git-lfs files in src/main/resources. The zipped source code alone is not buildable.
+    * Note that you *must* have a full git clone in order to build GATK, including the git-lfs files in `src/main/resources/large`. The zipped source code alone is not buildable.
+    * The large files under `src/main/resources/large/` are required to build GATK, since they are packaged inside the GATK jar and used by tools at runtime. These include things like ML models and native C/C++ libraries used for acceleration of certain tools.
+    * The large files under `src/test/resources/large/`, on the other hand, are only required by the test suite when running tests, and are not required to build GATK.
 
 * **Other ways to build:**
     * `./gradlew installDist`  
@@ -156,7 +202,7 @@ You can download and run pre-built versions of GATK4 from the following places:
 ## <a name="running">Running GATK4</a>
 
 * The standard way to run GATK4 tools is via the **`gatk`** wrapper script located in the root directory of a clone of this repository.
-    * Requires Python 2.6 or greater (this includes Python 3.x)
+    * Requires Python 3.9 or greater
     * You need to have built the GATK as described in the [Building GATK4](#building) section above before running this script.
     * There are several ways `gatk` can be run:
         * Directly from the root of your git clone after building
@@ -454,7 +500,7 @@ We use [git-lfs](https://git-lfs.github.com/) to version and distribute test dat
 
 #### <a name="intellij">Creating a GATK project in the IntelliJ IDE (last tested with version 2016.2.4):</a>
 
-* Ensure that you have `gradle` and the Java 8 JDK installed
+* Ensure that you have `gradle` and the Java 17 JDK installed
 
 * You may need to install the TestNG and Gradle plugins (in preferences)
 
@@ -470,13 +516,13 @@ We use [git-lfs](https://git-lfs.github.com/) to version and distribute test dat
 
 * Select "Use auto-import" and "Use default gradle wrapper".
 
-* Make sure the Gradle JVM points to Java 1.8. You may need to set this manually after creating the project, to do so find the gradle settings by clicking the wrench icon in the gradle tab on the right bar, from there edit "Gradle JVM" argument to point to Java 1.8.
+* Make sure the Gradle JVM points to Java 17. You may need to set this manually after creating the project, to do so find the gradle settings by clicking the wrench icon in the gradle tab on the right bar, from there edit "Gradle JVM" argument to point to Java 17.
 
 * Click "Finish"
 
 * After downloading project dependencies, IntelliJ should open a new window with your GATK project
 
-* Make sure that the Java version is set correctly by going to File -> "Project Structure" -> "Project". Check that the "Project SDK" is set to your Java 1.8 JDK, and "Project language level" to 8 (you may need to add your Java 8 JDK under "Platform Settings" -> SDKs if it isn't there already). Then click "Apply"/"Ok".
+* Make sure that the Java version is set correctly by going to File -> "Project Structure" -> "Project". Check that the "Project SDK" is set to your Java 17 JDK, and "Project language level" to 17 (you may need to add your Java 17 JDK under "Platform Settings" -> SDKs if it isn't there already). Then click "Apply"/"Ok".
 
 #### <a name="debugging">Setting up debugging in IntelliJ</a>
 
@@ -642,6 +688,9 @@ Thank you for getting involved!
 ## <a name="authors">Authors</a>
 The authors list is maintained in the [AUTHORS](https://github.com/broadinstitute/gatk/edit/master/AUTHORS) file. 
 See also the [Contributors](https://github.com/broadinstitute/gatk/graphs/contributors) list at github. 
+
+## <a name="citing">Citing GATK</a>
+If you use GATK in your research, please see [this article](https://gatk.broadinstitute.org/hc/en-us/articles/360035530852-How-should-I-cite-GATK-in-my-own-publications) for details on how to properly cite GATK.
 
 ## <a name="license">License</a>
 Licensed under the Apache 2.0 License. See the [LICENSE.txt](https://github.com/broadinstitute/gatk/blob/master/LICENSE.TXT) file.

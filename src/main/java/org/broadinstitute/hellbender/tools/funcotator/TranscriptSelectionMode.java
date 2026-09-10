@@ -1,6 +1,7 @@
 package org.broadinstitute.hellbender.tools.funcotator;
 
 import org.broadinstitute.hellbender.tools.funcotator.dataSources.gencode.GencodeFuncotation;
+import org.broadinstitute.hellbender.utils.codecs.gtf.GencodeGTFFieldConstants;
 import org.broadinstitute.hellbender.utils.codecs.gtf.GencodeGtfFeature;
 
 import java.util.Comparator;
@@ -83,8 +84,8 @@ public enum TranscriptSelectionMode {
      *      no appris tag present
      */
     BEST_EFFECT {
-        public Comparator<GencodeFuncotation> getComparator(final Set<String> userRequestedTranscripts) {
-            return new BestEffectGencodeFuncotationComparator(userRequestedTranscripts);
+        public Comparator<GencodeFuncotation> getComparator(final Set<String> userRequestedTranscripts, final boolean preferMANETranscripts) {
+            return new BestEffectGencodeFuncotationComparator(userRequestedTranscripts, preferMANETranscripts);
         }
     },
 
@@ -159,8 +160,8 @@ public enum TranscriptSelectionMode {
      *      no appris tag present
      */
     CANONICAL {
-        public Comparator<GencodeFuncotation> getComparator(final Set<String> userRequestedTranscripts) {
-            return new CanonicalGencodeFuncotationComparator(userRequestedTranscripts);
+        public Comparator<GencodeFuncotation> getComparator(final Set<String> userRequestedTranscripts, final boolean preferMANETranscripts) {
+            return new CanonicalGencodeFuncotationComparator(userRequestedTranscripts, preferMANETranscripts);
         }
     },
 
@@ -168,12 +169,12 @@ public enum TranscriptSelectionMode {
      * Same as CANONICAL, but indicates that no transcripts should be dropped.  Render all overlapping transcripts.
      */
     ALL {
-        public Comparator<GencodeFuncotation> getComparator(final Set<String> userRequestedTranscripts) {
-            return new CanonicalGencodeFuncotationComparator(userRequestedTranscripts);
+        public Comparator<GencodeFuncotation> getComparator(final Set<String> userRequestedTranscripts, final boolean preferMANETranscripts) {
+            return new CanonicalGencodeFuncotationComparator(userRequestedTranscripts, preferMANETranscripts);
         }
     };
 
-    public abstract Comparator<GencodeFuncotation> getComparator(final Set<String> userRequestedTranscripts);
+    public abstract Comparator<GencodeFuncotation> getComparator(final Set<String> userRequestedTranscripts, final boolean preferMANETranscripts);
 
     private static class ComparatorByUserTranscript implements Comparator<GencodeFuncotation> {
 
@@ -190,6 +191,24 @@ public enum TranscriptSelectionMode {
                 return -1;
             }
             else if ( (!FuncotatorUtils.isFuncotationInTranscriptList(a, userRequestedTranscripts)) && FuncotatorUtils.isFuncotationInTranscriptList(b, userRequestedTranscripts) ) {
+                return 1;
+            }
+            else {
+                return 0;
+            }
+        }
+    }
+
+    private static class ComparatorByManeStatus implements Comparator<GencodeFuncotation> {
+
+        public ComparatorByManeStatus() {}
+
+        @Override
+        public int compare(final GencodeFuncotation a, final GencodeFuncotation b) {
+            if((a.isManeTranscript()) && (!b.isManeTranscript())) {
+                return -1;
+            }
+            else if((!a.isManeTranscript()) && (b.isManeTranscript())) {
                 return 1;
             }
             else {
@@ -246,8 +265,8 @@ public enum TranscriptSelectionMode {
         @Override
         public int compare( final GencodeFuncotation a, final GencodeFuncotation b ) {
             // Is it protein coding?
-            final boolean isAProteinCoding = GencodeGtfFeature.KnownGeneBiotype.PROTEIN_CODING.toString().equals(a.getGeneTranscriptType());
-            final boolean isBProteinCoding = GencodeGtfFeature.KnownGeneBiotype.PROTEIN_CODING.toString().equals(b.getGeneTranscriptType());
+            final boolean isAProteinCoding = GencodeGTFFieldConstants.KnownGeneBiotype.PROTEIN_CODING.toString().equals(a.getGeneTranscriptType());
+            final boolean isBProteinCoding = GencodeGTFFieldConstants.KnownGeneBiotype.PROTEIN_CODING.toString().equals(b.getGeneTranscriptType());
             if ( isAProteinCoding != isBProteinCoding ) {
                 if ( isAProteinCoding ) {
                     return -1;
@@ -359,6 +378,7 @@ public enum TranscriptSelectionMode {
     static class BestEffectGencodeFuncotationComparator implements Comparator<GencodeFuncotation> {
 
         private final Comparator<GencodeFuncotation> byUserTranscript;
+        private final Comparator<GencodeFuncotation> byManeStatus;
         private final Comparator<GencodeFuncotation> byIgrStatus;
         private final Comparator<GencodeFuncotation> byVariantClassification;
         private final Comparator<GencodeFuncotation> byProteinCodingStatus;
@@ -367,10 +387,11 @@ public enum TranscriptSelectionMode {
         private final Comparator<GencodeFuncotation> byTranscriptLength;
         private final Comparator<GencodeFuncotation> byTranscriptName;
 
-        private final Comparator<GencodeFuncotation> chainedComparator;
+        private Comparator<GencodeFuncotation> chainedComparator;
 
-        public BestEffectGencodeFuncotationComparator( final Set<String> userRequestedTranscripts ) {
+        public BestEffectGencodeFuncotationComparator(final Set<String> userRequestedTranscripts, final boolean preferMANETranscripts) {
             byUserTranscript = new ComparatorByUserTranscript(userRequestedTranscripts);
+            byManeStatus = new ComparatorByManeStatus();
             byIgrStatus = new ComparatorByIgrStatus();
             byVariantClassification = new ComparatorByVariantClassification();
             byProteinCodingStatus = new ComparatorByProteinCodingStatus();
@@ -379,10 +400,17 @@ public enum TranscriptSelectionMode {
             byTranscriptLength = new ComparatorByTranscriptSequenceLength();
             byTranscriptName = new ComparatorByTranscriptName();
 
-            chainedComparator = byUserTranscript
-                    .thenComparing(byIgrStatus)
-                    .thenComparing(byVariantClassification)
-                    .thenComparing(byProteinCodingStatus)
+            // Always start with the user transcript comparator, IGR status, and variant classification
+            chainedComparator = byUserTranscript.thenComparing(byIgrStatus)
+                    .thenComparing(byVariantClassification);
+
+            // Next highest level of priority is MANE transcripts if the user has specified this preference
+            if(preferMANETranscripts) {
+                chainedComparator = chainedComparator.thenComparing(byManeStatus);
+            }
+
+            // Add the rest of the BEST_EFFECT comparators
+            chainedComparator = chainedComparator.thenComparing(byProteinCodingStatus)
                     .thenComparing(byLocusLevel)
                     .thenComparing(byApprisRank)
                     .thenComparing(byTranscriptLength)
@@ -410,6 +438,7 @@ public enum TranscriptSelectionMode {
     static class CanonicalGencodeFuncotationComparator implements Comparator<GencodeFuncotation> {
 
         private final Comparator<GencodeFuncotation> byUserTranscript;
+        private final Comparator<GencodeFuncotation> byManeStatus;
         private final Comparator<GencodeFuncotation> byIgrStatus;
         private final Comparator<GencodeFuncotation> byVariantClassification;
         private final Comparator<GencodeFuncotation> byProteinCodingStatus;
@@ -418,10 +447,11 @@ public enum TranscriptSelectionMode {
         private final Comparator<GencodeFuncotation> byTranscriptLength;
         private final Comparator<GencodeFuncotation> byTranscriptName;
 
-        private final Comparator<GencodeFuncotation> chainedComparator;
+        private Comparator<GencodeFuncotation> chainedComparator;
 
-        public CanonicalGencodeFuncotationComparator(final Set<String> userRequestedTranscripts ) {
+        public CanonicalGencodeFuncotationComparator(final Set<String> userRequestedTranscripts, final boolean preferMANETranscripts) {
             byUserTranscript = new ComparatorByUserTranscript(userRequestedTranscripts);
+            byManeStatus = new ComparatorByManeStatus();
             byIgrStatus = new ComparatorByIgrStatus();
             byVariantClassification = new ComparatorByVariantClassification();
             byProteinCodingStatus = new ComparatorByProteinCodingStatus();
@@ -430,8 +460,16 @@ public enum TranscriptSelectionMode {
             byTranscriptLength = new ComparatorByTranscriptSequenceLength();
             byTranscriptName = new ComparatorByTranscriptName();
 
-            chainedComparator = byUserTranscript
-                    .thenComparing(byProteinCodingStatus)
+            // Always start with the user transcript comparator
+            chainedComparator = byUserTranscript;
+
+            // Next highest level of priority is MANE transcripts if the user has specified this preference
+            if(preferMANETranscripts) {
+                chainedComparator = chainedComparator.thenComparing(byManeStatus);
+            }
+
+            // Add the rest of the CANONICAL comparators
+            chainedComparator = chainedComparator.thenComparing(byProteinCodingStatus)
                     .thenComparing(byLocusLevel)
                     .thenComparing(byApprisRank)
                     .thenComparing(byIgrStatus)

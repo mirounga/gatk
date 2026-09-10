@@ -80,6 +80,14 @@ public abstract class BaseFuncotatorArgumentCollection implements Serializable {
     )
     public TranscriptSelectionMode transcriptSelectionMode = FuncotatorArgumentDefinitions.TRANSCRIPT_SELECTION_MODE_DEFAULT_VALUE;
 
+    @Advanced
+    @Argument(
+            fullName  = FuncotatorArgumentDefinitions.PREFER_MANE_TRANSCRIPT_MODE,
+            optional = true,
+            doc = "If this flag is set, Funcotator will prefer 'MANE_Plus_Clinical' followed by 'MANE_select' transcripts (including those not tagged 'basic') if one is present for a given variant. If neither tag is present it use the default behavior (only base transcripts)."
+    )
+    public boolean MANETranscriptMode = false;
+
     @Argument(
             fullName  = FuncotatorArgumentDefinitions.TRANSCRIPT_LIST_LONG_NAME,
             optional = true,
@@ -123,4 +131,12 @@ public abstract class BaseFuncotatorArgumentCollection implements Serializable {
             doc = "TSV File containing custom Variant Classification severity map of the form: VARIANT_CLASSIFICATION\tSEV.  VARIANT_CLASSIFICATION must match one of the VariantClassification names (" + GencodeFuncotation.VariantClassification.ALL_VC_NAMES + ").  SEV is an unsigned integer, where lower is sorted first.  When using this option it is HIGHLY recommended you also use the `BEST_EFFECT` transcript selection mode."
     )
     public GATKPath customVariantClassificationOrderFile = null;
+
+    @Argument(
+            fullName = FuncotatorArgumentDefinitions.SPLICE_SITE_WINDOW_SIZE,
+            optional = true,
+            minValue = 0,
+            doc = "Number of bases on either side of a splice site for a variant to be classified as a SPLICE_SITE variant (default: " + FuncotatorUtils.DEFAULT_SPLICE_SITE_WINDOW_SIZE + ")."
+    )
+    public int spliceSiteWindow = FuncotatorUtils.DEFAULT_SPLICE_SITE_WINDOW_SIZE;
 }

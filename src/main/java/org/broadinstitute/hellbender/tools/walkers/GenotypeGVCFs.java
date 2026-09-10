@@ -9,6 +9,8 @@ import htsjdk.variant.vcf.VCFHeader;
 import htsjdk.variant.vcf.VCFHeaderLine;
 import org.broadinstitute.barclay.argparser.*;
 import org.broadinstitute.barclay.help.DocumentedFeature;
+import org.broadinstitute.hellbender.cmdline.GATKPlugin.GATKAnnotationPluginDescriptor;
+import org.broadinstitute.hellbender.cmdline.GATKPlugin.GATKReadFilterPluginDescriptor;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.cmdline.argumentcollections.DbsnpArgumentCollection;
 import org.broadinstitute.hellbender.cmdline.programgroups.ShortVariantDiscoveryProgramGroup;
@@ -17,18 +19,38 @@ import org.broadinstitute.hellbender.engine.GATKPath;
 import org.broadinstitute.hellbender.engine.ReadsContext;
 import org.broadinstitute.hellbender.engine.ReferenceContext;
 import org.broadinstitute.hellbender.engine.VariantLocusWalker;
+import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.tools.genomicsdb.GenomicsDBArgumentCollection;
 import org.broadinstitute.hellbender.tools.genomicsdb.GenomicsDBImport;
 import org.broadinstitute.hellbender.tools.genomicsdb.GenomicsDBOptions;
 import org.broadinstitute.hellbender.tools.walkers.annotator.Annotation;
 import org.broadinstitute.hellbender.tools.walkers.annotator.StandardAnnotation;
+import org.broadinstitute.hellbender.tools.walkers.annotator.StrandBiasBySample;
 import org.broadinstitute.hellbender.tools.walkers.annotator.VariantAnnotatorEngine;
 import org.broadinstitute.hellbender.tools.walkers.genotyper.GenotypeCalculationArgumentCollection;
+import org.broadinstitute.hellbender.tools.walkers.CombineGVCFs;
 import org.broadinstitute.hellbender.tools.walkers.mutect.M2ArgumentCollection;
-import org.broadinstitute.hellbender.utils.*;
+import org.broadinstitute.hellbender.utils.GenomeLoc;
+import org.broadinstitute.hellbender.utils.GenomeLocParser;
+import org.broadinstitute.hellbender.utils.GenomeLocSortedSet;
+import org.broadinstitute.hellbender.utils.IntervalMergingRule;
+import org.broadinstitute.hellbender.utils.IntervalSetRule;
+import org.broadinstitute.hellbender.utils.IntervalUtils;
+import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.variant.GATKVariantContextUtils;
+import org.broadinstitute.hellbender.tools.walkers.annotator.allelespecific.ReducibleAnnotation;
+import org.broadinstitute.hellbender.utils.variant.writers.IntervalFilteringVcfWriter;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+import static org.broadinstitute.hellbender.utils.variant.writers.IntervalFilteringVcfWriter.Mode.STARTS_IN;
 
 /**
  * Perform joint genotyping on one or more samples pre-called with HaplotypeCaller
@@ -97,6 +119,7 @@ public final class GenotypeGVCFs extends VariantLocusWalker {
     public static final String KEEP_COMBINED_LONG_NAME = "keep-combined-raw-annotations";
     public static final String KEEP_COMBINED_SHORT_NAME = "keep-combined";
     public static final String FORCE_OUTPUT_INTERVALS_NAME = "force-output-intervals";
+    public static final String SOMATIC_QUALITY_THRESHOLD_NAME = "somatic-quality-threshold";
 
     @Argument(fullName = StandardArgumentDefinitions.OUTPUT_LONG_NAME, shortName = StandardArgumentDefinitions.OUTPUT_SHORT_NAME,
             doc="File to which variants should be written", optional=false)
@@ -108,7 +131,7 @@ public final class GenotypeGVCFs extends VariantLocusWalker {
     /**
      * Import all data between specified intervals.   Improves performance using large lists of intervals, as in exome
      * sequencing, especially if GVCF data only exists for specified intervals.  Use with
-     * --only-output-calls-starting-in-intervals if input GVCFs contain calls outside the specified intervals.
+     * --{@value StandardArgumentDefinitions#VARIANT_OUTPUT_INTERVAL_FILTERING_MODE_LONG_NAME} if input GVCFs contain calls outside the specified intervals.
      */
     @Argument(fullName = GenomicsDBImport.MERGE_INPUT_INTERVALS_LONG_NAME,
             shortName = GenomicsDBImport.MERGE_INPUT_INTERVALS_LONG_NAME,
@@ -130,6 +153,13 @@ public final class GenotypeGVCFs extends VariantLocusWalker {
     doc = "LOD threshold to emit variant to VCF.")
     protected double tlodThreshold = 3.5;  //allow for some lower quality variants
 
+    /**
+     * Only variants with somatic quality (SQ) exceeding this threshold will be written to the VCF, regardless of filter status.
+     * Use with --{@value CombineGVCFs#SOMATIC_INPUT_LONG_NAME}
+     * Increase argument value to reduce false positives in the callset.
+     */
+    @Argument(fullName=SOMATIC_QUALITY_THRESHOLD_NAME, doc = "SQ threshold to emit variant to VCF.")
+    protected double sqThreshold = 3.0;  //default to threshold used by DRAGEN https://support-docs.illumina.com/SW/DRAGEN_v40/Content/SW/DRAGEN/MitochondrialCalling.htm
 
     /**
      * Margin of error in allele fraction to consider a somatic variant homoplasmic, i.e. if there is less than a 0.1% reference allele fraction, those reads are likely errors
@@ -138,9 +168,10 @@ public final class GenotypeGVCFs extends VariantLocusWalker {
     protected double afTolerance = 1e-3;  //based on Q30 as a "good" base quality score
 
     /**
-     * If specified, keep the combined raw annotations (e.g. AS_SB_TABLE) after genotyping.  This is applicable to Allele-Specific annotations
+     * If specified, keep all the combined raw annotations (e.g. AS_SB_TABLE) after genotyping.  This is applicable to Allele-Specific annotations. See {@link ReducibleAnnotation}
      */
-    @Argument(fullName=KEEP_COMBINED_LONG_NAME, shortName = KEEP_COMBINED_SHORT_NAME, doc = "If specified, keep the combined raw annotations")
+    @Argument(fullName=KEEP_COMBINED_LONG_NAME, shortName = KEEP_COMBINED_SHORT_NAME, doc = "If specified, keep the combined raw annotations",
+            mutex = {GenotypeGVCFsAnnotationArgumentCollection.KEEP_SPECIFIED_RAW_COMBINED_ANNOTATION_LONG_NAME})
     protected boolean keepCombined = false;
 
     @ArgumentCollection
@@ -152,12 +183,13 @@ public final class GenotypeGVCFs extends VariantLocusWalker {
     /**
      * This option can only be activated if intervals are specified.
      */
+    @DeprecatedFeature
     @Advanced
     @Argument(fullName= ONLY_OUTPUT_CALLS_STARTING_IN_INTERVALS_FULL_NAME,
-            doc="Restrict variant output to sites that start within provided intervals",
-            optional=true)
+            doc="Restrict variant output to sites that start within provided intervals, equivalent to '--"+StandardArgumentDefinitions.VARIANT_OUTPUT_INTERVAL_FILTERING_MODE_LONG_NAME+" STARTS_IN'",
+            optional=true,
+            mutex = {StandardArgumentDefinitions.VARIANT_OUTPUT_INTERVAL_FILTERING_MODE_LONG_NAME})
     private boolean onlyOutputCallsStartingInIntervals = false;
-
 
     @Argument(fullName = FORCE_OUTPUT_INTERVALS_NAME,
             suppressFileExpansion = true, doc = "sites at which to output genotypes even if non-variant in samples", optional = true)
@@ -170,15 +202,15 @@ public final class GenotypeGVCFs extends VariantLocusWalker {
     @ArgumentCollection
     private final DbsnpArgumentCollection dbsnp = new DbsnpArgumentCollection();
 
+    // @ArgumentCollection deliberately omitted since this is passed to the annotation plugin
+    final GenotypeGVCFsAnnotationArgumentCollection genotypeGVCFsAnnotationArgs = new GenotypeGVCFsAnnotationArgumentCollection();
+
     // the annotation engine
     private VariantAnnotatorEngine annotationEngine;
 
     private ReferenceConfidenceVariantContextMerger merger;
 
     private VariantContextWriter vcfWriter;
-
-    /** these are used when {@link #onlyOutputCallsStartingInIntervals) is true */
-    private List<SimpleInterval> intervals;
 
     private OverlapDetector<GenomeLoc> forceOutputIntervals;
 
@@ -220,6 +252,16 @@ public final class GenotypeGVCFs extends VariantLocusWalker {
     public boolean useVariantAnnotations() { return true;}
 
     @Override
+    public List<? extends CommandLinePluginDescriptor<?>> getPluginDescriptors() {
+        GATKReadFilterPluginDescriptor readFilterDescriptor = new GATKReadFilterPluginDescriptor(getDefaultReadFilters());
+        return useVariantAnnotations()?
+                Arrays.asList(readFilterDescriptor, new GATKAnnotationPluginDescriptor(
+                        genotypeGVCFsAnnotationArgs,
+                        getDefaultVariantAnnotations(), getDefaultVariantAnnotationGroups())):
+                Collections.singletonList(readFilterDescriptor);
+    }
+
+    @Override
     public List<Class<? extends Annotation>> getDefaultVariantAnnotationGroups() {
         return Arrays.asList(StandardAnnotation.class);
     }
@@ -229,6 +271,11 @@ public final class GenotypeGVCFs extends VariantLocusWalker {
 
         if (somaticInput) {
             logger.warn("Note that the Mutect2 reference confidence mode is in BETA -- the likelihoods model and output format are subject to change in subsequent versions.");
+        }
+
+        if (onlyOutputCallsStartingInIntervals) {
+            logger.warn("The --" + ONLY_OUTPUT_CALLS_STARTING_IN_INTERVALS_FULL_NAME + " option is deprecated. Please use '--" + StandardArgumentDefinitions.VARIANT_OUTPUT_INTERVAL_FILTERING_MODE_LONG_NAME + " STARTS_IN' for an equivalent filtering.");
+            this.userOutputVariantIntervalFilteringMode = STARTS_IN;
         }
 
         forceOutputIntervalsPresent = !forceOutputIntervalStrings.isEmpty();
@@ -250,29 +297,33 @@ public final class GenotypeGVCFs extends VariantLocusWalker {
 
         final VCFHeader inputVCFHeader = getHeaderForVariants();
 
-        if(onlyOutputCallsStartingInIntervals) {
-            if( !hasUserSuppliedIntervals()) {
-                throw new CommandLineException.MissingArgument("-L or -XL", "Intervals are required if --" + ONLY_OUTPUT_CALLS_STARTING_IN_INTERVALS_FULL_NAME + " was specified.");
-            }
-        }
-
-        intervals = hasUserSuppliedIntervals() ? intervalArgumentCollection.getIntervals(getBestAvailableSequenceDictionary()) :
-                Collections.emptyList();
-
-        annotationEngine = new VariantAnnotatorEngine(makeVariantAnnotations(), dbsnp.dbsnp, Collections.emptyList(), false, keepCombined);
+        final Collection<Annotation> variantAnnotations = makeVariantAnnotations();
+        final Set<Annotation> annotationsToKeep = getAnnotationsToKeep();
+        annotationEngine = new VariantAnnotatorEngine(variantAnnotations, dbsnp.dbsnp, Collections.emptyList(), false, keepCombined, annotationsToKeep);
 
         merger = new ReferenceConfidenceVariantContextMerger(annotationEngine, getHeaderForVariants(), somaticInput, false, true);
 
         //methods that cannot be called in engine bc its protected
-        Set<VCFHeaderLine> defaultToolVCFHeaderLines = getDefaultToolVCFHeaderLines();
+        final Set<VCFHeaderLine> defaultToolVCFHeaderLines = getDefaultToolVCFHeaderLines();
         vcfWriter = createVCFWriter(outputFile);
 
         //create engine object
-        gvcfEngine = new GenotypeGVCFsEngine(annotationEngine, genotypeArgs, includeNonVariants, inputVCFHeader);
+        final boolean   keepSB = variantAnnotations.stream().map(a -> a.getClass().getSimpleName()).collect(Collectors.toList()).contains(StrandBiasBySample.class.getSimpleName());
+        gvcfEngine = new GenotypeGVCFsEngine(annotationEngine, genotypeArgs, includeNonVariants, inputVCFHeader, keepSB);
 
         //call initialize method in engine class that creates VCFWriter object and writes a header to it
         vcfWriter = gvcfEngine.setupVCFWriter(defaultToolVCFHeaderLines, keepCombined, dbsnp, vcfWriter);
+    }
 
+    private Set<Annotation> getAnnotationsToKeep() {
+        final GATKAnnotationPluginDescriptor pluginDescriptor = getCommandLineParser().getPluginDescriptor(GATKAnnotationPluginDescriptor.class);
+        final List<String> annotationStringsToKeep = genotypeGVCFsAnnotationArgs.getKeepSpecifiedCombinedAnnotationNames();
+        final Map<String, Annotation> resolvedInstancesMap = pluginDescriptor.getResolvedInstancesMap();
+        return annotationStringsToKeep.stream()
+                .peek(s -> {Annotation a = resolvedInstancesMap.get(s); if (a == null)
+                    throw new UserException("Requested --" + GenotypeGVCFsAnnotationArgumentCollection.KEEP_SPECIFIED_RAW_COMBINED_ANNOTATION_LONG_NAME + ": " + s + " was not found in annotation list. Was it excluded with --" + StandardArgumentDefinitions.ANNOTATIONS_TO_EXCLUDE_LONG_NAME + " or not provided with --" + StandardArgumentDefinitions.ANNOTATION_LONG_NAME + "?"); })
+                .map(resolvedInstancesMap::get)
+                .collect(Collectors.toSet());
     }
 
     @Override
@@ -280,12 +331,10 @@ public final class GenotypeGVCFs extends VariantLocusWalker {
 
         final boolean inForceOutputIntervals = forceOutputIntervalsPresent && forceOutputIntervals.overlapsAny(loc);
         final boolean forceOutput = includeNonVariants || inForceOutputIntervals;
-        final VariantContext regenotypedVC = gvcfEngine.callRegion(loc, variants, ref, features, merger, somaticInput, tlodThreshold, afTolerance, forceOutput);
+        final VariantContext regenotypedVC = gvcfEngine.callRegion(loc, variants, ref, features, merger, somaticInput, tlodThreshold, sqThreshold, afTolerance, forceOutput);
 
         if (regenotypedVC != null) {
-            final SimpleInterval variantStart = new SimpleInterval(regenotypedVC.getContig(), regenotypedVC.getStart(), regenotypedVC.getStart());
-            if ((forceOutput || !GATKVariantContextUtils.isSpanningDeletionOnly(regenotypedVC)) &&
-                    (!onlyOutputCallsStartingInIntervals || intervals.stream().anyMatch(interval -> interval.contains (variantStart)))) {
+            if ((forceOutput || !GATKVariantContextUtils.isSpanningDeletionOnly(regenotypedVC))) {
                 vcfWriter.add(regenotypedVC);
             }
         }

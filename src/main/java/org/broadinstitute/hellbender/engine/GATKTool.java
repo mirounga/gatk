@@ -16,8 +16,10 @@ import java.time.ZonedDateTime;
 import java.util.*;
 import java.util.stream.Stream;
 
+
 import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.barclay.argparser.ArgumentCollection;
+import org.broadinstitute.barclay.argparser.CommandLineException;
 import org.broadinstitute.barclay.argparser.CommandLinePluginDescriptor;
 import org.broadinstitute.hellbender.cmdline.CommandLineProgram;
 import org.broadinstitute.hellbender.cmdline.GATKPlugin.GATKAnnotationPluginDescriptor;
@@ -45,6 +47,7 @@ import org.broadinstitute.hellbender.utils.read.SAMFileGATKReadWriter;
 import org.broadinstitute.hellbender.utils.reference.ReferenceUtils;
 import org.broadinstitute.hellbender.utils.variant.GATKVariantContextUtils;
 import org.broadinstitute.hellbender.utils.variant.writers.ShardingVCFWriter;
+import org.broadinstitute.hellbender.utils.variant.writers.IntervalFilteringVcfWriter;
 
 /**
  * Base class for all GATK tools. Tool authors that want to write a "GATK" tool but not use one of
@@ -84,6 +87,12 @@ public abstract class GATKTool extends CommandLineProgram {
             shortName=StandardArgumentDefinitions.CREATE_OUTPUT_BAM_MD5_SHORT_NAME,
             doc = "If true, create a MD5 digest for any BAM/SAM/CRAM file created", optional=true, common = true)
     public boolean createOutputBamMD5 = false;
+
+    @Argument(fullName = StandardArgumentDefinitions.OUTPUT_CRAM_VERSION_LONG_NAME,
+            doc = "The CRAM version ('3.0' or '3.1') to write for CRAM output. Ignored for BAM/SAM output. " +
+                  "Note that CRAM 3.1 (the default) cannot be read by tools that only support CRAM 3.0.",
+            optional = true, common = true)
+    public String outputCramVersion = ConfigFactory.getInstance().getGATKConfig().outputCramVersion();
 
     @Argument(fullName=StandardArgumentDefinitions.CREATE_OUTPUT_VARIANT_INDEX_LONG_NAME,
             shortName=StandardArgumentDefinitions.CREATE_OUTPUT_VARIANT_INDEX_SHORT_NAME,
@@ -417,6 +426,13 @@ public abstract class GATKTool extends CommandLineProgram {
      */
     public String getProgressMeterRecordLabel() { return ProgressMeter.DEFAULT_RECORD_LABEL; }
 
+    /**
+     * @return default value does no filtering. Override to change how variants are filtered against the intervals for your tools.
+     */
+    public IntervalFilteringVcfWriter.Mode getVariantOutputFilteringMode(){
+        return IntervalFilteringVcfWriter.Mode.ANYWHERE;
+    }
+
     protected List<SimpleInterval> transformTraversalIntervals(final List<SimpleInterval> getIntervals, final SAMSequenceDictionary sequenceDictionary) {
         return getIntervals;
     }
@@ -600,7 +616,7 @@ public abstract class GATKTool extends CommandLineProgram {
 
     /**
      * Does this tool want to disable the progress meter? If so, override here to return true
-     * 
+     *
      * @return true if this tools wants to disable progress meter output, otherwise false
      */
     public boolean disableProgressMeter() {
@@ -727,11 +743,15 @@ public abstract class GATKTool extends CommandLineProgram {
 
         initializeIntervals(); // Must be initialized after reference, reads and features, since intervals currently require a sequence dictionary from another data source
 
-        if ( seqValidationArguments.performSequenceDictionaryValidation()) {
+        if (seqValidationArguments.performSequenceDictionaryValidation()) {
             validateSequenceDictionaries();
         }
 
         checkToolRequirements();
+
+        if ((getVariantOutputFilteringMode() != IntervalFilteringVcfWriter.Mode.ANYWHERE ) && userIntervals == null){
+            throw new CommandLineException.MissingArgument("-L or -XL", "Intervals are required if --" + StandardArgumentDefinitions.VARIANT_OUTPUT_INTERVAL_FILTERING_MODE_LONG_NAME + " was specified or if the tool uses interval filtering.");
+        }
 
         initializeProgressMeter(getProgressMeterRecordLabel());
     }
@@ -850,7 +870,8 @@ public abstract class GATKTool extends CommandLineProgram {
                 getHeaderForSAMWriter(),
                 preSorted,
                 createOutputBamIndex,
-                createOutputBamMD5
+                createOutputBamMD5,
+                ReadUtils.getCRAMVersion(outputCramVersion)
             )
         );
     }
@@ -911,20 +932,27 @@ public abstract class GATKTool extends CommandLineProgram {
         if (outputSitesOnlyVCFs) {
             options.add(Options.DO_NOT_WRITE_GENOTYPES);
         }
-
+        final VariantContextWriter unfilteredWriter;
         if (maxVariantsPerShard > 0) {
-            return new ShardingVCFWriter(
+            unfilteredWriter = new ShardingVCFWriter(
                     outPath,
                     maxVariantsPerShard,
                     sequenceDictionary,
                     createOutputVariantMD5,
-                    options.toArray(new Options[options.size()]));
+                    options.toArray(new Options[0]));
+        } else {
+            unfilteredWriter = GATKVariantContextUtils.createVCFWriter(
+                    outPath,
+                    sequenceDictionary,
+                    createOutputVariantMD5,
+                    options.toArray(new Options[0]));
         }
-        return GATKVariantContextUtils.createVCFWriter(
-                outPath,
-                sequenceDictionary,
-                createOutputVariantMD5,
-                options.toArray(new Options[options.size()]));
+
+        return getVariantOutputFilteringMode() == IntervalFilteringVcfWriter.Mode.ANYWHERE ?
+                unfilteredWriter :
+                new IntervalFilteringVcfWriter(unfilteredWriter,
+                        intervalArgumentCollection.getIntervals(getBestAvailableSequenceDictionary()),
+                        getVariantOutputFilteringMode());
     }
 
     /**
@@ -1022,6 +1050,16 @@ public abstract class GATKTool extends CommandLineProgram {
     }
 
     /**
+     * Expose a read-only version of the raw user-supplied intervals. This can be used by tools that need to explicitly
+     * traverse the intervals themselves (rather than, for example, walking the reads based on the intervals)
+     *
+     * @return - the raw user-supplied intervals, as an unmodifiable list
+     */
+    public List<SimpleInterval> getUserSuppliedIntervals() {
+        return Collections.unmodifiableList(userIntervals);
+    }
+
+    /**
      * Returns the list of intervals to iterate, either limited to the user-supplied intervals or the entire reference genome if none were specified.
      * If no reference was supplied, null is returned
      */
@@ -1078,8 +1116,11 @@ public abstract class GATKTool extends CommandLineProgram {
     public Object onTraversalSuccess() { return null; }
 
     @Override
+    @SuppressWarnings("try")
     protected final Object doWork() {
-        try {
+        //this makes use of try-with-resource exception suppression to ensure that onShutdown()
+        //doesn't hide casual exceptions thrown during onStartup() or doWork()
+        try(final AutoCloseableNoCheckedExceptions thisTool = this::closeTool){
             onTraversalStart();
             progressMeter.start();
             traverse();
@@ -1087,8 +1128,6 @@ public abstract class GATKTool extends CommandLineProgram {
                 progressMeter.stop();
             }
             return onTraversalSuccess();
-        } finally {
-            closeTool();
         }
     }
 

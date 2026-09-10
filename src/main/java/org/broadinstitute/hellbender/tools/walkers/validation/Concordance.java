@@ -5,7 +5,7 @@ import htsjdk.variant.variantcontext.VariantContextBuilder;
 import htsjdk.variant.variantcontext.writer.VariantContextWriter;
 import htsjdk.variant.vcf.*;
 import org.apache.commons.collections4.Predicate;
-import org.apache.commons.lang.mutable.MutableLong;
+import org.apache.commons.lang3.mutable.MutableLong;
 import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
 import org.broadinstitute.barclay.help.DocumentedFeature;
@@ -83,7 +83,7 @@ public class Concordance extends AbstractConcordanceWalker {
     public static final String FILTERED_TRUE_NEGATIVES_AND_FALSE_NEGATIVES_SHORT_NAME = "ftnfn";
     
     public static final String TRUTH_STATUS_VCF_ATTRIBUTE = "STATUS";
-    private static VCFInfoHeaderLine TRUTH_STATUS_HEADER_LINE =
+    public static VCFInfoHeaderLine TRUTH_STATUS_HEADER_LINE =
             new VCFInfoHeaderLine(TRUTH_STATUS_VCF_ATTRIBUTE, 1,VCFHeaderLineType.String, "Truth status: TP/FP/FN for true positive/false positive/false negative.");
 
     @Argument(doc = "A table of summary statistics (true positives, sensitivity, etc.)",

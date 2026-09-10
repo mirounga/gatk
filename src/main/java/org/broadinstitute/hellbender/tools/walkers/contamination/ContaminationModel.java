@@ -1,7 +1,7 @@
 package org.broadinstitute.hellbender.tools.walkers.contamination;
 
 import htsjdk.samtools.util.OverlapDetector;
-import org.apache.commons.lang.mutable.MutableDouble;
+import org.apache.commons.lang3.mutable.MutableDouble;
 import org.apache.commons.lang3.tuple.ImmutablePair;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.commons.math3.optim.univariate.UnivariatePointValuePair;
@@ -277,7 +277,7 @@ public class ContaminationModel {
     }
 
     private static double segmentLogLikelihood(final List<PileupSummary> segment, final double contamination, final double errorRate, final double minorAlleleFraction) {
-        return segment.stream().mapToDouble(site -> FastMath.log(MathUtils.sum(genotypeLikelihoods(site, contamination, errorRate, minorAlleleFraction)))).sum();
+        return segment.stream().mapToDouble(site -> Math.log(MathUtils.sum(genotypeLikelihoods(site, contamination, errorRate, minorAlleleFraction)))).sum();
     }
 
     private static double modelLogLikelihood(final List<List<PileupSummary>> segments, final double contamination, final double errorRate, final List<Double> mafs) {

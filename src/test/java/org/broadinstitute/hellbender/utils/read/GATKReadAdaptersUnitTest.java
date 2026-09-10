@@ -2,7 +2,6 @@ package org.broadinstitute.hellbender.utils.read;
 
 
 import htsjdk.samtools.*;
-import org.bdgenomics.formats.avro.AlignmentRecord;
 import org.broadinstitute.hellbender.GATKBaseTest;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
@@ -11,6 +10,7 @@ import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.regex.Matcher;
@@ -34,42 +34,6 @@ public class GATKReadAdaptersUnitTest extends GATKBaseTest {
 
     private static GATKRead basicReadBackedBySam() {
         return new SAMRecordToGATKReadAdapter(basicSAMRecord());
-    }
-
-
-    @DataProvider(name = "readPairsForToString")
-    public Object[][] readPairsForToString() {
-        List<Object[]> testCases = new ArrayList<>();
-
-        final SAMRecord samRecord = basicSAMRecord();
-        final GATKRead basicSamRead = new SAMRecordToGATKReadAdapter(samRecord);
-
-        final SAMRecord samRecordUnmapped = basicUnmappedSAMRecord();
-        samRecordUnmapped.setReadUnmappedFlag(true);
-        final GATKRead basicSamReadUnmapped = new SAMRecordToGATKReadAdapter(samRecordUnmapped);
-
-        testCases.add(new GATKRead[]{basicSamRead, basicReadBackedByADAMRecord(samRecord)});
-
-        testCases.add(new GATKRead[]{basicSamReadUnmapped, basicReadBackedByADAMRecord(samRecordUnmapped)});
-        return testCases.toArray(new Object[][]{});
-    }
-
-    private static GATKRead basicReadBackedByADAMRecord(final SAMRecord sam) {
-        final AlignmentRecord record = new AlignmentRecord();
-        record.setReadName(sam.getReadName());
-        record.setSequence(new String(sam.getReadBases()));
-        record.setStart((long)sam.getAlignmentStart()-1); //ADAM records are 0-based
-        record.setEnd((long)sam.getAlignmentEnd()-1);     //ADAM records are 0-based
-        record.setReadMapped(!sam.getReadUnmappedFlag());
-        record.setCigar(sam.getCigarString());
-        record.setReferenceName(sam.getReferenceName());
-        return new BDGAlignmentRecordToGATKReadAdapter(record, getSAMHeader());
-    }
-
-    @Test(dataProvider = "readPairsForToString")
-    public void testToString(final GATKRead read1, final GATKRead read2){
-        Assert.assertNotEquals(read1, read2);
-        Assert.assertEquals(read1.toString(), read2.toString());
     }
 
     private static SAMFileHeader getSAMHeader() {
@@ -1390,7 +1354,7 @@ public class GATKReadAdaptersUnitTest extends GATKBaseTest {
         Assert.assertEquals(read.convertToSAMRecord(hg19Header).getMateAlignmentStart(), SAMRecord.NO_ALIGNMENT_START);
     }
 
-    @DataProvider(name = "pair_orientation_empty_results")
+    @DataProvider(name = "pairOrientationEmptyResults")
     public Object[][] pairOrientationEmpty() {
         final GATKRead unmappedRead = ArtificialReadUtils.createArtificialRead("100M");
         unmappedRead.setIsPaired(true);
@@ -1414,12 +1378,12 @@ public class GATKReadAdaptersUnitTest extends GATKBaseTest {
         };
     }
 
-    @Test(dataProvider = "pair_orientation_empty_results")
+    @Test(dataProvider = "pairOrientationEmptyResults")
     public void testGetPairOrientationEmpty(final GATKRead read) {
         Assert.assertFalse(read.getPairOrientation().isPresent());
     }
 
-    @DataProvider(name = "pair_orientation_failures")
+    @DataProvider(name = "pairOrientationFailures")
     public Object[][] pairOrientationFailures() {
         final GATKRead unpairedRead = ArtificialReadUtils.createArtificialRead("100M");
         unpairedRead.setIsPaired(false);
@@ -1437,12 +1401,12 @@ public class GATKReadAdaptersUnitTest extends GATKBaseTest {
         };
     }
 
-    @Test(dataProvider = "pair_orientation_failures", expectedExceptions = IllegalArgumentException.class)
+    @Test(dataProvider = "pairOrientationFailures", expectedExceptions = IllegalArgumentException.class)
     public void testGetPairOrientationFailures(final GATKRead read) {
         final Optional<SamPairUtil.PairOrientation> pairOrientation = read.getPairOrientation();
     }
 
-    @DataProvider(name = "pair_orientation")
+    @DataProvider(name = "pairOrientation")
     public Object[][] pairOrientation() {
         final GATKRead forwardStrandInnie = ArtificialReadUtils.createArtificialRead("100M");
         forwardStrandInnie.setIsPaired(true);
@@ -1500,9 +1464,65 @@ public class GATKReadAdaptersUnitTest extends GATKBaseTest {
         };
     }
 
-    @Test(dataProvider = "pair_orientation")
+    @Test(dataProvider = "pairOrientation")
     public void testGetPairOrientation(final GATKRead read, final SamPairUtil.PairOrientation expected) {
         final SamPairUtil.PairOrientation pairOrientation = read.getPairOrientation().get();
         Assert.assertEquals(pairOrientation, expected);
     }
+
+    private GATKRead makeFlowBasedRead(final byte[] bases, final boolean isReverse) {
+
+        byte[] quals = new byte[bases.length];
+
+        final String cigar = String.format("%dM", bases.length);
+        GATKRead read = ArtificialReadUtils.createArtificialRead(bases, quals, cigar);
+
+        final SAMFileHeader header = getSAMHeader();
+        SAMReadGroupRecord record = header.getReadGroup(BASIC_READ_GROUP);
+        record.setAttribute(SAMReadGroupRecord.FLOW_ORDER_TAG, FlowBasedRead.DEFAULT_FLOW_ORDER);
+        ((SAMRecordToGATKReadAdapter)read).setHeader(header);
+        read.setAttribute(SAMTag.RG.name(), BASIC_READ_GROUP);
+
+        read.setPosition("chr1",100);
+        read.setIsReverseStrand(isReverse);
+        // convert to a flow based read
+        ArtificialReadUtils.makeIntoFlowBased(read);
+        return read;
+    }
+
+    @DataProvider(name="flowBasedReads")
+    public Object[][] makeMultipleReads(){
+        List<Object[]> tests = new ArrayList<>();
+        tests.add(new Object[]{makeFlowBasedRead(new byte[]{'T','A','G','C','G','A'}, false), 1,3,6});
+        tests.add(new Object[]{makeFlowBasedRead(new byte[]{'A','C','C','G','A','T'}, false), 0,4,6});
+        tests.add(new Object[]{makeFlowBasedRead(new byte[]{'T','A','G','C','G','A'}, true), 0,6,6});
+
+        return tests.toArray(new Object[][]{});
+    }
+
+    @Test(dataProvider = "flowBasedReads")
+    public void testHardClipAttributes(final GATKRead read, final int newStart, final int newLength, final int originalLength){
+
+        //Add an attribute that is not suppsed to be clipped
+        byte[]      ua = new byte[read.getBasesNoCopy().length];
+        Arrays.fill(ua, (byte)1);
+        String untrimmableAttribute = "ua";
+        read.setAttribute(untrimmableAttribute, ua);
+
+        read.hardClipAttributes(newStart, newLength, originalLength);
+        for (final String tag : FlowBasedRead.HARD_CLIPPED_TAGS){
+            if (read.hasAttribute(tag)){
+                Object attribute = ((SAMRecordToGATKReadAdapter)read).getEncapsulatedSamRecord().getAttribute(tag);
+                if (attribute instanceof String) {
+                    Assert.assertEquals(((String)attribute).length(), newLength);
+                } else {
+                    Assert.assertEquals(read.getAttributeAsByteArray(tag).length, newLength);
+                }
+            }
+        }
+
+        Assert.assertEquals(read.getAttributeAsByteArray(untrimmableAttribute).length, originalLength);
+
+    }
+
 }

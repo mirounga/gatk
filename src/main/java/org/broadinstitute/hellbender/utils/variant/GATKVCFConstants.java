@@ -27,6 +27,8 @@ public final class GATKVCFConstants {
     public static final String AS_RAW_RMS_MAPPING_QUALITY_KEY =     "AS_RAW_MQ";
     public static final String AS_CULPRIT_KEY =                     "AS_culprit";
     public static final String AS_VQS_LOD_KEY =                     "AS_VQSLOD";
+    public static final String AS_VQS_SENS_KEY =                    "AS_VQS_SENS";
+    public static final String AS_YNG_STATUS_KEY =                  "AS_YNG";
     public static final String ORIGINAL_AC_KEY =                    "AC_Orig"; //SelectVariants
     public static final String ORIGINAL_AF_KEY =                    "AF_Orig"; //SelectVariants
     public static final String ORIGINAL_AN_KEY =                    "AN_Orig"; //SelectVariants
@@ -40,15 +42,20 @@ public final class GATKVCFConstants {
     public static final String CULPRIT_KEY =                        "culprit";
     public static final String ORIGINAL_DP_KEY =                    "DP_Orig"; //SelectVariants
     public static final String DOWNSAMPLED_KEY =                    "DS";
-    public static final String EVENT_COUNT_IN_HAPLOTYPE_KEY =       "ECNT"; //M2
+    public static final String EVENT_COUNT_IN_REGION_KEY =          "ECNT"; //M2
+    public static final String EVENT_COUNT_IN_HAPLOTYPE_KEY =       "ECNTH"; //M2
     public static final String FISHER_STRAND_KEY =                  "FS";
     public static final String AS_FISHER_STRAND_KEY =               "AS_FS";
     public static final String AS_SB_TABLE_KEY =                    "AS_SB_TABLE";
+    public static final String AS_SBP_TABLE_KEY =                   "AS_SBP_TABLE";
+    public static final String POSSIBLE_FP_ADJACENT_TP_KEY =        "SUSP_NOISY_ADJACENT_TP_VARIANT";
     public static final String SB_TABLE_KEY =                       "SB_TABLE";
     public static final String GQ_MEAN_KEY =                        "GQ_MEAN";
     public static final String GQ_STDEV_KEY =                       "GQ_STDDEV";
     public static final String HAPLOTYPE_SCORE_KEY =                "HaplotypeScore";
     public static final String HI_CONF_DENOVO_KEY =                 "hiConfDeNovo";
+    public static final String TRANSMITTED_SINGLETON =              "transmittedSingleton";
+    public static final String NON_TRANSMITTED_SINGLETON =          "nonTransmittedSingleton";
     public static final String INTERVAL_GC_CONTENT_KEY =            "IGC";
     public static final String INBREEDING_COEFFICIENT_KEY =         "InbreedingCoeff";
     public static final String AS_INBREEDING_COEFFICIENT_KEY =      "AS_InbreedingCoeff";
@@ -83,12 +90,18 @@ public final class GATKVCFConstants {
     public static final String SAMPLE_LIST_KEY =                    "Samples";
     public static final String STRAND_ODDS_RATIO_KEY =              "SOR";
     public static final String AS_STRAND_ODDS_RATIO_KEY =           "AS_SOR";
+    public static final String AS_STRAND_ODDS_RATIO_PROB_KEY =      "AS_SORP";
     public static final String STR_PRESENT_KEY =                    "STR";
     public static final String VQS_LOD_KEY =                        "VQSLOD";
     public static final String CNN_1D_KEY =                         "CNN_1D";
     public static final String CNN_2D_KEY =                         "CNN_2D";
     public static final String F1R2_KEY =                           "F1R2";
     public static final String F2R1_KEY =                           "F2R1";
+
+    public static final String TREE_SCORE =                         "TREE_SCORE";
+
+    //DRAGEN mitochondria
+    public static final String SOMATIC_QUALITY_KEY =              "SQ";
 
     // Mutect2-specific INFO keys
     public static final String TUMOR_LOG_10_ODDS_KEY =              "TLOD";
@@ -130,8 +143,6 @@ public final class GATKVCFConstants {
     public static final String HAPLOTYPE_CALLER_PHASING_ID_KEY =    "PID";
     public static final String PHRED_SCALED_POSTERIORS_KEY =        "PP"; //FamilyLikelihoodsUtils / PosteriorLikelihoodsUtils
     public static final String REFERENCE_GENOTYPE_QUALITY =         "RGQ";
-    public static final String GENOTYPE_QUALITY_BY_ALLELE_BALANCE = "ABGQ"; //GnarlyGenotyper
-    public static final String GENOTYPE_QUALITY_BY_ALT_CONFIDENCE = "ALTGQ"; //GnarlyGenotyper
     public static final String STRAND_COUNT_BY_SAMPLE_KEY =         "SAC";
     public static final String STRAND_BIAS_BY_SAMPLE_KEY =          "SB";
     public static final String FEATURIZED_READ_SETS_KEY =           "FRS";
@@ -139,11 +150,28 @@ public final class GATKVCFConstants {
     public static final String HAPLOTYPE_EQUIVALENCE_COUNTS_KEY =   "HEC";
     public static final String HAPLOTYPE_COMPLEXITY_KEY =           "HAPCOMP";
     public static final String HAPLOTYPE_DOMINANCE_KEY =            "HAPDOM";
+    public static final String HAPLOTYPES_BEFORE_FILTERING_KEY =    "ASSEMBLED_HAPS";
+    public static final String HAPLOTYPES_FILTERED_KEY =            "FILTERED_HAPS";
     public final static String TRANSMISSION_PROBABILITY_KEY =       "TP"; //PhaseByTransmission
     public static final String FRAGMENT_ALLELE_DEPTHS =             "FAD";
 
+    // flow annotations
+    public final static String FLOW_INDEL_CLASSIFY =                "X_IC";
+    public final static String FLOW_INDEL_LENGTH =                  "X_IL";
+    public final static String FLOW_HMER_INDEL_LENGTH =             "X_HIL";
+    public final static String FLOW_HMER_INDEL_NUC =                "X_HIN";
+    public final static String FLOW_LEFT_MOTIF =                    "X_LM";
+    public final static String FLOW_RIGHT_MOTIF =                   "X_RM";
+    public final static String FLOW_GC_CONTENT =                    "X_GCC";
+    public final static String FLOW_CYCLESKIP_STATUS =              "X_CSS";
+    public final static String FLOW_VARIANT_TYPE =                  "VARIANT_TYPE";
+
+
     // M2-specific FORMAT keys
     public static final String ALLELE_FRACTION_KEY =                "AF";
+
+    // Collapse keys
+    public static final String EXT_COLLAPSED_KEY =                  "XC";
 
     //FILTERS
     /* Note that many filters used throughout GATK (most notably in VariantRecalibration) are dynamic,
@@ -174,6 +202,22 @@ public final class GATKVCFConstants {
     public static final String LOW_HET_FILTER_NAME =                           "mt_many_low_hets";
     public static final String FAIL =                                           "FAIL";
     public static final String SITE_LEVEL_FILTERS =                             "SITE";
+
+    public static final String SNP = "SNP";
+    public static final String INDEL = "INDEL";
+    public static final String EXCESS_ALLELES = "EXCESS_ALLELES";
+    public static final String NO_HQ_GENOTYPES = "NO_HQ_GENOTYPES";
+
+    public static final String NAY_FROM_YNG = "NAY";
+    public static final String VQSR_FAILURE_PREFIX = "low_VQSLOD_";
+    public static final String VQSR_FAILURE_SNP = VQSR_FAILURE_PREFIX + SNP;
+    public static final String VQSR_FAILURE_INDEL = VQSR_FAILURE_PREFIX + INDEL;
+    // Prefix for a site (SNP/INDEL) that failed calibration sensitivity cutoff. In this case, the site would be a
+    // failure if the sensitivity is greater than the threshold.
+    public static final String VQS_SENS_FAILURE_PREFIX = "high_VQS_SENS_";
+    public static final String VQS_SENS_FAILURE_SNP = VQS_SENS_FAILURE_PREFIX + SNP;
+    public static final String VQS_SENS_FAILURE_INDEL = VQS_SENS_FAILURE_PREFIX + INDEL;
+
 
 
     public static final List<String> MUTECT_FILTER_NAMES = Arrays.asList(VCFConstants.PASSES_FILTERS_v4, POLYMERASE_SLIPPAGE,

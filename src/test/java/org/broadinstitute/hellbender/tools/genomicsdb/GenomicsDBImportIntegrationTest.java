@@ -2,10 +2,13 @@ package org.broadinstitute.hellbender.tools.genomicsdb;
 
 import htsjdk.samtools.SAMSequenceDictionary;
 import htsjdk.samtools.SAMSequenceRecord;
+import htsjdk.samtools.util.FileExtensions;
 import htsjdk.samtools.util.IntervalList;
 import htsjdk.tribble.AbstractFeatureReader;
 import htsjdk.tribble.CloseableTribbleIterator;
 import htsjdk.tribble.FeatureReader;
+import htsjdk.tribble.index.Index;
+import htsjdk.tribble.index.IndexFactory;
 import htsjdk.tribble.readers.LineIterator;
 import htsjdk.variant.bcf2.BCF2Codec;
 import htsjdk.variant.variantcontext.Allele;
@@ -24,6 +27,7 @@ import htsjdk.variant.vcf.VCFStandardHeaderLines;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
@@ -47,6 +51,7 @@ import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.testutils.ArgumentsBuilder;
 import org.broadinstitute.hellbender.testutils.BaseTest;
 import org.broadinstitute.hellbender.testutils.VariantContextTestUtils;
+import org.broadinstitute.hellbender.tools.IndexFeatureFile;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.gcs.BucketUtils;
@@ -65,8 +70,11 @@ import org.testng.annotations.Test;
 @Test(groups = {"variantcalling"})
 public final class GenomicsDBImportIntegrationTest extends CommandLineProgramTest {
     private static final String HG_00096 = largeFileTestDir + "gvcfs/HG00096.g.vcf.gz";
+    private static final String HG_00096_SAMPLE_NAME = "HG00096";
     private static final String HG_00268 = largeFileTestDir + "gvcfs/HG00268.g.vcf.gz";
+    private static final String HG_00268_SAMPLE_NAME = "HG00268";
     private static final String NA_19625 = largeFileTestDir + "gvcfs/NA19625.g.vcf.gz";
+    private static final String NA_19625_SAMPLE_NAME = "NA19625";
     //The following 3 files were obtained by running CombineGVCFs on the above 3 files (separately). This introduces spanning
     //deletions in the files. Hence, these files can be used to test for spanning deletions in the input VCF.
     private static final String HG_00096_after_combine_gvcfs = largeFileTestDir + "gvcfs/HG00096_after_combine_gvcfs.g.vcf.gz";
@@ -93,7 +101,7 @@ public final class GenomicsDBImportIntegrationTest extends CommandLineProgramTes
     //This file was obtained from combined.gatk3.7.g.vcf.gz by dropping all the samples
     private static final String COMBINED_SITES_ONLY = largeFileTestDir + "gvcfs/combined.gatk3.7_sites_only.g.vcf.gz";
     private static final String INTERVAL_PICARD_STYLE_EXPECTED = toolsTestDir + "GenomicsDBImport/interval_expected.interval_list";
-    private static final String MULTIPLE_NON_ADJACENT_INTERVALS_THAT_WORK_WITH_COMBINE_GVCFS_PICARD_STYLE_EXPECTED = 
+    private static final String MULTIPLE_NON_ADJACENT_INTERVALS_THAT_WORK_WITH_COMBINE_GVCFS_PICARD_STYLE_EXPECTED =
             toolsTestDir + "GenomicsDBImport/multiple_non_adjacent_intervals_combine_gvcfs_expected.interval_list";
     private static final String MERGED_CONTIGS_INTERVAL_PICARD_STYLE_EXPECTED =
             toolsTestDir + "GenomicsDBImport/chr20_chr21_merged_contigs_expected.interval_list";
@@ -123,6 +131,11 @@ public final class GenomicsDBImportIntegrationTest extends CommandLineProgramTes
         new SimpleInterval("chr20", 17960187, 17970000),
         new SimpleInterval("chr20", 17970001, 17980000),
         new SimpleInterval("chr20", 17980001, 17981445)
+    ));
+    private static final ArrayList<SimpleInterval> INCLUDES_NON_IMPORTED_INTERVALS = new ArrayList<SimpleInterval>(Arrays.asList(
+        new SimpleInterval("chr2", 1, 100),
+        new SimpleInterval("chr20", 17960187, 17981445),
+        new SimpleInterval("chr22", 1, 100)
     ));
     private static final ArrayList<SimpleInterval> MULTIPLE_INTERVALS_THAT_WORK_WITH_COMBINE_GVCFS =
         new ArrayList<SimpleInterval>(Arrays.asList(
@@ -216,6 +229,13 @@ public final class GenomicsDBImportIntegrationTest extends CommandLineProgramTes
     @Test
     public void testGenomicsDBImportFileInputsWithMultipleIntervals() throws IOException {
         testGenomicsDBImporter(LOCAL_GVCFS, MULTIPLE_INTERVALS, COMBINED_MULTI_INTERVAL, b38_reference_20_21, true, 1);
+    }
+
+    @Test
+    public void testGenomicsDBImportFileInputsIncludeNonImportedIntervals() throws IOException {
+      final String workspace = createTempDir("genomicsdb-tests-").getAbsolutePath() + "/workspace";
+      writeToGenomicsDB(LOCAL_GVCFS, INTERVAL, workspace, 0, false, 0, 1, false, false, false, 0, true);
+      checkGenomicsDBAgainstExpected(workspace, INCLUDES_NON_IMPORTED_INTERVALS, COMBINED, b38_reference_20_21, true, ATTRIBUTES_TO_IGNORE);
     }
 
     @Test
@@ -375,6 +395,74 @@ public final class GenomicsDBImportIntegrationTest extends CommandLineProgramTes
         }
     }
 
+    @DataProvider
+    public Object[][] getInvalidArgsForAvoidNio(){
+        final ArgumentsBuilder baseArgs = ArgumentsBuilder.create()
+            .add(GenomicsDBImport.WORKSPACE_ARG_LONG_NAME, createTempFile())
+                .addInterval("fake")
+                .addFlag(GenomicsDBImport.AVOID_NIO);
+        return new Object[][]{
+                {baseArgs, CommandLineException.MissingArgument.class}, //no input
+                {baseArgs.copy()
+                        .addVCF("fake.vcf"), CommandLineException.class
+                }, //not allowed with variant, we shoul have some sort of mutex exception...
+                {baseArgs.copy()
+                        .add(GenomicsDBImport.SAMPLE_NAME_MAP_LONG_NAME, "fake.samplenames"), CommandLineException.MissingArgument.class
+                }, //missing header
+                {baseArgs.copy()
+                        .add(GenomicsDBImport.VCF_HEADER_OVERRIDE, "fake.vcf"), CommandLineException.MissingArgument.class
+                }, //missing input
+                {baseArgs.copy()
+                        .add(GenomicsDBImport.VCF_HEADER_OVERRIDE, "fake.vcf")
+                        .addVCF("fake.vcf"), CommandLineException.class // can't use with -V
+                }
+         };
+    }
+
+    @Test(dataProvider = "getInvalidArgsForAvoidNio")
+    public void testInvalidArgumentCombinationsWithAvoidNio(ArgumentsBuilder args, Class<? extends Exception> expectedException){
+         Assert.assertThrows(expectedException, () -> runCommandLine(args));
+    }
+
+    /*
+     * this is a test that can be run locally if you enable it and fill in the SAS token with one from
+     * https://app.terra.bio/#workspaces/axin-pipeline-testing-20230927/gatk-azure-testing
+     *
+     * it's basically an example of how to run the tool on azure
+     *
+     * note that the http url for the file azure files looks like this:
+     *
+     * https://<bucket_name>.blob.core.windows.net/<user_name>/<filepath>?<sas token>
+     * the SAS token includes the '?' generally
+     *
+     * to restructure into an az:// link you move the username
+     * az://<user_name>@<bucket_name>blob.core.windows.new/<filepath>
+     *
+     */
+    @Test(enabled = false, groups={"cloud","azure"})
+    public void testImportFromAzure(){
+
+        final String SAS_TOKEN="put a sas token in me";
+
+        final String workspace = createTempDir("genomicsdb-tests-").getAbsolutePath() + "/workspace";
+        final String sample = "NA19625";
+        final String azLocation = "az://lzb25a77f5eadb0fa72a2ae7.blob.core.windows.net/sc-62528cd7-3299-4440-8c17-10f458e589d3/NA19625.g.vcf.gz";
+        final String sampleMapText = String.format("%s\t%s\n", sample, azLocation);
+        final File sampleMappingFile = IOUtils.writeTempFile(sampleMapText, "sampleMapping", ".txt");
+
+        final ArgumentsBuilder args = ArgumentsBuilder.create()
+                .add(GenomicsDBImport.WORKSPACE_ARG_LONG_NAME, workspace)
+                .addInterval("chr20")
+                .addFlag(GenomicsDBImport.AVOID_NIO)
+                .add(GenomicsDBImport.SAMPLE_NAME_MAP_LONG_NAME, sampleMappingFile)
+                .addFlag(GenomicsDBImport.BYPASS_FEATURE_READER)
+                .add(GenomicsDBImport.VCF_HEADER_OVERRIDE, GENOMICSDB_TEST_DIR + "azureHeader.vcf");
+        Map<String, String> environment = new HashMap<>(System.getenv());
+        final String sasTokenEnvVariable = "AZURE_STORAGE_SAS_TOKEN";
+        environment.put(sasTokenEnvVariable, SAS_TOKEN);
+        runToolInNewJVM(GenomicsDBImport.class.getSimpleName(), args, environment);
+    }
+
     private void testGenomicsDBImporterWithGenotypes(final List<String> vcfInputs, final List<SimpleInterval> intervals,
                                                      final String expectedCombinedVCF,
                                                       final String referenceFile) throws IOException {
@@ -400,7 +488,7 @@ public final class GenomicsDBImportIntegrationTest extends CommandLineProgramTes
                                                      final boolean testAll,
                                                      final boolean produceGTField,
                                                      final boolean sitesOnlyQuery) throws IOException {
-         testGenomicsDBImporterWithGenotypes(vcfInputs, intervals, expectedCombinedVCF, referenceFile, testAll, produceGTField, 
+         testGenomicsDBImporterWithGenotypes(vcfInputs, intervals, expectedCombinedVCF, referenceFile, testAll, produceGTField,
                  sitesOnlyQuery, false);
     }
 
@@ -448,11 +536,11 @@ public final class GenomicsDBImportIntegrationTest extends CommandLineProgramTes
 
     private void testGenomicsDBAgainstCombineGVCFs(final List<String> vcfInputs, final List<SimpleInterval> intervals,
                                                    final String referenceFile, final String[] CombineGVCFArgs,
-                                                   final int numVCFReaderThreadsInImporter, final int chrsToPartitions, 
+                                                   final int numVCFReaderThreadsInImporter, final int chrsToPartitions,
                                                    final boolean useNativeReader) throws IOException {
         final String workspace = createTempDir("genomicsdb-tests-").getAbsolutePath() + "/workspace";
 
-        writeToGenomicsDB(vcfInputs, intervals, workspace, 0, false, 0, numVCFReaderThreadsInImporter, false, false, false, 
+        writeToGenomicsDB(vcfInputs, intervals, workspace, 0, false, 0, numVCFReaderThreadsInImporter, false, false, false,
                           chrsToPartitions, useNativeReader);
         checkJSONFilesAreWritten(workspace);
         for(SimpleInterval currInterval : intervals) {
@@ -496,7 +584,7 @@ public final class GenomicsDBImportIntegrationTest extends CommandLineProgramTes
 
     @Test
     public void testGenomicsDBNoRemapMissingToNonRef() throws IOException {
-        testGenomicsDBAgainstCombineGVCFs(Arrays.asList(COMBINEGVCFS_TEST_DIR+"NA12878.AS.NON_REF_remap_check.chr20snippet.g.vcf", 
+        testGenomicsDBAgainstCombineGVCFs(Arrays.asList(COMBINEGVCFS_TEST_DIR+"NA12878.AS.NON_REF_remap_check.chr20snippet.g.vcf",
                 COMBINEGVCFS_TEST_DIR+"NA12892.AS.chr20snippet.g.vcf"),
                 new ArrayList<SimpleInterval>(Arrays.asList(new SimpleInterval("20", 10433313, 10700000))),
                 b37_reference_20_21,
@@ -663,14 +751,14 @@ public final class GenomicsDBImportIntegrationTest extends CommandLineProgramTes
     }
 
     private void writeToGenomicsDB(final List<String> vcfInputs, final List<SimpleInterval> intervals, final String workspace,
-                                   final int batchSize, final Boolean useBufferSize, final int bufferSizePerSample, int threads, 
+                                   final int batchSize, final Boolean useBufferSize, final int bufferSizePerSample, int threads,
                                    final boolean mergeIntervals, final boolean overwriteWorkspace, final boolean incremental) {
-        writeToGenomicsDB(vcfInputs, intervals, workspace, batchSize, useBufferSize, bufferSizePerSample, threads, mergeIntervals, 
+        writeToGenomicsDB(vcfInputs, intervals, workspace, batchSize, useBufferSize, bufferSizePerSample, threads, mergeIntervals,
                           overwriteWorkspace, incremental, 0, false);
     }
 
     private void writeToGenomicsDB(final List<String> vcfInputs, final List<SimpleInterval> intervals, final String workspace,
-                                   final int batchSize, final Boolean useBufferSize, final int bufferSizePerSample, int threads, 
+                                   final int batchSize, final Boolean useBufferSize, final int bufferSizePerSample, int threads,
                                    final boolean mergeIntervals, final boolean overwriteWorkspace, final boolean incremental,
                                    final int chrsToPartitions, final boolean useNativeReader) {
         final ArgumentsBuilder args = new ArgumentsBuilder();
@@ -877,6 +965,224 @@ public final class GenomicsDBImportIntegrationTest extends CommandLineProgramTes
                 .stream()
                 .map( pair -> pair.getKey() + "\t" + pair.getValue())
                 .collect(Collectors.joining("\n")));
+    }
+
+    @DataProvider
+    public Object[][] dataForTestExplicitIndicesInSampleNameMap() {
+        final Map<String, File> originalVCFsInOrder = new LinkedHashMap<>();
+        originalVCFsInOrder.put(HG_00096_SAMPLE_NAME, new File(HG_00096));
+        originalVCFsInOrder.put(HG_00268_SAMPLE_NAME, new File(HG_00268));
+        originalVCFsInOrder.put(NA_19625_SAMPLE_NAME, new File(NA_19625));
+
+        final Map<String, File> originalVCFsOutOfOrder = new LinkedHashMap<>();
+        originalVCFsOutOfOrder.put(NA_19625_SAMPLE_NAME, new File(NA_19625));
+        originalVCFsOutOfOrder.put(HG_00268_SAMPLE_NAME, new File(HG_00268));
+        originalVCFsOutOfOrder.put(HG_00096_SAMPLE_NAME, new File(HG_00096));
+
+        return new Object[][] {
+                // All VCFs have explicit indices, samples in order, TABIX index
+                { originalVCFsInOrder, Arrays.asList(HG_00096_SAMPLE_NAME, HG_00268_SAMPLE_NAME, NA_19625_SAMPLE_NAME), false },
+
+                // All VCFs have explicit indices, samples in order, TRIBBLE index
+                { originalVCFsInOrder, Arrays.asList(HG_00096_SAMPLE_NAME, HG_00268_SAMPLE_NAME, NA_19625_SAMPLE_NAME), true },
+
+                // Some VCFs have explicit indices, samples in order, TABIX index
+                { originalVCFsInOrder, Arrays.asList(HG_00268_SAMPLE_NAME), false },
+
+                // Some VCFs have explicit indices, samples in order, TRIBBLE index
+                { originalVCFsInOrder, Arrays.asList(HG_00268_SAMPLE_NAME), true },
+
+                // All VCFs have explicit indices, samples out of order, TABIX index
+                { originalVCFsOutOfOrder, Arrays.asList(HG_00096_SAMPLE_NAME, HG_00268_SAMPLE_NAME, NA_19625_SAMPLE_NAME), false },
+
+                // All VCFs have explicit indices, samples out of order, TRIBBLE index
+                { originalVCFsOutOfOrder, Arrays.asList(HG_00096_SAMPLE_NAME, HG_00268_SAMPLE_NAME, NA_19625_SAMPLE_NAME), true },
+
+                // Some VCFs have explicit indices, samples out of order, TABIX index
+                { originalVCFsOutOfOrder, Arrays.asList(HG_00268_SAMPLE_NAME), false },
+
+                // Some VCFs have explicit indices, samples out of order, TRIBBLE index
+                { originalVCFsOutOfOrder, Arrays.asList(HG_00268_SAMPLE_NAME), true }
+        };
+    }
+
+    // Test that we can handle explicit index files from a sample name map locally.
+    // The cloud version of this test is separate.
+    // Note that this test decompresses/reindexes its GVCFs on-the-fly as necessary in order
+    // to avoid our having to check uncompressed VCFs in to our repo
+    @Test(dataProvider = "dataForTestExplicitIndicesInSampleNameMap")
+    public void testExplicitIndicesInSampleNameMap(final Map<String, File> originalVCFs, final List<String> samplesWithExplicitIndices, final boolean useTribbleIndex) throws IOException {
+        final String workspace = createTempDir("testExplicitIndicesInSampleNameMap").getAbsolutePath() + "/workspace";
+        final File vcfDir = createTempDir("testExplicitIndicesInSampleNameMap_vcfs");
+        final File indexDir = createTempDir("testExplicitIndicesInSampleNameMap_indices");
+        Assert.assertNotEquals(vcfDir, indexDir,
+              "testExplicitIndicesInSampleNameMap failed to create separate directories for the vcfs and their indices");
+
+        final StringBuilder sampleNameMapContents = new StringBuilder();
+
+        for ( final Map.Entry<String, File> originalVCFEntry : originalVCFs.entrySet() ) {
+            final String sampleName = originalVCFEntry.getKey();
+            final File originalVCFFile = originalVCFEntry.getValue();
+            final boolean createExplicitIndex = samplesWithExplicitIndices.contains(sampleName);
+
+            final Path originalVCFPath = originalVCFFile.toPath();
+            final String uncompressedVCFName = originalVCFFile.getName().replaceAll("\\.gz$", "");
+            Path vcfDestination = new File(vcfDir, originalVCFFile.getName()).toPath();
+            if ( useTribbleIndex ) {
+                vcfDestination = new File(vcfDir, uncompressedVCFName).toPath();
+                IOUtils.gunzip(originalVCFPath.toAbsolutePath().toFile(), vcfDestination.toAbsolutePath().toFile());
+            } else {
+                Files.copy(originalVCFPath, vcfDestination);
+            }
+
+            final File originalVCFIndexFile = new File(originalVCFFile.getAbsolutePath() + FileExtensions.TABIX_INDEX);
+            Assert.assertTrue(originalVCFIndexFile.exists());
+            final File thisVCFIndexDir = createExplicitIndex ? indexDir : vcfDir;
+            Path vcfIndexDestination = new File(thisVCFIndexDir, originalVCFIndexFile.getName()).toPath();
+            if ( useTribbleIndex ) {
+                vcfIndexDestination = new File(thisVCFIndexDir, uncompressedVCFName + FileExtensions.TRIBBLE_INDEX).toPath();
+                final Index inMemoryIndex = IndexFactory.createLinearIndex(vcfDestination, new VCFCodec(), IndexFeatureFile.OPTIMAL_GVCF_INDEX_BIN_SIZE);
+                inMemoryIndex.write(vcfIndexDestination);
+            } else {
+                Files.copy(originalVCFIndexFile.toPath(), vcfIndexDestination);
+            }
+
+            if ( createExplicitIndex ) {
+              sampleNameMapContents.append(String.format("%s\t%s\t%s\n", sampleName, vcfDestination.toAbsolutePath().toString(), vcfIndexDestination.toAbsolutePath().toString()));
+            } else {
+              sampleNameMapContents.append(String.format("%s\t%s\n", sampleName, vcfDestination.toAbsolutePath().toString()));
+            }
+        }
+
+        final File sampleNameMapFile = IOUtils.writeTempFile(sampleNameMapContents.toString(), "testExplicitIndicesInSampleNameMap_samplemap", ".txt");
+
+        final ArgumentsBuilder args = new ArgumentsBuilder();
+        args.add(GenomicsDBImport.SAMPLE_NAME_MAP_LONG_NAME, sampleNameMapFile.getAbsolutePath())
+                .addInterval(INTERVAL.get(0))
+                .add(GenomicsDBImport.WORKSPACE_ARG_LONG_NAME, workspace);
+        runCommandLine(args);
+
+        checkJSONFilesAreWritten(workspace);
+        checkGenomicsDBAgainstExpected(workspace, INTERVAL, COMBINED, b38_reference_20_21, true, ATTRIBUTES_TO_IGNORE);
+        checkGenomicsDBAgainstExpected(workspace, INTERVAL, COMBINED, b38_reference_20_21, true, ATTRIBUTES_TO_IGNORE, false, false, true);
+    }
+
+    @DataProvider
+    public Object[][] dataForTestExplicitIndicesInSampleNameMapInTheCloud() {
+        final String GVCFS_WITH_INDICES_BUCKET = "gs://hellbender/test/resources/org/broadinstitute/hellbender/tools/genomicsdb/gvcfs_with_indices/";
+        final String GVCFS_WITHOUT_INDICES_BUCKET = "gs://hellbender/test/resources/org/broadinstitute/hellbender/tools/genomicsdb/gvcfs_without_indices/";
+        final String GVCF_INDICES_ONLY_BUCKET = "gs://hellbender/test/resources/org/broadinstitute/hellbender/tools/genomicsdb/gvcf_indices_only/";
+
+        final String HG00096_COMPRESSED_WITH_INDEX = GVCFS_WITH_INDICES_BUCKET + "HG00096.g.vcf.gz";
+        final String HG00096_COMPRESSED_NO_INDEX = GVCFS_WITHOUT_INDICES_BUCKET + "HG00096.g.vcf.gz";
+        final String HG00096_COMPRESSED_INDEX = GVCF_INDICES_ONLY_BUCKET + "HG00096.g.vcf.gz.tbi";
+        final String HG00096_UNCOMPRESSED_WITH_INDEX = GVCFS_WITH_INDICES_BUCKET + "HG00096.g.vcf";
+        final String HG00096_UNCOMPRESSED_NO_INDEX = GVCFS_WITHOUT_INDICES_BUCKET + "HG00096.g.vcf";
+        final String HG00096_UNCOMPRESSED_INDEX = GVCF_INDICES_ONLY_BUCKET + "HG00096.g.vcf.idx";
+
+        final String HG00268_COMPRESSED_WITH_INDEX = GVCFS_WITH_INDICES_BUCKET + "HG00268.g.vcf.gz";
+        final String HG00268_COMPRESSED_NO_INDEX = GVCFS_WITHOUT_INDICES_BUCKET + "HG00268.g.vcf.gz";
+        final String HG00268_COMPRESSED_INDEX = GVCF_INDICES_ONLY_BUCKET + "HG00268.g.vcf.gz.tbi";
+        final String HG00268_UNCOMPRESSED_WITH_INDEX = GVCFS_WITH_INDICES_BUCKET + "HG00268.g.vcf";
+        final String HG00268_UNCOMPRESSED_NO_INDEX = GVCFS_WITHOUT_INDICES_BUCKET + "HG00268.g.vcf";
+        final String HG00268_UNCOMPRESSED_INDEX = GVCF_INDICES_ONLY_BUCKET + "HG00268.g.vcf.idx";
+
+        final String NA19625_COMPRESSED_WITH_INDEX = GVCFS_WITH_INDICES_BUCKET + "NA19625.g.vcf.gz";
+        final String NA19625_COMPRESSED_NO_INDEX = GVCFS_WITHOUT_INDICES_BUCKET + "NA19625.g.vcf.gz";
+        final String NA19625_COMPRESSED_INDEX = GVCF_INDICES_ONLY_BUCKET + "NA19625.g.vcf.gz.tbi";
+        final String NA19625_UNCOMPRESSED_WITH_INDEX = GVCFS_WITH_INDICES_BUCKET + "NA19625.g.vcf";
+        final String NA19625_UNCOMPRESSED_NO_INDEX = GVCFS_WITHOUT_INDICES_BUCKET + "NA19625.g.vcf";
+        final String NA19625_UNCOMPRESSED_INDEX = GVCF_INDICES_ONLY_BUCKET + "NA19625.g.vcf.idx";
+
+        return new Object[][] {
+                // All VCFs have explicit indices, samples in order, TABIX index
+                {
+                    HG_00096_SAMPLE_NAME + "\t" + HG00096_COMPRESSED_NO_INDEX + "\t" + HG00096_COMPRESSED_INDEX + "\n" +
+                    HG_00268_SAMPLE_NAME + "\t" + HG00268_COMPRESSED_NO_INDEX + "\t" + HG00268_COMPRESSED_INDEX + "\n" +
+                    NA_19625_SAMPLE_NAME + "\t" + NA19625_COMPRESSED_NO_INDEX + "\t" + NA19625_COMPRESSED_INDEX + "\n"
+                },
+
+                // All VCFs have explicit indices, samples in order, TRIBBLE index
+                {
+                    HG_00096_SAMPLE_NAME + "\t" + HG00096_UNCOMPRESSED_NO_INDEX + "\t" + HG00096_UNCOMPRESSED_INDEX + "\n" +
+                    HG_00268_SAMPLE_NAME + "\t" + HG00268_UNCOMPRESSED_NO_INDEX + "\t" + HG00268_UNCOMPRESSED_INDEX + "\n" +
+                    NA_19625_SAMPLE_NAME + "\t" + NA19625_UNCOMPRESSED_NO_INDEX + "\t" + NA19625_UNCOMPRESSED_INDEX + "\n"
+                },
+
+                // Some VCFs have explicit indices, samples in order, TABIX index
+                {
+                    HG_00096_SAMPLE_NAME + "\t" + HG00096_COMPRESSED_WITH_INDEX + "\n" +
+                    HG_00268_SAMPLE_NAME + "\t" + HG00268_COMPRESSED_NO_INDEX + "\t" + HG00268_COMPRESSED_INDEX + "\n" +
+                    NA_19625_SAMPLE_NAME + "\t" + NA19625_COMPRESSED_WITH_INDEX + "\n"
+                },
+
+                // Some VCFs have explicit indices, samples in order, TRIBBLE index
+                {
+                    HG_00096_SAMPLE_NAME + "\t" + HG00096_UNCOMPRESSED_WITH_INDEX + "\n" +
+                    HG_00268_SAMPLE_NAME + "\t" + HG00268_UNCOMPRESSED_NO_INDEX + "\t" + HG00268_UNCOMPRESSED_INDEX + "\n" +
+                    NA_19625_SAMPLE_NAME + "\t" + NA19625_UNCOMPRESSED_WITH_INDEX + "\n"
+                },
+
+                // All VCFs have explicit indices, samples out of order, TABIX index
+                {
+                    NA_19625_SAMPLE_NAME + "\t" + NA19625_COMPRESSED_NO_INDEX + "\t" + NA19625_COMPRESSED_INDEX + "\n" +
+                    HG_00268_SAMPLE_NAME + "\t" + HG00268_COMPRESSED_NO_INDEX + "\t" + HG00268_COMPRESSED_INDEX + "\n" +
+                    HG_00096_SAMPLE_NAME + "\t" + HG00096_COMPRESSED_NO_INDEX + "\t" + HG00096_COMPRESSED_INDEX + "\n"
+                },
+
+                // All VCFs have explicit indices, samples out of order, TRIBBLE index
+                {
+                    NA_19625_SAMPLE_NAME + "\t" + NA19625_UNCOMPRESSED_NO_INDEX + "\t" + NA19625_UNCOMPRESSED_INDEX + "\n" +
+                    HG_00268_SAMPLE_NAME + "\t" + HG00268_UNCOMPRESSED_NO_INDEX + "\t" + HG00268_UNCOMPRESSED_INDEX + "\n" +
+                    HG_00096_SAMPLE_NAME + "\t" + HG00096_UNCOMPRESSED_NO_INDEX + "\t" + HG00096_UNCOMPRESSED_INDEX + "\n"
+                },
+
+                // Some VCFs have explicit indices, samples out of order, TABIX index
+                {
+                    NA_19625_SAMPLE_NAME + "\t" + NA19625_COMPRESSED_WITH_INDEX + "\n" +
+                    HG_00268_SAMPLE_NAME + "\t" + HG00268_COMPRESSED_NO_INDEX + "\t" + HG00268_COMPRESSED_INDEX + "\n" +
+                    HG_00096_SAMPLE_NAME + "\t" + HG00096_COMPRESSED_WITH_INDEX + "\n"
+                },
+
+                // Some VCFs have explicit indices, samples out of order, TRIBBLE index
+                {
+                    NA_19625_SAMPLE_NAME + "\t" + NA19625_UNCOMPRESSED_WITH_INDEX + "\n" +
+                    HG_00268_SAMPLE_NAME + "\t" + HG00268_UNCOMPRESSED_NO_INDEX + "\t" + HG00268_UNCOMPRESSED_INDEX + "\n" +
+                    HG_00096_SAMPLE_NAME + "\t" + HG00096_UNCOMPRESSED_WITH_INDEX + "\n"
+                }
+        };
+    }
+
+    // Test that we can handle explicit index files from a sample name map in the cloud
+    @Test(dataProvider = "dataForTestExplicitIndicesInSampleNameMapInTheCloud", groups = {"bucket"})
+    public void testExplicitIndicesInSampleNameMapInTheCloud(final String sampleNameMapContents) throws IOException {
+        final String workspace = createTempDir("testExplicitIndicesInSampleNameMapInTheCloud").getAbsolutePath() + "/workspace";
+        final File sampleNameMapFile = IOUtils.writeTempFile(sampleNameMapContents, "testExplicitIndicesInSampleNameMapInTheCloud_samplemap", ".txt");
+
+        final ArgumentsBuilder args = new ArgumentsBuilder();
+        args.add(GenomicsDBImport.SAMPLE_NAME_MAP_LONG_NAME, sampleNameMapFile.getAbsolutePath())
+                .addInterval(INTERVAL.get(0))
+                .add(GenomicsDBImport.WORKSPACE_ARG_LONG_NAME, workspace);
+        runCommandLine(args);
+
+        checkJSONFilesAreWritten(workspace);
+        checkGenomicsDBAgainstExpected(workspace, INTERVAL, COMBINED, b38_reference_20_21, true, ATTRIBUTES_TO_IGNORE);
+        checkGenomicsDBAgainstExpected(workspace, INTERVAL, COMBINED, b38_reference_20_21, true, ATTRIBUTES_TO_IGNORE, false, false, true);
+    }
+
+    // This test guards against the possibility of someone accidentally putting an index file into
+    // the "gvcfs_without_indices" bucket directory used by testExplicitIndicesInSampleNameMapInTheCloud()
+    @Test(groups = {"bucket"})
+    public void testUnindexedCloudGVCFsAreActuallyUnindexed() throws IOException {
+        final String GVCFS_WITHOUT_INDICES_BUCKET = "gs://hellbender/test/resources/org/broadinstitute/hellbender/tools/genomicsdb/gvcfs_without_indices/";
+        final Path bucketPath = IOUtils.getPath(GVCFS_WITHOUT_INDICES_BUCKET);
+
+        Files.list(bucketPath).forEach(file -> {
+            Assert.assertFalse(file.endsWith(FileExtensions.TABIX_INDEX),
+                    "Found a TABIX index in bucket " + GVCFS_WITHOUT_INDICES_BUCKET);
+            Assert.assertFalse(file.endsWith(FileExtensions.TRIBBLE_INDEX),
+                    "Found a Tribble index in bucket " + GVCFS_WITHOUT_INDICES_BUCKET);
+        });
     }
 
     @DataProvider
@@ -1099,15 +1405,15 @@ public final class GenomicsDBImportIntegrationTest extends CommandLineProgramTes
                .setGenerateArrayNameFromPartitionBounds(true);
         GenomicsDBVidMapProto.VidMappingPB vidMapPB = null;
         try {
-            vidMapPB = org.broadinstitute.hellbender.tools.genomicsdb.GenomicsDBUtils.getProtobufVidMappingFromJsonFile(IOUtils.appendPathToDir(workspace, GenomicsDBConstants.DEFAULT_VIDMAP_FILE_NAME));
+            vidMapPB = GATKGenomicsDBUtils.getProtobufVidMappingFromJsonFile(IOUtils.appendPathToDir(workspace, GenomicsDBConstants.DEFAULT_VIDMAP_FILE_NAME));
         }
         catch (final IOException e) {
             throw new UserException("Could not open vid json file "+GenomicsDBConstants.DEFAULT_VIDMAP_FILE_NAME, e);
         }
         HashMap<String, Integer> fieldNameToIndexInVidFieldsList =
-                org.broadinstitute.hellbender.tools.genomicsdb.GenomicsDBUtils.getFieldNameToListIndexInProtobufVidMappingObject(vidMapPB);
+                GATKGenomicsDBUtils.getFieldNameToListIndexInProtobufVidMappingObject(vidMapPB);
 
-        vidMapPB = org.broadinstitute.hellbender.tools.genomicsdb.GenomicsDBUtils.updateINFOFieldCombineOperation(vidMapPB, fieldNameToIndexInVidFieldsList,
+        vidMapPB = GATKGenomicsDBUtils.updateINFOFieldCombineOperation(vidMapPB, fieldNameToIndexInVidFieldsList,
                 GATKVCFConstants.RAW_MAPPING_QUALITY_WITH_DEPTH_KEY, "element_wise_sum");
 
         if(vidMapPB != null) {
@@ -1145,7 +1451,7 @@ public final class GenomicsDBImportIntegrationTest extends CommandLineProgramTes
         writeToGenomicsDB(LOCAL_GVCFS, INTERVAL, workspace + "workspace2", 0, false, 0, 1, false, false, true);
     }
 
-    private void testIncrementalImport(final int stepSize, final List<SimpleInterval> intervals, final String workspace, 
+    private void testIncrementalImport(final int stepSize, final List<SimpleInterval> intervals, final String workspace,
                                        final int batchSize, final boolean produceGTField, final boolean useVCFCodec, final String expected,
                                        final int chrsToPartitions, final boolean useNativeReader) throws IOException {
         testIncrementalImport(stepSize, intervals, workspace, batchSize, produceGTField, useVCFCodec, expected,
@@ -1158,7 +1464,7 @@ public final class GenomicsDBImportIntegrationTest extends CommandLineProgramTes
                                        throws IOException {
         for(int i=0; i<LOCAL_GVCFS.size(); i+=stepSize) {
             int upper = Math.min(i+stepSize, LOCAL_GVCFS.size());
-            writeToGenomicsDB(LOCAL_GVCFS.subList(i, upper), intervals, workspace, batchSize, false, 0, 1, false, false, i!=0, 
+            writeToGenomicsDB(LOCAL_GVCFS.subList(i, upper), intervals, workspace, batchSize, false, 0, 1, false, false, i!=0,
                               chrsToPartitions, (i == 0 && useNativeReaderInitial) || (i > 0 && useNativeReader));
             checkJSONFilesAreWritten(workspace);
         }
@@ -1208,7 +1514,7 @@ public final class GenomicsDBImportIntegrationTest extends CommandLineProgramTes
 
     @Test(expectedExceptions = {UserException.class}, expectedExceptionsMessageRegExp=".*must be block compressed.*")
     public void testGenomicsDBImportNativeReaderNoCompressedVcf() throws IOException {
-        testGenomicsDBImporterWithGenotypes(Arrays.asList(NA_12878_PHASED), MULTIPLE_INTERVALS, NA_12878_PHASED, b37_reference_20_21, 
+        testGenomicsDBImporterWithGenotypes(Arrays.asList(NA_12878_PHASED), MULTIPLE_INTERVALS, NA_12878_PHASED, b37_reference_20_21,
                 false, true, false, true);
     }
 
@@ -1222,14 +1528,14 @@ public final class GenomicsDBImportIntegrationTest extends CommandLineProgramTes
     @Test
     public void testGenomicsDBIncrementalAndBatchSize2() throws IOException {
         final String workspace = createTempDir("genomicsdb-incremental-tests").getAbsolutePath() + "/workspace";
-        testIncrementalImport(2, MULTIPLE_INTERVALS_THAT_WORK_WITH_COMBINE_GVCFS, workspace, 2, true, false, 
+        testIncrementalImport(2, MULTIPLE_INTERVALS_THAT_WORK_WITH_COMBINE_GVCFS, workspace, 2, true, false,
                               COMBINED_WITH_GENOTYPES, 0, false);
     }
 
     @Test
     public void testGenomicsDBMultipleIncrementalImports() throws IOException {
         final String workspace = createTempDir("genomicsdb-incremental-tests").getAbsolutePath() + "/workspace";
-        testIncrementalImport(1, MULTIPLE_INTERVALS_THAT_WORK_WITH_COMBINE_GVCFS, workspace, 2, true, true, 
+        testIncrementalImport(1, MULTIPLE_INTERVALS_THAT_WORK_WITH_COMBINE_GVCFS, workspace, 2, true, true,
                               COMBINED_WITH_GENOTYPES, 0, false);
     }
 

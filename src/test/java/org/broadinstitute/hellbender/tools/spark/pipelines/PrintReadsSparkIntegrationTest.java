@@ -19,6 +19,7 @@ import org.broadinstitute.hellbender.utils.gcs.BucketUtils;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.testng.Assert;
+import org.testng.SkipException;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
@@ -29,6 +30,38 @@ import java.util.List;
 
 @Test(groups = "spark")
 public final class PrintReadsSparkIntegrationTest extends AbstractPrintReadsIntegrationTest {
+
+    // Spark CRAM output (via disq) can only write CRAM 3.1; requesting 3.0 must fail loudly rather than
+    // silently writing 3.1.
+    @Test(groups = "spark", expectedExceptions = org.broadinstitute.hellbender.exceptions.UserException.class)
+    public void testOutputCramVersion30FailsOnSpark() {
+        final File in = new File(getTestDataDir(), "print_reads.bam");
+        final File ref = new File(getTestDataDir(), "print_reads.fasta");
+        final File out = GATKBaseTest.createTempFile("printReadsSpark.cramversion", ".cram");
+        runCommandLine(new ArgumentsBuilder()
+                .addInput(in)
+                .addReference(ref)
+                .addOutput(out)
+                .add(StandardArgumentDefinitions.OUTPUT_CRAM_VERSION_LONG_NAME, "3.0"));
+    }
+
+    // Explicitly requesting the supported version (3.1) on the CLI must succeed and write CRAM 3.1.
+    @Test(groups = "spark")
+    public void testOutputCramVersion31SucceedsOnSpark() throws java.io.IOException {
+        final File in = new File(getTestDataDir(), "print_reads.bam");
+        final File ref = new File(getTestDataDir(), "print_reads.fasta");
+        final File out = GATKBaseTest.createTempFile("printReadsSpark.cramversion31", ".cram");
+        runCommandLine(new ArgumentsBuilder()
+                .addInput(in)
+                .addReference(ref)
+                .addOutput(out)
+                .add(StandardArgumentDefinitions.OUTPUT_CRAM_VERSION_LONG_NAME, "3.1"));
+        final byte[] magic = new byte[6];
+        try (final java.io.InputStream is = new java.io.FileInputStream(out)) { is.read(magic); }
+        Assert.assertEquals(new String(magic, 0, 4), "CRAM");
+        Assert.assertEquals(magic[4], (byte) 3, "CRAM major version");
+        Assert.assertEquals(magic[5], (byte) 1, "CRAM minor version");
+    }
 
     @Test()
     public void testUnSortedRoundTrip() throws Exception {
@@ -79,6 +112,11 @@ public final class PrintReadsSparkIntegrationTest extends AbstractPrintReadsInte
         final GATKPath testRefDict = new GATKPath(getTestFile("count_reads.dict").getAbsolutePath());
         final GATKPath testRefIndex = new GATKPath(getTestFile("count_reads.fasta.fai").getAbsolutePath());
 
+        if (isGATKDockerContainer()) {
+            // see https://github.com/eclipse/jetty.project/issues/8549
+            // for the docker tests, the test dependencies are in a separate jar
+            throw new SkipException("skipping due to jetty jar parsing issues (https://github.com/eclipse/jetty.project/issues/8549)");
+        }
         MiniClusterUtils.runOnIsolatedMiniCluster(cluster -> {
             final org.apache.hadoop.fs.Path workingDirectory = MiniClusterUtils.getWorkingDir(cluster);
 

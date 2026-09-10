@@ -76,7 +76,7 @@ public class CountingReadFilter extends ReadFilter {
         filteredCount = 0;
     }
 
-    public String getName() {return delegateFilter.getClass().getSimpleName();}
+    public String getName() {return delegateFilter.getName();}
 
     // Returns a summary line with filter counts organized by level
     public String getSummaryLine() {return getSummaryLineForLevel(0);}
@@ -201,6 +201,7 @@ public class CountingReadFilter extends ReadFilter {
     protected static final class CountingAndReadFilter extends CountingBinopReadFilter {
 
         private static final long serialVersionUID = 1L;
+        protected long totalCount = 0;
 
         private CountingAndReadFilter(final CountingReadFilter lhs, final CountingReadFilter rhs) {
             super(lhs, rhs);
@@ -212,6 +213,7 @@ public class CountingReadFilter extends ReadFilter {
             if (!accept) {
                 filteredCount++;
             }
+            totalCount++;
             return accept;
         }
 
@@ -249,7 +251,7 @@ public class CountingReadFilter extends ReadFilter {
                 }
             }
 
-            summaryLine.append(this.getFilteredCount() + " total reads filtered");
+            summaryLine.append(this.getFilteredCount() + " total reads filtered out of "+ this.totalCount+ " reads processed");
 
             return summaryLine.toString();
         }

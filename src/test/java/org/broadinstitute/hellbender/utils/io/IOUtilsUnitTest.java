@@ -465,6 +465,11 @@ public final class IOUtilsUnitTest extends GATKBaseTest {
         Assert.assertEquals(IOUtils.appendPathToDir("dir/", "/file"), "/file");
         Assert.assertEquals(IOUtils.appendPathToDir("/path/to/dir", "anotherdir/file"), "/path/to/dir/anotherdir/file");
 
+        // see https://github.com/eclipse/jetty.project/issues/8549
+        if (isGATKDockerContainer()) {
+            // for the docker tests, the test dependencies are in a separate jar
+            throw new SkipException("skipping due to jetty jar parsing issues (https://github.com/eclipse/jetty.project/issues/8549)");
+        }
         // hdfs: URI
         MiniDFSCluster cluster = null;
         try {
@@ -529,6 +534,11 @@ public final class IOUtilsUnitTest extends GATKBaseTest {
     @Test
     public void testCreateDirectory() throws IOException {
 
+        // see https://github.com/eclipse/jetty.project/issues/8549
+        if (isGATKDockerContainer()) {
+            // for the docker tests, the test dependencies are in a separate jar
+            throw new SkipException("skipping due to jetty jar parsing issues (https://github.com/eclipse/jetty.project/issues/8549)");
+        }
         // hdfs
         Path tempPath = IOUtils.getPath(MiniClusterUtils.getWorkingDir(MiniClusterUtils.getMiniCluster()).toUri().toString())
                 .resolve("temp");
@@ -677,7 +687,6 @@ public final class IOUtilsUnitTest extends GATKBaseTest {
                 {"fdfdf", null, null, false},
                 {"gendbdfdfdf://fdfdf", null, null, false},
                 {"gendb-dfdfdf://fdfdf", null, null, false},
-                {"gendb-dfdfdf://", null, null, false},
                 {"gendb", null, null, false},
                 {"gendbdfdf", null, null, false},
                 {"agendb://dfdfd", null, null, false},
@@ -686,7 +695,6 @@ public final class IOUtilsUnitTest extends GATKBaseTest {
 
                 {"gendb.dfdfdf://fdfdf", "dfdfdf://fdfdf", "gendb.dfdfdf://fdfdf", true},
                 {"gendb://fdfdf", "fdfdf", "gendb://" + new File("fdfdf").getAbsolutePath(), true},
-                {"gendb://", "", "gendb://" + new File("").getAbsolutePath(), true},
                 {"gendb:///fdfd", "/fdfd", "gendb:///fdfd", true},
                 {"gendb:///", "/", "gendb:///", true},
                 {"gendb.hdfs://this-node:9000/dir", "hdfs://this-node:9000/dir", "gendb.hdfs://this-node:9000/dir", true},

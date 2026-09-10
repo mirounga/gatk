@@ -5,6 +5,8 @@ import org.broadinstitute.hellbender.CommandLineProgramTest;
 import org.broadinstitute.hellbender.testutils.ArgumentsBuilder;
 import org.broadinstitute.hellbender.testutils.IntegrationTestSpec;
 import org.broadinstitute.hellbender.testutils.MiniClusterUtils;
+import org.broadinstitute.hellbender.utils.io.IOUtils;
+import org.testng.SkipException;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
@@ -23,16 +25,15 @@ public final class PileupSparkIntegrationTest extends CommandLineProgramTest {
         return new Object[][] { { false }, { true } };
     }
 
-    private File createTempFile() throws IOException {
-        final File out = File.createTempFile("out", ".txt");
+    private File createAndDeleteTempFile() {
+        final File out = IOUtils.createTempFile("out", ".txt");
         out.delete();
-        out.deleteOnExit();
         return out;
     }
-
+    
     @Test(dataProvider = "shuffle")
     public void testSimplePileup(boolean useShuffle) throws Exception {
-        final File out = createTempFile();
+        final File out = createAndDeleteTempFile();
         final ArgumentsBuilder args = new ArgumentsBuilder();
         args.addRaw("--input");
         args.addRaw(NA12878_20_21_WGS_bam);
@@ -52,7 +53,7 @@ public final class PileupSparkIntegrationTest extends CommandLineProgramTest {
 
     @Test(dataProvider = "shuffle")
     public void testVerbosePileup(boolean useShuffle) throws Exception {
-        final File out = createTempFile();
+        final File out = createAndDeleteTempFile();
         final ArgumentsBuilder args = new ArgumentsBuilder();
         args.addRaw("--input");
         args.addRaw(NA12878_20_21_WGS_bam);
@@ -73,7 +74,7 @@ public final class PileupSparkIntegrationTest extends CommandLineProgramTest {
 
     @Test(dataProvider = "shuffle")
     public void testFeaturesPileup(boolean useShuffle) throws Exception {
-        final File out = createTempFile();
+        final File out = createAndDeleteTempFile();
         final ArgumentsBuilder args = new ArgumentsBuilder();
         args.addRaw("--input");
         args.addRaw(NA12878_20_21_WGS_bam);
@@ -94,7 +95,7 @@ public final class PileupSparkIntegrationTest extends CommandLineProgramTest {
 
     @Test(dataProvider = "shuffle")
     public void testInsertLengthPileup(boolean useShuffle) throws Exception {
-        final File out = createTempFile();
+        final File out = createAndDeleteTempFile();
         final ArgumentsBuilder args = new ArgumentsBuilder();
         args.addRaw("--input");
         args.addRaw(NA12878_20_21_WGS_bam);
@@ -115,10 +116,10 @@ public final class PileupSparkIntegrationTest extends CommandLineProgramTest {
 
     @Test(dataProvider = "shuffle")
     public void testFeaturesPileupHdfs(boolean useShuffle) throws Exception {
-        // Skip this test when running on Java 11 since it fails with a Spark error that is not fixed until Spark 3
-        // see https://issues.apache.org/jira/browse/SPARK-26963
-        if (System.getProperty("java.specification.version").equals("11")) {
-            return;
+        if (isGATKDockerContainer()) {
+            // see https://github.com/eclipse/jetty.project/issues/8549
+            // for the docker tests, the test dependencies are in a separate jar
+            throw new SkipException("skipping due to jetty jar parsing issues (https://github.com/eclipse/jetty.project/issues/8549)");
         }
         MiniClusterUtils.runOnIsolatedMiniCluster( cluster -> {
             final Path workingDirectory = MiniClusterUtils.getWorkingDir(cluster);
@@ -127,7 +128,7 @@ public final class PileupSparkIntegrationTest extends CommandLineProgramTest {
             cluster.getFileSystem().copyFromLocalFile(new Path(dbsnp_138_b37_20_21_vcf), vcfPath);
             cluster.getFileSystem().copyFromLocalFile(new Path(dbsnp_138_b37_20_21_vcf + ".idx"), idxPath);
 
-            final File out = createTempFile();
+            final File out = createAndDeleteTempFile();
             final ArgumentsBuilder args = new ArgumentsBuilder();
             args.addRaw("--input");
             args.addRaw(NA12878_20_21_WGS_bam);

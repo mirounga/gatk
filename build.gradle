@@ -11,25 +11,26 @@ plugins {
     id "application"    // provides installDist
     id 'maven-publish'
     id 'signing'
-    id "jacoco"
-    id "de.undercouch.download" version "4.1.2" //used for downloading GSA lib
-    id "com.github.johnrengelman.shadow" version "7.1.1"    //used to build the shadow and sparkJars
-    id "com.github.ben-manes.versions" version "0.12.0" //used for identifying dependencies that need updating
-    id 'com.palantir.git-version' version '0.5.1' //version helper
+//    id "jacoco"
+    id "de.undercouch.download" version "5.6.0" //used for downloading GSA lib
+    id "com.gradleup.shadow" version "8.3.3"    //used to build the shadow and sparkJars
+    id 'com.palantir.git-version' version '3.1.0' //version helper
+    id 'org.sonatype.gradle.plugins.scan' version '3.0.0' // scans for security vulnerabilities in our dependencies
+    id 'com.gradleup.nmcp' version '1.6.1' // publishes releases to the Sonatype Central Portal (OSSRH was retired)
 }
 
 
 import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
-import de.undercouch.gradle.tasks.download.Download
+import com.github.jengelman.gradle.plugins.shadow.transformers.AppendingTransformer
 
-import javax.tools.ToolProvider
 import java.time.format.DateTimeFormatter
-import java.time.ZonedDateTime
+import java.util.stream.Collectors
 
-mainClassName = "org.broadinstitute.hellbender.Main"
-
-//Note: the test suite must use the same defaults. If you change system properties in this list you must also update the one in the test task
-applicationDefaultJvmArgs = ["-Dsamjdk.use_async_io_read_samtools=false","-Dsamjdk.use_async_io_write_samtools=true", "-Dsamjdk.use_async_io_write_tribble=false", "-Dsamjdk.compression_level=2"]
+application {
+    mainClass = "org.broadinstitute.hellbender.Main"
+    //Note: the test suite must use the same defaults. If you change system properties in this list you must also update the one in the test task
+    applicationDefaultJvmArgs = ["-Dsamjdk.use_async_io_read_samtools=false", "-Dsamjdk.use_async_io_write_samtools=true", "-Dsamjdk.use_async_io_write_tribble=false", "-Dsamjdk.compression_level=2"]
+}
 
 //Delete the windows script - we never test on Windows so let's not pretend it works
 startScripts {
@@ -38,8 +39,8 @@ startScripts {
     }
 }
 
-task downloadGsaLibFile(type: Download) {
-    src 'http://cran.r-project.org/src/contrib/gsalib_2.1.tar.gz'
+tasks.register('downloadGsaLibFile', Download) {
+    src 'https://cran.r-project.org/src/contrib/gsalib_2.2.1.tar.gz'
     dest "src/main/resources/org/broadinstitute/hellbender/utils/R/gsalib.tar.gz"
     overwrite false
 }
@@ -48,9 +49,10 @@ task downloadGsaLibFile(type: Download) {
 repositories {
     mavenCentral()
 
-    jcenter()
     maven {
-        url "https://broadinstitute.jfrog.io/broadinstitute/libs-snapshot/" //for htsjdk snapshots
+        // Note: We are still publishing to JFrog, but consuming artifacts from GAR. This interim state works because
+        // a background kubernetes job syncs new artifacts from JFrog to GAR within 5 minutes.
+        url "https://us-central1-maven.pkg.dev/dsp-artifact-registry/libs-snapshot/" //for htsjdk snapshots
     }
 
     maven {
@@ -60,20 +62,20 @@ repositories {
     mavenLocal()
 }
 
-final htsjdkVersion = System.getProperty('htsjdk.version','2.24.1')
-final picardVersion = System.getProperty('picard.version','2.27.1')
-final barclayVersion = System.getProperty('barclay.version','4.0.2')
-final sparkVersion = System.getProperty('spark.version', '2.4.5')
-final scalaVersion = System.getProperty('scala.version', '2.11')
-final hadoopVersion = System.getProperty('hadoop.version', '3.2.1')
-final disqVersion = System.getProperty('disq.version','0.3.6')
-final genomicsdbVersion = System.getProperty('genomicsdb.version','1.4.3')
-final bigQueryVersion = System.getProperty('bigQuery.version', '2.9.0')
-final guavaVersion = System.getProperty('guava.version', '31.0.1-jre')
-final log4j2Version = System.getProperty('log4j2Version', '2.17.1')
-final testNGVersion = '7.0.0'
-
-final googleCloudNioDependency = 'com.google.cloud:google-cloud-nio:0.123.25'
+final htsjdkVersion = System.getProperty('htsjdk.version','5.0.0')
+final picardVersion = System.getProperty('picard.version','3.5.0')
+final barclayVersion = System.getProperty('barclay.version','5.0.0')
+final sparkVersion = System.getProperty('spark.version', '3.5.0')
+final hadoopVersion = System.getProperty('hadoop.version', '3.3.6')
+final disqVersion = System.getProperty('disq.version','0.3.8')
+final genomicsdbVersion = System.getProperty('genomicsdb.version','1.5.5')
+final bigQueryVersion = System.getProperty('bigQuery.version', '2.35.0')
+final bigQueryStorageVersion = System.getProperty('bigQueryStorage.version', '2.47.0')
+final guavaVersion = System.getProperty('guava.version', '32.1.3-jre')
+final log4j2Version = System.getProperty('log4j2Version', '2.24.1')
+final testNGVersion = System.getProperty('testNGVersion', '7.7.0')
+final googleCloudNioVersion = System.getProperty('googleCloudNioVersion','0.127.8')
+final gklVersion = System.getProperty('gklVersion', '0.9.1')
 
 final baseJarName = 'gatk'
 final secondaryBaseJarName = 'hellbender'
@@ -94,7 +96,7 @@ def checkForLFSStubFiles(targetFolder) {
     }
     def targetFiles = fileTree(dir: targetFolder)
     return targetFiles.any() { f ->
-        final byte[] actualBytes = readBytesFromFile(f, lfsStubFileHeader.length());
+        final byte[] actualBytes = readBytesFromFile(f, lfsStubFileHeader.length())
         return new String(actualBytes, "UTF-8") == lfsStubFileHeader
     }
 }
@@ -107,7 +109,7 @@ def resolveLargeResourceStubFiles(largeResourcesFolder, buildPrerequisitesMessag
             def retCode = gitLFSExecCommand.execute().waitFor()
             if (retCode.intValue() != 0) {
                 throw new GradleException("Execution of \"$gitLFSExecCommand\" failed with exit code: $retCode. " +
-                        " git-lfs is required to build GATK but may not be installed. $buildPrerequisitesMessage");
+                        " git-lfs is required to build GATK but may not be installed. $buildPrerequisitesMessage")
             }
             return retCode
         } catch (IOException e) {
@@ -138,19 +140,13 @@ def looksLikeWereInAGitRepository(){
 // Ensure that we have a clone of the git repository, and resolve any required git-lfs
 // resource files that are needed to run the build but are still lfs stub files.
 def ensureBuildPrerequisites(largeResourcesFolder, buildPrerequisitesMessage, skipGitCheck) {
-    if (!JavaVersion.current().isJava8Compatible()) {
+    if (!JavaVersion.current().equals(JavaVersion.VERSION_17)) {
+        println("Warning: using Java ${JavaVersion.current()} but only Java 17 has been tested.")
+    }
+    if (!JavaVersion.current().isCompatibleWith(JavaVersion.VERSION_17)) {
         throw new GradleException(
-                "Java 8 or later is required to build GATK, but ${JavaVersion.current()} was found. "
+                "A Java 17 compatible (Java 17 or later) version is required to build GATK, but ${JavaVersion.current()} was found. "
                         + "$buildPrerequisitesMessage")
-    }
-    // Make sure we can get a ToolProvider class loader (for Java 8). If not we may have just a JRE.
-    if (JavaVersion.current().isJava8() && ToolProvider.getSystemToolClassLoader() == null) {
-        throw new GradleException(
-                "The ClassLoader obtained from the Java ToolProvider is null. "
-                + "A full Java 8 or 11 JDK must be installed, check that you are not using a JRE. $buildPrerequisitesMessage")
-    }
-    if (!JavaVersion.current().isJava8() && !JavaVersion.current().isJava11()) {
-        println("Warning: using Java ${JavaVersion.current()} but only Java 8 and Java 11 have been tested.")
     }
     if (!skipGitCheck && !looksLikeWereInAGitRepository() ) {
         throw new GradleException("This doesn't appear to be a git folder. " +
@@ -172,30 +168,20 @@ if (versionOverridden) {
     println "Version number overridden as " + version
 }
 
-configurations.all {
-    resolutionStrategy {
-        // the snapshot folder contains a dev version of guava, we don't want to use that.
-        force 'com.google.guava:guava:' + guavaVersion
-        // force the htsjdk version so we don't get a different one transitively
-        force 'com.github.samtools:htsjdk:' + htsjdkVersion
-        force 'com.google.protobuf:protobuf-java:3.19.4'
-        // force testng dependency so we don't pick up a different version via GenomicsDB
-        force 'org.testng:testng:' + testNGVersion
-        force 'org.broadinstitute:barclay:' + barclayVersion
-        force 'com.twitter:chill_2.11:0.8.1'
+configurations.configureEach {
+    configurations*.exclude group: 'org.slf4j', module: 'slf4j-jdk14' //exclude this to prevent slf4j complaining about to many slf4j bindings
+    configurations*.exclude group: 'ch.qos.logback', module: 'logback-classic' //exclude this to prevent slf4j complaining about to many slf4j bindings
+    configurations*.exclude group: 'com.google.guava', module: 'guava-jdk5'
+    configurations*.exclude group: 'junit', module: 'junit'
 
-        // make sure we don't pick up an incorrect version of the GATK variant of the google-nio library
-        // via Picard, etc.
-        force googleCloudNioDependency
-    }
-    all*.exclude group: 'org.slf4j', module: 'slf4j-jdk14' //exclude this to prevent slf4j complaining about to many slf4j bindings
-    all*.exclude group: 'com.google.guava', module: 'guava-jdk5'
-    all*.exclude group: 'junit', module: 'junit'
+    //this is excluded and replaced below with a dependency on bcprof-jdk18on which fixes known vulnerabilities
+    //note that this is in the testUtils configuration and doesn't show up in the runtime files
+    configurations*.exclude group: 'org.bouncycastle', module: 'bcprov-jdk15on'
 }
 
-tasks.withType(JavaCompile) {
-  options.compilerArgs = ['-proc:none', '-Xlint:all', '-Werror', '-Xdiags:verbose']
-  options.encoding = 'UTF-8'
+tasks.withType(JavaCompile).configureEach {
+    options.compilerArgs = ['-proc:none', '-Xlint:all', '-Werror', '-Xdiags:verbose']
+    options.encoding = 'UTF-8'
 }
 
 sourceSets {
@@ -225,49 +211,53 @@ configurations {
         // exclude Hadoop and Spark dependencies, since they are provided when running with Spark
         // (ref: http://unethicalblogger.com/2015/07/15/gradle-goodness-excluding-depends-from-shadow.html)
         exclude group: 'org.apache.hadoop'
-        exclude module: 'spark-core_2.11'
+        exclude module: 'spark-core_2.13'
         exclude group: 'org.slf4j'
         exclude module: 'jul-to-slf4j'
         exclude module: 'javax.servlet'
         exclude module: 'servlet-api'
         exclude group: 'com.esotericsoftware.kryo'
-        exclude module: 'spark-mllib_2.11'
+        exclude module: 'spark-mllib_2.13.15'
         exclude group: 'org.scala-lang'
         exclude module: 'kryo'
     }
 }
 
-// Get the jdk files we need to run javaDoc. We need to use these during compile, testCompile,
-// test execution, and gatkDoc generation, but we don't want them as part of the runtime
-// classpath and we don't want to redistribute them in the uber jar.
-final javadocJDKFiles = ToolProvider.getSystemToolClassLoader() == null ? files([]) : files(((URLClassLoader) ToolProvider.getSystemToolClassLoader()).getURLs())
-
 dependencies {
-    // javadoc utilities; compile/test only to prevent redistribution of sdk jars
-    compileOnly(javadocJDKFiles)
-    testImplementation(javadocJDKFiles)
 
-    implementation 'org.broadinstitute:barclay:' + barclayVersion
+    implementation 'org.freemarker:freemarker:2.3.30'
+    implementation ('org.broadinstitute:barclay'){
+        version {
+            strictly barclayVersion
+        }
+    }
     // Library for configuration:
     implementation 'org.aeonbits.owner:owner:1.0.9'
 
-    implementation 'com.github.broadinstitute:picard:' + picardVersion
-    externalSourceConfiguration 'com.github.broadinstitute:picard:' + picardVersion + ':sources'
-    implementation ('org.genomicsdb:genomicsdb:' + genomicsdbVersion)  {
-        exclude module: 'log4j-api'
-        exclude module: 'log4j-core'
-        exclude module: 'spark-core_2.12'
-        exclude module: 'spark-sql_2.12'
-        exclude module: 'htsjdk'
-        exclude module: 'protobuf-java'
+    implementation ('com.github.broadinstitute:picard:' + picardVersion) {
+        exclude module: 'gkl'
     }
+
+    externalSourceConfiguration 'com.github.broadinstitute:picard:' + picardVersion + ':sources'
+
+    implementation 'org.genomicsdb:genomicsdb:' + genomicsdbVersion
     implementation 'com.opencsv:opencsv:3.4'
     implementation 'com.google.guava:guava:' + guavaVersion
-    implementation 'com.github.samtools:htsjdk:'+ htsjdkVersion
-    implementation(googleCloudNioDependency)
+
+    implementation ('com.github.samtools:htsjdk'){
+        version {
+            strictly htsjdkVersion
+        }
+    }
+
+    implementation ('com.google.cloud:google-cloud-nio'){
+        version {
+            strictly googleCloudNioVersion
+        }
+    }
 
     implementation 'com.google.cloud:google-cloud-bigquery:' + bigQueryVersion
-    implementation 'com.google.cloud:google-cloud-bigquerystorage:2.9.1'
+    implementation 'com.google.cloud:google-cloud-bigquerystorage:' + bigQueryStorageVersion
 
     implementation "gov.nist.math.jama:gov.nist.math.jama:1.1.1"
 
@@ -276,33 +266,49 @@ dependencies {
     // should we want to)
     implementation 'com.google.cloud.bigdataoss:gcs-connector:1.9.4-hadoop3'
 
-    implementation 'org.apache.logging.log4j:log4j-api:' + log4j2Version
-    implementation 'org.apache.logging.log4j:log4j-core:' + log4j2Version
+    implementation platform('org.apache.logging.log4j:log4j-bom:' + log4j2Version)
+    implementation 'org.apache.logging.log4j:log4j-api'
+    implementation 'org.apache.logging.log4j:log4j-core'
     // include the apache commons-logging bridge that matches the log4j version we use so
     // messages that originate with dependencies that use commons-logging (such as jexl)
     // are routed to log4j
-    implementation 'org.apache.logging.log4j:log4j-jcl:' + log4j2Version
+    implementation 'org.apache.logging.log4j:log4j-jcl'
+    // these two annotation dependencies
+    // are needed because log4j-core isn't meant to be included
+    // at compile time so it doesn't include its own annotations
+    // https://github.com/apache/logging-log4j2/issues/3110
+    implementation 'biz.aQute.bnd:biz.aQute.bnd.annotation'
+    implementation 'org.osgi:org.osgi.annotation.bundle'
 
-    implementation 'org.apache.commons:commons-lang3:3.5'
-    implementation 'org.apache.commons:commons-math3:3.5'
-    implementation 'org.apache.commons:commons-collections4:4.1'
-    implementation 'org.apache.commons:commons-vfs2:2.0'
-    implementation 'org.apache.commons:commons-configuration2:2.4'
-    implementation 'org.apache.httpcomponents:httpclient:4.5.12'
-    implementation 'commons-beanutils:commons-beanutils:1.9.3'
-    implementation 'commons-io:commons-io:2.5'
+
+    implementation 'org.apache.commons:commons-lang3:3.14.0'
+    implementation('org.apache.commons:commons-math3'){
+        version {
+            strictly '3.5' // changing this breaks ModelSegmentsIntegrationTests, they're quite brittle
+        }
+        because "updating this breaks ModelSegmentsIntegrationTests, they're quite brittle"
+    }
+    implementation 'org.hipparchus:hipparchus-stat:2.0'
+    implementation 'org.apache.commons:commons-collections4:4.4'
+    implementation 'org.apache.commons:commons-vfs2:2.10.0'
+    implementation 'org.apache.commons:commons-configuration2:2.10.1'
+
+    implementation 'org.apache.httpcomponents:httpclient:4.5.13'
+    implementation 'commons-beanutils:commons-beanutils:1.11.0'
+    implementation 'commons-io:commons-io:2.14.0'
     implementation 'org.reflections:reflections:0.9.10'
 
-    implementation 'it.unimi.dsi:fastutil:7.0.6'
+    implementation 'it.unimi.dsi:fastutil:7.0.13'
 
-    implementation 'org.broadinstitute:hdf5-java-bindings:1.1.0-hdf5_2.11.0'
-    implementation 'org.broadinstitute:gatk-native-bindings:1.0.0'
+    implementation 'org.broadinstitute:hdf5-java-bindings:1.2.0-hdf5_2.11.0'
+    implementation 'org.broadinstitute:gatk-native-bindings:1.1.0'
 
     implementation 'org.ojalgo:ojalgo:44.0.0'
-    implementation ('org.ojalgo:ojalgo-commons-math3:1.0.0') {
+    implementation('org.ojalgo:ojalgo-commons-math3:1.0.0'){
         exclude group: 'org.apache.commons'
     }
-    implementation ('org.apache.spark:spark-mllib_' + scalaVersion + ':' + sparkVersion) {
+
+    implementation ('org.apache.spark:spark-mllib_2.13:' + sparkVersion) {
         // JUL is used by Google Dataflow as the backend logger, so exclude jul-to-slf4j to avoid a loop
         exclude module: 'jul-to-slf4j'
         exclude module: 'javax.servlet'
@@ -310,71 +316,88 @@ dependencies {
     }
     implementation 'com.thoughtworks.paranamer:paranamer:2.8'
 
-    implementation 'org.bdgenomics.bdg-formats:bdg-formats:0.5.0'
-    implementation('org.bdgenomics.adam:adam-core-spark2_' + scalaVersion + ':0.28.0') {
-        exclude group: 'org.slf4j'
-        exclude group: 'org.apache.hadoop'
-        exclude group: 'org.scala-lang'
-        exclude module: 'kryo'
-        exclude module: 'hadoop-bam'
-    }
-
     implementation 'org.jgrapht:jgrapht-core:1.1.0'
     implementation 'org.jgrapht:jgrapht-io:1.1.0'
 
-    implementation('org.disq-bio:disq:' + disqVersion)
-    implementation('org.apache.hadoop:hadoop-client:' + hadoopVersion) // should be a 'provided' dependency
-    implementation('com.github.jsr203hadoop:jsr203hadoop:1.0.3')
+    implementation 'org.disq-bio:disq:' + disqVersion
+    implementation 'org.apache.hadoop:hadoop-client:' + hadoopVersion // should be a 'provided' dependency
+    implementation 'com.github.jsr203hadoop:jsr203hadoop:1.0.3'
 
-    implementation('de.javakaffee:kryo-serializers:0.41') {
-        exclude module: 'kryo' // use Spark's version
+    implementation 'org.apache.orc:orc:1.6.5'
+    implementation 'de.javakaffee:kryo-serializers:0.45'
+    implementation ('com.esotericsoftware:kryo'){
+        version {
+            strictly '[4,5)' // we're not compatible with kryo 5+
+        }
     }
 
     // Dependency change for including MLLib
-    implementation('org.objenesis:objenesis:1.2')
-    testImplementation('org.objenesis:objenesis:2.1')
+    implementation 'org.objenesis:objenesis:1.2'
+    testImplementation 'org.objenesis:objenesis:2.1'
 
     // Comment the next lines to disable native code proxies in Spark MLLib
-    implementation('com.github.fommil.netlib:netlib-native_ref-osx-x86_64:1.1:natives')
-    implementation('com.github.fommil.netlib:netlib-native_ref-linux-x86_64:1.1:natives')
-    implementation('com.github.fommil.netlib:netlib-native_system-linux-x86_64:1.1:natives')
-    implementation('com.github.fommil.netlib:netlib-native_system-osx-x86_64:1.1:natives')
+    implementation 'com.github.fommil.netlib:netlib-native_ref-osx-x86_64:1.1:natives'
+    implementation 'com.github.fommil.netlib:netlib-native_ref-linux-x86_64:1.1:natives'
+    implementation 'com.github.fommil.netlib:netlib-native_system-linux-x86_64:1.1:natives'
+    implementation 'com.github.fommil.netlib:netlib-native_system-osx-x86_64:1.1:natives'
 
-    // Dependency change for including MLLib
-    implementation('com.esotericsoftware:kryo:3.0.3'){
-        exclude group: 'com.esotericsoftware', module: 'reflectasm'
-        exclude group: 'org.ow2.asm', module: 'asm'
-    }
-
-    // Dependency change for including MLLib
-    implementation('com.esotericsoftware:reflectasm:1.10.0:shaded') {
-        transitive = false
-    }
-
-    implementation('com.intel.gkl:gkl:0.8.8') {
-        exclude module: 'htsjdk'
-    }
+    implementation 'com.intel.gkl:gkl:' + gklVersion
 
     implementation 'com.microsoft.genomics:mgl:1.0.0'
 
     implementation 'org.broadinstitute:gatk-bwamem-jni:1.0.4'
     implementation 'org.broadinstitute:gatk-fermilite-jni:1.2.0'
 
-    implementation 'org.broadinstitute:http-nio:0.1.0-rc1'
+    implementation 'org.broadinstitute:http-nio:1.1.1'
 
     // Required for COSMIC Funcotator data source:
-    implementation 'org.xerial:sqlite-jdbc:3.36.0.3'
-    
-    // Required for SV Discovery machine learning
-    implementation group: 'biz.k11i', name: 'xgboost-predictor', version: '0.3.0'
+    implementation 'org.xerial:sqlite-jdbc:3.44.1.0'
 
     // natural sort
-    implementation('net.grey-panther:natural-comparator:1.1')
-    implementation('com.fasterxml.jackson.module:jackson-module-scala_' + scalaVersion + ':2.9.8')
+    implementation 'net.grey-panther:natural-comparator:1.1'
+    implementation 'com.fasterxml.jackson.module:jackson-module-scala_2.13:2.9.8'
+
+    /*********  Update transitive dependencies that have known vulnerabilities in this section *******/
+    constraints {
+        // all of these constraints are here to force upgrades from lower versions of these libraries which are included
+        // as transitive dependencies
+        // once the libraries that make use of these move forward we can remove these constraints
+
+        implementation 'com.google.protobuf:protobuf-java:3.25.5'
+        implementation 'dnsjava:dnsjava:3.6.0'
+        implementation 'org.apache.commons:commons-compress:1.26.0'
+        implementation 'org.apache.ivy:ivy:2.5.2'
+        implementation 'org.apache.commons:commons-text:1.10.0' because 'of https://nvd.nist.gov/vuln/detail/CVE-2022-42889'
+        implementation 'org.apache.parquet:parquet-hadoop:1.15.1' because 'of https://nvd.nist.gov/vuln/detail/CVE-2025-30065'
+        implementation 'ch.qos.logback:logback-core:1.5.13'
+        implementation 'org.apache.avro:avro:1.12.0'
+        implementation 'io.airlift:aircompressor:0.27'
+        implementation 'org.scala-lang:scala-library:2.13.14'
+        implementation 'com.nimbusds:nimbus-jose-jwt:9.41.2'
+        implementation 'org.codehaus.janino:janino:3.1.12'
+        implementation 'org.apache.zookeeper:zookeeper:3.9.2'
+        implementation 'org.jetbrains.kotlin:kotlin-stdlib:1.9.25'
+        implementation 'com.squareup.okio:okio:3.9.1'
+        implementation 'org.codehaus.jettison:jettison:1.5.4'
+        implementation 'org.xerial.snappy:snappy-java:1.1.10.4'
+    }
+
+    //use netty bom to enforce same netty version
+    //this upgrades all transitive netty dependencies without adding a direct dependency on netty
+    implementation platform('io.netty:netty-bom:4.1.118.Final')
+
+    implementation platform('org.eclipse.jetty:jetty-bom:9.4.56.v20240826')
+    /************************************************************************************************/
+
 
     testUtilsImplementation sourceSets.main.output
     testUtilsImplementation 'org.testng:testng:' + testNGVersion
     testUtilsImplementation 'org.apache.hadoop:hadoop-minicluster:' + hadoopVersion
+    //this is a replacement for the transitive dependency of minicluster: bcprov-jdk15on:1.70.0
+    // which is excluded for security purposes
+    //this causes this to act as direct dependency of ours but we don't actually rely on it except as a transitive
+    testUtilsImplementation 'org.bouncycastle:bcprov-jdk18on:1.78.1'  //
+
 
     testImplementation sourceSets.testUtils.output
 
@@ -382,8 +405,103 @@ dependencies {
     testImplementation "com.google.jimfs:jimfs:1.1"
 }
 
-//add gatk launcher script to the jar as a resource
+// This list needs to be kept in sync with the corresponding list in scripts/dockertest.gradle.
+//
+// The --add-open directives required to run GATK. These directives need to be:
+//   - included as properties in the manifest file in the jar(s)
+//   - passed to java via the gradle "jvmArgs" task property for any task that executes GATK code from a
+//     classpath that does use a jar (i.e., gradle run, test, javadoc, gatkDoc and jacoco tasks, etc.)
+//   - passed as java command line args when running from classes directly
+//   - included in any IntelliJ run/debug/profile configurations
+//
+final runtimeAddOpens = [
+        // taken from the union of everything encountered by tests, plus everything defined here:
+        // https://github.com/apache/spark/blob/v3.3.0/launcher/src/main/java/org/apache/spark/launcher/JavaModuleOptions.java
+        'java.base/java.lang=ALL-UNNAMED',
+        'java.base/java.lang.invoke=ALL-UNNAMED',
+        'java.base/java.lang.reflect=ALL-UNNAMED',
+        'java.base/java.io=ALL-UNNAMED',
+        'java.base/java.net=ALL-UNNAMED',
+        'java.base/java.nio=ALL-UNNAMED',
+        'java.base/java.util=ALL-UNNAMED',
+        'java.base/java.util.concurrent=ALL-UNNAMED',
+        'java.base/java.util.concurrent.atomic=ALL-UNNAMED',
+        'java.base/sun.nio.ch=ALL-UNNAMED',
+        'java.base/sun.nio.cs=ALL-UNNAMED',
+        'java.base/sun.security.action=ALL-UNNAMED',
+        'java.base/sun.util.calendar=ALL-UNNAMED',
+        'java.base/sun.nio.fs=ALL-UNNAMED',
+        'java.base/java.nio.channels.spi=ALL-UNNAMED',
+        'java.base/jdk.internal.ref=ALL-UNNAMED',
+        'java.base/java.lang.ref=ALL-UNNAMED',
+        'java.base/java.util.zip=ALL-UNNAMED',
+        'java.base/java.util.jar=ALL-UNNAMED',
+        'java.base/java.nio.file.attribute=ALL-UNNAMED',
+        'java.base/jdk.internal.loader=ALL-UNNAMED',
+        'java.base/sun.net.www.protocol.jar=ALL-UNNAMED',
+        'java.base/sun.invoke.util=ALL-UNNAMED',
+        'java.base/java.util.concurrent.locks=ALL-UNNAMED',
+        'java.base/java.security=ALL-UNNAMED',
+        'java.base/sun.reflect.annotation=ALL-UNNAMED',
+        'java.base/java.text=ALL-UNNAMED',
+        'java.base/java.nio.charset=ALL-UNNAMED',
+        'java.base/sun.reflect.generics.reflectiveObjects=ALL-UNNAMED',
+        'java.management/com.sun.jmx.mbeanserver=ALL-UNNAMED',
+        'java.management/javax.management=ALL-UNNAMED',
+        'java.base/java.util.regex=ALL-UNNAMED',
+        'java.base/sun.util.locale=ALL-UNNAMED',
+        'java.base/jdk.internal.math=ALL-UNNAMED',
+        'java.xml/com.sun.xml.internal.stream.util=ALL-UNNAMED',
+        'java.base/java.time=ALL-UNNAMED',
+        'java.base/sun.reflect.generics.factory=ALL-UNNAMED',
+        'java.base/java.nio.channels=ALL-UNNAMED',
+        'java.base/sun.security.util=ALL-UNNAMED',
+        'java.base/java.time.zone=ALL-UNNAMED',
+        'java.base/sun.reflect.generics.scope=ALL-UNNAMED',
+        'java.base/sun.reflect.generics.tree=ALL-UNNAMED',
+        'java.management/com.sun.jmx.interceptor=ALL-UNNAMED',
+        'java.management/javax.management.openmbean=ALL-UNNAMED',
+        'java.management/sun.management=ALL-UNNAMED',
+        'jdk.management/com.sun.management.internal=ALL-UNNAMED',
+        'jdk.management.jfr/jdk.management.jfr=ALL-UNNAMED',
+        'jdk.jfr/jdk.jfr.internal.management=ALL-UNNAMED',
+        'java.base/jdk.internal.module=ALL-UNNAMED',
+        'java.base/java.lang.module=ALL-UNNAMED',
+        'java.security.jgss/sun.security.krb5=ALL-UNNAMED'
+    ]
+
+final testAddOpens = [
+        'java.prefs/java.util.prefs=ALL-UNNAMED' // required for jacoco tasks
+]
+
+run {
+        // transform the list of runtime configuration --add-opens args into command line argument format
+        final runtimeJVMArgs = runtimeAddOpens.stream()
+                .flatMap(openSpec -> ['--add-opens', openSpec].stream())
+                .toList()
+        // add in any other required args
+        runtimeJVMArgs.add('-Dio.netty.tryReflectionSetAccessible=true')
+        jvmArgs = runtimeJVMArgs
+}
+
+test {
+    // transform the list test configuration --add-opens (which must include both the runtime and test args) into
+    // command line argument format
+    final testJVMAddOpens = new ArrayList<>()
+    testJVMAddOpens.addAll(runtimeAddOpens)
+    testJVMAddOpens.addAll(testAddOpens)
+    final testConfigurationJVMArgs = testJVMAddOpens.stream()
+            .flatMap(openSpec -> ['--add-opens', openSpec].stream())
+            .toList()
+    // add in any other required args
+    testConfigurationJVMArgs.add('-Dio.netty.tryReflectionSetAccessible=true')
+    jvmArgs = testConfigurationJVMArgs
+}
+
+
 processResources {
+    dependsOn(downloadGsaLibFile)
+    //add gatk launcher script to the jar as a resource
     from("gatk")
 }
 
@@ -394,8 +512,10 @@ processTestResources {
     include "org/broadinstitute/hellbender/utils/io/*"
 }
 
-sourceCompatibility = 1.8
-targetCompatibility = 1.8
+java {
+    sourceCompatibility = 1.17
+    targetCompatibility = 1.17
+}
 
 def createSymlinks(archivePath, symlinkLocation) {
     exec {
@@ -405,37 +525,44 @@ def createSymlinks(archivePath, symlinkLocation) {
 }
 
 // Suffix is what will be added to the symlink
-def createGatkSymlinks(destinationDir, archivePath, suffix, baseJarName, secondaryBaseJarName) {
+def createGatkSymlinks(destinationDir, archiveFile, suffix, baseJarName, secondaryBaseJarName) {
     def finalSuffix = (suffix == "") ? "" : ("-" + suffix)
 
     def symlinkLocation = destinationDir.getAsFile().get().toString() + "/" + baseJarName + finalSuffix + ".jar"
     def symlinkLocation2 = destinationDir.getAsFile().get().toString() + "/" + secondaryBaseJarName + finalSuffix + ".jar"
 
-    createSymlinks(archivePath.getAbsolutePath(), symlinkLocation)
-    createSymlinks(archivePath.getAbsolutePath(), symlinkLocation2)
+    createSymlinks(archiveFile.getAsFile().get().getAbsolutePath(), symlinkLocation)
+    createSymlinks(archiveFile.getAsFile().get().getAbsolutePath(), symlinkLocation2)
 }
 
 logger.info("build for version:" + version)
 group = 'org.broadinstitute'
 
-tasks.withType(Jar) {
+tasks.withType(Jar).configureEach {
+    // transform the list of --add-opens directives into manifest format, which requires only the source
+    // package (unlike the command line equivalent, in the manifest the "ALL-UNNAMED" target is implied
+    // and can't be included in the manifest entry syntax)
+    final manifestAddOpens = runtimeAddOpens.stream()
+            .map(o -> o.substring(0, (o.length() - "ALL-UNNAMED".length()) - 1))
+            .collect(Collectors.joining(' '))
     manifest {
         attributes 'Implementation-Title': 'The Genome Analysis Toolkit (GATK)',
-                'Implementation-Version': archiveVersion,
-                'Toolkit-Short-Name' : 'GATK',
-                'Main-Class': project.mainClassName,
+                'Implementation-Version': archiveVersion.get(),
+                'Toolkit-Short-Name': 'GATK',
+                'Main-Class': application.mainClass,
                 'Picard-Version': picardVersion,
                 'htsjdk-Version': htsjdkVersion,
                 'Spark-Version': sparkVersion,
-                'Multi-Release': 'true'
+                'Multi-Release': 'true',
+                'Add-Opens': manifestAddOpens
     }
 }
 
 wrapper {
-    gradleVersion = '7.3.2'
+    gradleVersion = '8.10.2'
 }
 
-tasks.withType(ShadowJar) {
+tasks.withType(ShadowJar).configureEach {
     from(project.sourceSets.main.output)
     archiveBaseName = project.name + '-package'
     mergeServiceFiles()
@@ -447,7 +574,7 @@ tasks.withType(ShadowJar) {
 
     // Suggested by the akka devs to make sure that we do not get the spark configuration error.
     // http://doc.akka.io/docs/akka/snapshot/general/configuration.html#When_using_JarJar__OneJar__Assembly_or_any_jar-bundler
-    transform(com.github.jengelman.gradle.plugins.shadow.transformers.AppendingTransformer) {
+    transform(AppendingTransformer) {
         resource = 'reference.conf'
     }
 }
@@ -462,13 +589,13 @@ shadowJar {
         // Create a symlink to the newly created jar.  The name will be gatk.jar and
         //  it will be at the same level as the newly created jar.  (overwriting symlink, if it exists)
         // Please note that this will cause failures in Windows, which does not support symlinks.
-        createGatkSymlinks(destinationDirectory, archivePath, "", baseJarName, secondaryBaseJarName)
+        createGatkSymlinks(destinationDirectory, archiveFile, "", baseJarName, secondaryBaseJarName)
     }
 }
 
-task localJar{ dependsOn shadowJar }
+tasks.register('localJar') { dependsOn shadowJar }
 
-task sparkJar(type: ShadowJar) {
+tasks.register('sparkJar', ShadowJar) {
     group = "Shadow"
     description = "Create a combined jar of project and runtime dependencies that excludes provided spark dependencies"
     configurations = [project.configurations.sparkConfiguration]
@@ -477,12 +604,12 @@ task sparkJar(type: ShadowJar) {
         // Create a symlink to the newly created jar.  The name will be gatk.jar and
         //  it will be at the same level as the newly created jar.  (overwriting symlink, if it exists)
         // Please note that this will cause failures in Windows, which does not support symlinks.
-        createGatkSymlinks(destinationDirectory, archivePath, archiveClassifier, baseJarName, secondaryBaseJarName)
+        createGatkSymlinks(destinationDirectory, archiveFile, archiveClassifier, baseJarName, secondaryBaseJarName)
     }
 }
 
 // A jar that only contains the test classes and resources (to be extracted for testing)
-task shadowTestClassJar(type: ShadowJar){
+tasks.register('shadowTestClassJar', ShadowJar) {
     group = "Shadow"
     from sourceSets.test.output
     description = "Create a jar that packages the compiled test classes"
@@ -490,18 +617,19 @@ task shadowTestClassJar(type: ShadowJar){
 }
 
 // A minimal jar that only contains the extra dependencies needed for running the tests
-task shadowTestJar(type: ShadowJar){
+tasks.register('shadowTestJar', ShadowJar) {
+    dependsOn 'compileTestUtilsJava', 'processTestUtilsResources'
     group = "Shadow"
     description = " A minimal jar that only contains the extra dependencies needed for running the tests that arent packaged in the main shadow jar"
     from {
-        (project.configurations.testRuntimeClasspath - project.configurations.runtimeClasspath ).collect {
+        (project.configurations.testRuntimeClasspath - project.configurations.runtimeClasspath).collect {
             it.isDirectory() ? it : it.getName().endsWith(".jar") ? zipTree(it) : it
         }
     }
     archiveClassifier = "testDependencies"
 }
 
-task collectBundleIntoDir(type: Copy) {
+tasks.register('collectBundleIntoDir', Copy) {
     dependsOn shadowJar, sparkJar, 'condaEnvironmentDefinition', 'gatkTabComplete', 'gatkDoc'
 
     doFirst {
@@ -511,8 +639,8 @@ task collectBundleIntoDir(type: Copy) {
         assert file("src/main/resources/org/broadinstitute/hellbender/utils/config/GATKConfig.properties").exists()
     }
 
-    from(shadowJar.archivePath)
-    from(sparkJar.archivePath)
+    from(shadowJar.archiveFile)
+    from(sparkJar.archiveFile)
     from("gatk")
     from("README.md")
     from("$docBuildDir/tabCompletion/gatk-completion.sh")
@@ -527,12 +655,13 @@ task collectBundleIntoDir(type: Copy) {
     from("scripts/sv", { into("scripts/sv") })
     from("scripts/cnv_wdl/", { into("scripts/cnv_wdl") })
     from("scripts/mutect2_wdl/", { into("scripts/mutect2_wdl") })
-    from("scripts/dataproc-cluster-ui", { into("scripts/")})
+    from("scripts/dataproc-cluster-ui", { into("scripts/") })
     into "$buildDir/bundle-files-collected"
 }
 
-task bundle(type: Zip) {
+tasks.register('bundle', Zip) {
     dependsOn collectBundleIntoDir
+    zip64 true
 
     archiveBaseName = project.name + "-" + project.version
     destinationDirectory = file("$buildDir")
@@ -542,30 +671,36 @@ task bundle(type: Zip) {
     into(archiveBaseName)
 
     doLast {
-        logger.lifecycle("Created GATK distribution in ${destinationDir}/${archiveName}")
+        logger.lifecycle("Created GATK distribution in ${destinationDirectory}/${archiveFileName}")
     }
 }
 
-jacocoTestReport {
+//jacocoTestReport {
+//    dependsOn test
+//
+//    group = "Reporting"
+//    description = "Generate Jacoco coverage reports after running tests."
+//    getAdditionalSourceDirs().from(sourceSets.main.allJava.srcDirs)
+//
+//    reports {
+//        xml.required = true
+//        html.required = true
+//    }
+//}
+//}
+
+//This is a stub, so we don't have to change our github action targets while we've disabled jacoco
+tasks.register('jacocoTestReport') {
     dependsOn test
-
-    group = "Reporting"
-    description = "Generate Jacoco coverage reports after running tests."
-    getAdditionalSourceDirs().from(sourceSets.main.allJava.srcDirs)
-
-    reports {
-        xml.required = true
-        html.required = true
-    }
 }
 
-task condaStandardEnvironmentDefinition(type: Copy) {
+tasks.register('condaStandardEnvironmentDefinition', Copy) {
     from "scripts"
     into buildDir
     include gatkCondaTemplate
     rename { file -> gatkCondaYML }
-    expand(["condaEnvName":"gatk",
-            "condaEnvDescription" : "Conda environment for GATK Python Tools"])
+    expand(["condaEnvName"       : "gatk",
+            "condaEnvDescription": "Conda environment for GATK Python Tools"])
     doLast {
         logger.lifecycle("Created standard Conda environment yml file: $gatkCondaYML")
     }
@@ -573,12 +708,12 @@ task condaStandardEnvironmentDefinition(type: Copy) {
 
 
 // Create GATK conda environment yml file from the conda enc template
-task condaEnvironmentDefinition() {
+tasks.register('condaEnvironmentDefinition') {
     dependsOn 'pythonPackageArchive', 'condaStandardEnvironmentDefinition'
 }
 
 // Create the Python package archive file
-task pythonPackageArchive(type: Zip) {
+tasks.register('pythonPackageArchive', Zip) {
     inputs.dir "src/main/python/org/broadinstitute/hellbender/"
     outputs.file pythonPackageArchiveName
     doFirst {
@@ -591,7 +726,7 @@ task pythonPackageArchive(type: Zip) {
     into("/")
 
     doLast {
-        logger.lifecycle("Created GATK Python package archive in ${destinationDir}/${archiveName}")
+        logger.lifecycle("Created GATK Python package archive in ${destinationDirectory}/${archiveFileName}")
     }
 }
 
@@ -601,36 +736,46 @@ task pythonPackageArchive(type: Zip) {
 // NOTE: This CREATES a local conda environment; but does not *activate* it. The environment must
 // be activated manually in the shell from which GATK will be run.
 //
-task localDevCondaEnv(type: Exec) {
+tasks.register('localDevCondaEnv', Exec) {
     dependsOn 'condaEnvironmentDefinition'
     inputs.file("$buildDir/$pythonPackageArchiveName")
     workingDir "$buildDir"
-    commandLine "conda", "env", "create", "--force", "-f", gatkCondaYML
+    commandLine "conda", "env", "create", "--yes", "-f", gatkCondaYML
 }
 
-task javadocJar(type: Jar, dependsOn: javadoc) {
+// update the conda environment without completely rebuilding
+// this may be faster
+tasks.register('localDevCondaUpdate',  Exec) {
+    dependsOn 'condaEnvironmentDefinition'
+    inputs.file("$buildDir/$pythonPackageArchiveName")
+    workingDir "$buildDir"
+    commandLine "conda", "env", "update", "-f", gatkCondaYML
+}
+
+tasks.register('javadocJar', Jar) {
+    dependsOn javadoc
     archiveClassifier = 'javadoc'
     from "$docBuildDir/javadoc"
 }
 
-task sourcesJar(type: Jar) {
+tasks.register('sourcesJar', Jar) {
     from sourceSets.main.allSource
     archiveClassifier = 'sources'
 }
 
-task testUtilsJar(type: Jar){
+tasks.register('testUtilsJar', Jar) {
     archiveBaseName = "$project.name-test-utils"
     from sourceSets.testUtils.output
 }
 
-tasks.withType(Javadoc) {
+tasks.withType(Javadoc).configureEach {
     // do this for all javadoc tasks, including gatkDoc
     options.addStringOption('Xdoclint:none')
     options.addStringOption('encoding', 'UTF-8')
 }
 
 javadoc {
-    // This is a hack to disable the java 8 default javadoc lint until we fix the html formatting
+    // This is a hack to disable the java default javadoc lint until we fix the html formatting
     // We only want to do this for the javadoc task, not gatkDoc
     options.addStringOption('Xdoclint:none', '-quiet')
     source = sourceSets.main.allJava + files(configurations.externalSourceConfiguration.collect { zipTree(it) })
@@ -638,8 +783,8 @@ javadoc {
 }
 
 
-task testUtilsJavadoc(type: Javadoc) {
-    // This is a hack to disable the java 8 default javadoc lint until we fix the html formatting
+tasks.register('testUtilsJavadoc', Javadoc) {
+    // This is a hack to disable the java default javadoc lint until we fix the html formatting
     // We only want to do this for the javadoc task, not gatkDoc
     options.addStringOption('Xdoclint:none', '-quiet')
     source = sourceSets.testUtils.allJava
@@ -648,27 +793,29 @@ task testUtilsJavadoc(type: Javadoc) {
     include '**/*.java'
 }
 
-task testUtilsJavadocJar(type: Jar, dependsOn: testUtilsJavadoc){
+tasks.register('testUtilsJavadocJar', Jar) {
+    dependsOn testUtilsJavadoc
     archiveBaseName = "$project.name-test-utils"
     archiveClassifier = 'javadoc'
     from "$docBuildDir/testUtilsJavadoc"
 }
 
-task testUtilsSourcesJar(type: Jar){
+tasks.register('testUtilsSourcesJar', Jar) {
     archiveBaseName = "$project.name-test-utils"
     archiveClassifier = 'sources'
     from sourceSets.testUtils.allSource
 }
 
 // Generate GATK Online Doc
-task gatkDoc(type: Javadoc, dependsOn: classes) {
+tasks.register('gatkDoc', Javadoc) {
+    dependsOn classes
     final File gatkDocDir = new File("$docBuildDir/gatkdoc")
     doFirst {
         // make sure the output folder exists or we can create it
         if (!gatkDocDir.exists() && !gatkDocDir.mkdirs()) {
             throw new GradleException(String.format("Failure creating folder (%s) for GATK doc output in task (%s)",
                     gatkDocDir.getAbsolutePath(),
-                    it.name));
+                    it.name))
         }
         copy {
             from('src/main/resources/org/broadinstitute/hellbender/utils/helpTemplates')
@@ -682,8 +829,8 @@ task gatkDoc(type: Javadoc, dependsOn: classes) {
     include '**/*.java'
 
     // The gatkDoc process instantiates any documented feature classes, so to run it we need the entire
-    // runtime classpath, as well as jdk javadoc files such as tools.jar, where com.sun.javadoc lives.
-    classpath = sourceSets.main.runtimeClasspath + javadocJDKFiles
+    // runtime classpath.
+    classpath = sourceSets.main.runtimeClasspath
     options.docletpath = classpath.asType(List)
     options.doclet = "org.broadinstitute.hellbender.utils.help.GATKHelpDoclet"
 
@@ -693,7 +840,7 @@ task gatkDoc(type: Javadoc, dependsOn: classes) {
     outputs.dir(gatkDocDir)
     options.destinationDirectory(gatkDocDir)
 
-    options.addStringOption("settings-dir", "src/main/resources/org/broadinstitute/hellbender/utils/helpTemplates");
+    options.addStringOption("settings-dir", "src/main/resources/org/broadinstitute/hellbender/utils/helpTemplates")
     if (project.hasProperty('phpDoc')) {
         // use -PphpDoc to generate .php file extensions, otherwise rely on default of .html
         final String phpExtension = "php"
@@ -701,18 +848,19 @@ task gatkDoc(type: Javadoc, dependsOn: classes) {
         options.addStringOption("index-file-extension", phpExtension)
     }
     options.addStringOption("absolute-version", getVersion())
-    options.addStringOption("build-timestamp", ZonedDateTime.now().format(DateTimeFormatter.RFC_1123_DATE_TIME))
+    options.addStringOption("build-timestamp", ZonedDateTime.now().format(DateTimeFormatter.RFC_1123_DATE_TIME).toString())
 }
 
 // Generate GATK Bash Tab Completion File
-task gatkTabComplete(type: Javadoc, dependsOn: classes) {
+tasks.register('gatkTabComplete', Javadoc) {
+    dependsOn classes
     final File tabCompletionDir = new File("$docBuildDir/tabCompletion")
     doFirst {
         // make sure the output folder exists or we can create it
         if (!tabCompletionDir.exists() && !tabCompletionDir.mkdirs()) {
             throw new GradleException(String.format("Failure creating folder (%s) for GATK tab completion output in task (%s)",
                     tabCompletionDir.getAbsolutePath(),
-                    it.name));
+                    it.name))
         }
     }
     // Include the Picard source jar, which contains various .R, .sh, .css, .html, .xml and .MF files and
@@ -721,8 +869,8 @@ task gatkTabComplete(type: Javadoc, dependsOn: classes) {
     include '**/*.java'
 
     // The gatkDoc process instantiates any documented feature classes, so to run it we need the entire
-    // runtime classpath, as well as jdk javadoc files such as tools.jar, where com.sun.javadoc lives, and Picard.
-    classpath = sourceSets.main.runtimeClasspath + javadocJDKFiles
+    // runtime classpath, including Picard.
+    classpath = sourceSets.main.runtimeClasspath
 
     options.docletpath = classpath.asType(List)
     options.doclet = "org.broadinstitute.barclay.help.BashTabCompletionDoclet"
@@ -758,13 +906,14 @@ task gatkTabComplete(type: Javadoc, dependsOn: classes) {
     options.addStringOption("caller-post-arg-max-occurs", "1 1 1 1 1 1 1 1 1 1")
 }
 
-def getWDLInputJSONTestFileNameFromWDLName(File wdlName) {
+static def getWDLInputJSONTestFileNameFromWDLName(File wdlName) {
     String fileWithoutExt = wdlName.name.take(wdlName.name.lastIndexOf('.'))
     return new File (wdlName.getParentFile(), fileWithoutExt + "Inputs.json").getAbsolutePath()
 }
 
 // Generate GATK Tool WDL
-task gatkWDLGen(type: Javadoc, dependsOn: classes) {
+tasks.register('gatkWDLGen', Javadoc) {
+    dependsOn classes
     final File gatkWDLDir = new File("$docBuildDir/wdlGen")
     outputs.dir(gatkWDLDir)
     doFirst {
@@ -772,7 +921,7 @@ task gatkWDLGen(type: Javadoc, dependsOn: classes) {
         if (!gatkWDLDir.exists() && !gatkWDLDir.mkdirs()) {
             throw new GradleException(String.format("Failure creating folder (%s) for GATK WDL output in task (%s)",
                     gatkWDLDir.getAbsolutePath(),
-                    it.name));
+                    it.name))
         }
         copy {
             from('src/main/resources/org/broadinstitute/hellbender/utils/wdlTemplates/common.html')
@@ -783,8 +932,8 @@ task gatkWDLGen(type: Javadoc, dependsOn: classes) {
     include '**/*.java'
 
     // The gatkWDLGen process instantiates any documented feature classes, so to run it we need the entire
-    // runtime classpath, as well as jdk javadoc files such as tools.jar, where com.sun.javadoc lives.
-    classpath = sourceSets.main.runtimeClasspath + javadocJDKFiles
+    // runtime classpath, including picard.
+    classpath = sourceSets.main.runtimeClasspath
     options.docletpath = classpath.asType(List)
     options.doclet = "org.broadinstitute.hellbender.utils.help.GATKWDLDoclet"
 
@@ -794,7 +943,7 @@ task gatkWDLGen(type: Javadoc, dependsOn: classes) {
     outputs.dir(gatkWDLDir)
     options.destinationDirectory(gatkWDLDir)
 
-    options.addStringOption("settings-dir", "src/main/resources/org/broadinstitute/hellbender/utils/wdlTemplates");
+    options.addStringOption("settings-dir", "src/main/resources/org/broadinstitute/hellbender/utils/wdlTemplates")
     options.addStringOption("output-file-extension", "wdl")
     options.addStringOption("index-file-extension", "html")
 
@@ -803,7 +952,7 @@ task gatkWDLGen(type: Javadoc, dependsOn: classes) {
 
     // the wdl doclet will populate the test JSON input files with the name of a dummy
     // file in this location, in order to satisfy cromwell's attempts to localize inputs and outputs
-    options.addStringOption("build-dir", System.getenv("TRAVIS_BUILD_DIR") ?: new File(".").getAbsolutePath())
+    options.addStringOption("build-dir", System.getenv("TRAVIS_BUILD_DIR") ?: rootDir.getAbsolutePath())
 }
 
 def execWDLValidation = { validateWDL ->
@@ -815,11 +964,11 @@ def execWDLValidation = { validateWDL ->
         }
         return retCode
     } catch (IOException e) {
-        throw new GradleException("An IOException occurred while attempting to execute the command $validateWDL.")
+        throw new GradleException("An IOException occurred while attempting to execute the command $validateWDL.", e)
     }
 }
 
-task gatkValidateScriptsWdl() {
+tasks.register('gatkValidateScriptsWdl') {
     doFirst {
         // running this task requires a local cromwell installation, with environment variables CROMWELL_JAR,
         // WOMTOOL_JAR set to the jar locations
@@ -830,7 +979,7 @@ task gatkValidateScriptsWdl() {
 
     doLast {
         // Run the womtool validator on all WDL files in the 'scripts' directory
-        final File wdlFolder = new File("scripts")
+        final File wdlFolder = new File(buildDir, "scripts")
         def wdlFiles = fileTree(dir: wdlFolder).filter {
             f -> f.getAbsolutePath().endsWith(".wdl")
         }
@@ -842,7 +991,8 @@ task gatkValidateScriptsWdl() {
     }
 }
 
-task gatkValidateGeneratedWdl(dependsOn: [gatkWDLGen, shadowJar]) {
+tasks.register('gatkValidateGeneratedWdl') {
+    dependsOn(gatkWDLGen, shadowJar)
     doFirst {
         // running this task requires a local cromwell installation, with environment variables CROMWELL_JAR,
         // WOMTOOL_JAR set to the jar locations
@@ -870,7 +1020,7 @@ task gatkValidateGeneratedWdl(dependsOn: [gatkWDLGen, shadowJar]) {
 
         // the test JSON input file is populated by the WDL gen process with the name of this dummy file
         // to satisfy cromwell's attempt to de/localize input/output files
-        def buildDir = System.getenv("TRAVIS_BUILD_DIR") ?: new File(".").getAbsolutePath()
+        def buildDir = System.getenv("TRAVIS_BUILD_DIR") ?: rootDir.getAbsolutePath()
         final dummyWDLTestFileName = "$buildDir/dummyWDLTestFile"
         final File dummyWDLTestFile = file(dummyWDLTestFileName)
         final cromwellLocation = System.getenv('CROMWELL_JAR')
@@ -890,6 +1040,18 @@ task gatkValidateGeneratedWdl(dependsOn: [gatkWDLGen, shadowJar]) {
     }
 }
 
+// scan-gradle-plugin security vulnerability scan
+ossIndexAudit {
+    allConfigurations = false // if true includes the dependencies in all resolvable configurations. By default is false, meaning only 'compileClasspath', 'runtimeClasspath', 'releaseCompileClasspath' and 'releaseRuntimeClasspath' are considered
+    useCache = true // true by default
+    outputFormat = 'DEFAULT' // Optional, other values are: 'DEPENDENCY_GRAPH' prints dependency graph showing direct/transitive dependencies, 'JSON_CYCLONE_DX_1_4' prints a CycloneDX 1.4 SBOM in JSON format.
+    showAll = false // if true prints all dependencies. By default is false, meaning only dependencies with vulnerabilities will be printed.
+    printBanner = true // if true will print ASCII text banner. By default is true.
+
+    // ossIndexAudit can be configured to exclude vulnerabilities from matching
+    // excludeVulnerabilityIds = ['39d74cc8-457a-4e57-89ef-a258420138c5'] // list containing ids of vulnerabilities to be ignored
+    // excludeCoordinates = ['commons-fileupload:commons-fileupload:1.3'] // list containing coordinate of components which if vulnerable should be ignored
+}
 
 /**
  *This specifies what artifacts will be built and uploaded when performing a maven upload.
@@ -910,14 +1072,15 @@ configurations.archives.artifacts.removeAll {it.file =~ '.tar$'}
  * Sign non-snapshot releases with our secret key.  This should never need to be invoked directly.
  */
 signing {
-    required { isRelease && gradle.taskGraph.hasTask("publish") }
+    useGpgCmd() // sign via the gpg command line (gpg2, supports ed25519), rather than a secret keyring file
+    required { isRelease }
     sign publishing.publications
 }
 
 def basePomConfiguration = {
     packaging = 'jar'
     description = 'Development on GATK 4'
-    url = 'http://github.com/broadinstitute/gatk'
+    url = 'https://github.com/broadinstitute/gatk'
 
     scm {
         url = 'scm:git@github.com:broadinstitute/gatk.git'
@@ -990,9 +1153,34 @@ publish {
     }
 }
 
-task installSpark{ dependsOn sparkJar }
-task installAll{  dependsOn installSpark, installDist }
+/**
+ * Publish releases to Maven Central via the Sonatype Central Portal (the legacy OSSRH staging host,
+ * oss.sonatype.org, was retired in 2025). Credentials come from a Central Portal user token stored as
+ * sonatypeUsername/sonatypePassword in ~/.gradle/gradle.properties.
+ *
+ * Release: ./gradlew clean publishAllPublicationsToCentralPortal -Drelease=true
+ */
+nmcp {
+    publishAllPublicationsToCentralPortal {
+        username = project.findProperty("sonatypeUsername")
+        password = project.findProperty("sonatypePassword")
+        publishingType = "AUTOMATIC"
+    }
+}
+
+tasks.register('installSpark') { dependsOn sparkJar }
+tasks.register('installAll') { dependsOn installSpark, installDist }
 
 installDist.dependsOn downloadGsaLibFile
+downloadGsaLibFile.dependsOn sourcesJar
+
+// For Gradle 8 explicitly add 'condaEnvironmentDefinition' as a dependency of the following tasks.
+// For more information, please refer to
+// https://docs.gradle.org/8.2.1/userguide/validation_problems.html#implicit_dependency in the Gradle documentation.
+['shadowJar', 'sparkJar', 'compileTestUtilsJava', 'shadowTestClassJar', 'sourcesJar', 'testUtilsSourcesJar', 'gatkDoc', 'gatkTabComplete', 'gatkWDLGen'].each {
+    tasks.named(it).configure {
+        dependsOn 'condaEnvironmentDefinition'
+    }
+}
 
 defaultTasks 'bundle'

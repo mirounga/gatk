@@ -90,7 +90,7 @@ import java.util.*;
  *     <br /><b>Versioned gzip archives of data source files are provided here:</b>
  *     <ul>
  *         <li><a href="ftp://gsapubftp-anonymous@ftp.broadinstitute.org/bundle/funcotator/">ftp://gsapubftp-anonymous@ftp.broadinstitute.org/bundle/funcotator/</a></li>
- *         <li><a href="https://console.cloud.google.com/storage/browser/broad-public-datasets/funcotator">gs://broad-public-datasets/funcotator/</a></li>
+ *         <li><a href="https://console.cloud.google.com/storage/browser/gcp-public-data--broad-references/funcotator">gs://gcp-public-data--broad-references/funcotator/</a></li>
  *     </ul>
  * </p>
  *
@@ -725,9 +725,9 @@ public class Funcotator extends VariantWalker {
 
     //==================================================================================================================
 
-    private OutputRenderer outputRenderer;
+    protected OutputRenderer outputRenderer;
 
-    private FuncotatorEngine funcotatorEngine;
+    protected FuncotatorEngine funcotatorEngine;
 
     //==================================================================================================================
 
@@ -793,7 +793,9 @@ public class Funcotator extends VariantWalker {
                 funcotatorArgs.lookaheadFeatureCachingInBp,
                 new FlankSettings(funcotatorArgs.fivePrimeFlankSize, funcotatorArgs.threePrimeFlankSize),
                 false,
-                funcotatorArgs.minNumBasesForValidSegment
+                funcotatorArgs.minNumBasesForValidSegment,
+                funcotatorArgs.spliceSiteWindow,
+                funcotatorArgs.MANETranscriptMode
         );
 
         logger.info("Initializing Funcotator Engine...");
@@ -873,7 +875,6 @@ public class Funcotator extends VariantWalker {
         // Get the correct reference for B37/HG19 compliance:
         // This is necessary because of the variant transformation that gets applied in VariantWalkerBase::apply.
         final ReferenceContext correctReferenceContext = funcotatorEngine.getCorrectReferenceContext(variant, referenceContext);
-
         // Place the variant on our queue to be funcotated:
         enqueueAndHandleVariant(variant, correctReferenceContext, featureContext);
     }
@@ -919,11 +920,15 @@ public class Funcotator extends VariantWalker {
      * @param referenceContext {@link ReferenceContext} corresponding to the given {@code variant}.
      * @param featureContext {@link FeatureContext} corresponding to the given {@code variant}.
      */
-    private void enqueueAndHandleVariant(final VariantContext variant, final ReferenceContext referenceContext, final FeatureContext featureContext) {
+    protected void enqueueAndHandleVariant(final VariantContext variant, final ReferenceContext referenceContext, final FeatureContext featureContext) {
 
         final FuncotationMap funcotationMap = funcotatorEngine.createFuncotationMapForVariant(variant, referenceContext, featureContext);
 
+        // This is necessary because we want to revert the variant contig name change if it was applied in the FuncotatorEngine::getCorrectVariantContextForReference method before outputting the vcf.
+        // NOTE: this will only revert the variantContext if it was originally changed (only for B37 VCFs)
+        final VariantContext variantContextForOutput = funcotatorEngine.getCorrectVariantContextForOutput(variant);
+
         // At this point there is only one transcript ID in the funcotation map if canonical or best effect are selected
-        outputRenderer.write(variant, funcotationMap);
+        outputRenderer.write(variantContextForOutput, funcotationMap);
     }
 }

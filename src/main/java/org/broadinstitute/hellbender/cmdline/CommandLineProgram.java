@@ -28,6 +28,7 @@ import org.broadinstitute.hellbender.utils.runtime.RuntimeUtils;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.nio.file.*;
+import java.nio.file.attribute.PosixFilePermission;
 import java.text.DecimalFormat;
 import java.time.Duration;
 import java.time.ZonedDateTime;
@@ -132,15 +133,21 @@ public abstract class CommandLineProgram implements CommandLinePluginProvider {
     /**
      * Template method that runs the startup hook, doWork and then the shutdown hook.
      */
+    @SuppressWarnings("try")
     public final Object runTool(){
-        try {
+        //this makes use of try-with-resource exception suppression to ensure that onShutdown()
+        //doesn't hide casual exceptions thrown during onStartup() or doWork()
+        try(
+            final AutoCloseableNoCheckedExceptions thisTool =
+                    () -> {
+                        logger.info("Shutting down engine");
+                        onShutdown();
+                    }
+            ) {
             logger.info("Initializing engine");
             onStartup();
             logger.info("Done initializing engine");
             return doWork();
-        } finally {
-            logger.info("Shutting down engine");
-            onShutdown();
         }
     }
 
@@ -161,6 +168,10 @@ public abstract class CommandLineProgram implements CommandLinePluginProvider {
         final Path p = tmpDir.toPath();
         try {
             p.getFileSystem().provider().checkAccess(p, AccessMode.READ, AccessMode.WRITE);
+
+            // Warn if there's anything that prevents execution in the tmp dir because some tools need that
+            tryToWriteAnExecutableFileAndWarnOnFailure(p);
+
             System.setProperty("java.io.tmpdir", IOUtils.getAbsolutePathWithoutFileProtocol(p));
         } catch (final AccessDeniedException | NoSuchFileException e) {
             // TODO: it may be that the program does not need a tmp dir
@@ -482,5 +493,55 @@ public abstract class CommandLineProgram implements CommandLinePluginProvider {
             commandLineParser = new CommandLineArgumentParser(this, getPluginDescriptors(), Collections.emptySet());
         }
         return commandLineParser;
+    }
+
+    /** A shim to make use of try-with-resources for tool shutdown**/ 
+    protected interface AutoCloseableNoCheckedExceptions extends AutoCloseable{
+        @Override void close();
+    }
+
+    private void tryToWriteAnExecutableFileAndWarnOnFailure(final Path p) {
+        Path tempFilePath = null;
+        try {
+            // This test relies on the file system supporting posix file permissions
+            if(p.getFileSystem().supportedFileAttributeViews().contains("posix")) {
+                // Write an empty file to the tempdir
+                tempFilePath = Files.createTempFile(p, "gatk_exec_test", null);
+                // Add execute permissions
+                final Set<PosixFilePermission> executePermissions = EnumSet.of(
+                        PosixFilePermission.OWNER_EXECUTE,
+                        PosixFilePermission.GROUP_EXECUTE,
+                        PosixFilePermission.OTHERS_EXECUTE
+                );
+                final Set<PosixFilePermission> newPermissions = Files.getPosixFilePermissions(tempFilePath);
+                newPermissions.addAll(executePermissions);
+
+                Files.setPosixFilePermissions(tempFilePath, newPermissions);
+                if(!Files.isExecutable(tempFilePath)) {
+                    logger.warn(
+                        "User has permissions to create executable files within the configured temporary directory, " +
+                            "but cannot execute those files. It is possible the directory has been mounted using the " +
+                            "'noexec' flag. This can cause issues for some GATK tools. You can specify a different " +
+                            "directory using --tmp-dir"
+                    );
+                }
+            }
+        } catch(Exception e) {
+            logger.warn(
+                "Cannot create executable files within the configured temporary directory. It is possible " +
+                    "this user does not have the proper permissions to execute files within this directory. " +
+                    "This can cause issues for some GATK tools. You can specify a different directory using " +
+                    "--tmp-dir"
+            );
+            logger.debug(e);
+        } finally {
+            // Make sure we clean up the test file
+            try {
+                Files.deleteIfExists(tempFilePath);
+            } catch(Exception e) {
+                logger.warn("Failed to delete temp file for testing temp dir", e);
+            }
+        }
+        
     }
 }
